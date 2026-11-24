@@ -1,7 +1,7 @@
 //! The LLM trace of a run (`archi/05-testing-and-observability.md`, "LLM trace and metrics"):
 //! `GET /v1/runs/{id}/trace?format=llm`, `rewind trace <run> [--entry n]`, and the trace of a
 //! scenario's report. It is rendered from the history alone, to be read by a model: one line per
-//! tool call, timer, signal and log, with its line in `script.ts` and its outcome folded in;
+//! call, timer, signal and log, with its line in `script.ts` and its outcome folded in;
 //! payloads are truncated, and any entry can be shown in full.
 //!
 //! ```text
@@ -157,7 +157,7 @@ pub fn render_entry(
                 let _ = writeln!(out, "{stack}");
             }
         }
-        Event::Completion(Completion::ToolCallFailed { error, .. }) => {
+        Event::Completion(Completion::CallFailed { error, .. }) => {
             let _ = writeln!(out, "{}: {}", error.kind.as_str(), error.message);
             if let Some(data) = &error.data {
                 let _ = writeln!(out, "{}", pretty(data));
@@ -168,9 +168,9 @@ pub fn render_entry(
     if let Some(value) = value {
         let label = match &entry.event {
             Event::Lifecycle(Lifecycle::RunStarted(_)) => "input",
-            Event::Command(Command::ScheduleToolCall { .. }) => "args",
+            Event::Command(Command::ScheduleCall { .. }) => "args",
             Event::Command(Command::CompleteRun { .. }) => "output",
-            Event::Completion(Completion::ToolCallCompleted { .. }) => "result",
+            Event::Completion(Completion::CallCompleted { .. }) => "result",
             _ => "payload",
         };
         let size = canonical_json(value).len() as u64;
@@ -229,11 +229,11 @@ fn waiting(state: Option<&RunState>, now: Timestamp) -> String {
     let Some(state) = state else {
         return "active".to_owned();
     };
-    let calls = state.pending_tool_calls();
+    let calls = state.pending_calls();
     if !calls.is_empty() {
         let names: Vec<String> = calls
             .iter()
-            .map(|(seq, tool)| format!("{tool} {seq}"))
+            .map(|(seq, action)| format!("{action} {seq}"))
             .collect();
         return format!("running · waiting for {}", names.join(", "));
     }
@@ -287,8 +287,7 @@ impl<'h> Outcomes<'h> {
         for entry in history {
             match &entry.event {
                 Event::Completion(
-                    Completion::ToolCallCompleted { seq, .. }
-                    | Completion::ToolCallFailed { seq, .. },
+                    Completion::CallCompleted { seq, .. } | Completion::CallFailed { seq, .. },
                 ) => {
                     outcomes.calls.insert(*seq, entry);
                 }
@@ -353,22 +352,22 @@ fn describe(
         Event::Lifecycle(Lifecycle::RunAborted(reason)) => {
             line(format!("aborted · {reason}"), None, None)
         }
-        Event::Command(Command::ScheduleToolCall {
+        Event::Command(Command::ScheduleCall {
             seq,
-            tool,
+            action,
             args,
             callsite,
         }) => {
             let outcome = match outcomes.calls.get(seq) {
                 Some(end) => match &end.event {
-                    Event::Completion(Completion::ToolCallCompleted { result, .. }) => format!(
+                    Event::Completion(Completion::CallCompleted { result, .. }) => format!(
                         "→ {} · {} · entry {}",
                         summary(result, payloads),
                         since(end),
                         end.index
                     ),
-                    Event::Completion(Completion::ToolCallFailed { error, .. }) => format!(
-                        "→ ToolError {}: {} · {} · entry {}",
+                    Event::Completion(Completion::CallFailed { error, .. }) => format!(
+                        "→ ActionError {}: {} · {} · entry {}",
                         error.kind.as_str(),
                         truncate(&error.message, PREVIEW_CHARS),
                         since(end),
@@ -379,7 +378,7 @@ fn describe(
                 None => "→ no outcome".to_owned(),
             };
             line(
-                format!("{seq} {tool}({})", payload(args, payloads)),
+                format!("{seq} {action}({})", payload(args, payloads)),
                 callsite.map(|callsite| callsite.line),
                 Some(outcome),
             )
@@ -461,8 +460,8 @@ fn describe(
             )
         }
         Event::Completion(
-            Completion::ToolCallCompleted { .. }
-            | Completion::ToolCallFailed { .. }
+            Completion::CallCompleted { .. }
+            | Completion::CallFailed { .. }
             | Completion::TimerFired { .. },
         )
         | Event::Command(Command::CancelTimer { .. }) => None,

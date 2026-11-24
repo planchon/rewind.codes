@@ -1,16 +1,16 @@
-//! What a partition keeps of each run: its head, its watchers and its tool tasks
+//! What a partition keeps of each run: its head, its watchers and its call tasks
 //! (`archi/06-storage-and-scale.md`, "A partition").
 
 use std::fmt;
 
 use rewind_core::{Digest, Epoch, RunHandle, RunId, RunStatus, Seq, Timestamp};
 
-use crate::ports::journal::{Quarantine, RunMetadata, TaskState, ToolTask};
+use crate::ports::journal::{CallTask, Quarantine, RunMetadata, TaskState};
 use crate::ports::namespaces::NamespaceName;
 use crate::ports::read_model::Wait;
 use crate::ports::tenancy::RunRef;
 
-/// An attempt of a run: the run's history, its inbox, its tool tasks and its sealed journal
+/// An attempt of a run: the run's history, its inbox, its call tasks and its sealed journal
 /// belong to one attempt. A run starts at [`Attempt::FIRST`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Attempt(pub u32);
@@ -119,7 +119,7 @@ pub struct Watcher {
     pub attached: bool,
 }
 
-/// A tool task as a partition keeps it (`archi/04-tools.md`, "Tool task lifecycle"): the task,
+/// A call's task as a partition keeps it (`archi/04-tools.md`, "Call lifecycle"): the task,
 /// and the token handed out with it while it is deferred.
 ///
 /// Sending a call or handing a task out writes nothing: a task in flight reads `ready`. What
@@ -127,7 +127,7 @@ pub struct Watcher {
 /// a deferral, a park, its end.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TaskRecord {
-    pub task: ToolTask,
+    pub task: CallTask,
     /// The SHA-256 of the token its handler answers a deferred task with.
     pub token_hash: Option<Digest>,
 }
@@ -142,7 +142,7 @@ impl TaskRecord {
     }
 }
 
-/// A change to one tool task of a run.
+/// A change to one call task of a run.
 #[derive(Clone, Debug, PartialEq)]
 pub enum TaskChange {
     /// Writes the task as it is now: its state, its attempt, its token. Its

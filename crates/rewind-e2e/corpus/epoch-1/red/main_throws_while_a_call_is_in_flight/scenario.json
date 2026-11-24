@@ -3,7 +3,7 @@
   "input": {
     "amount": -5
   },
-  "tools": {
+  "actions": {
     "audit.record": {
       "ok": true
     }
@@ -16,8 +16,8 @@
     },
     "events": [
       "run_started",
-      "schedule_tool_call",
-      "tool_call_completed",
+      "schedule_call",
+      "call_completed",
       "fail_run"
     ]
   }

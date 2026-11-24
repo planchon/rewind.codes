@@ -1,4 +1,4 @@
-import { weather } from "rewind:tools";
+import { weather } from "rewind:actions";
 
 export default async function main() {
   const paris = await weather.forecast({ city: "Paris" });

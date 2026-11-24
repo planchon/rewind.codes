@@ -214,8 +214,8 @@ impl<P: Plane> ScriptExecutor for PlaneExecutor<P> {
         self.0.executor().compile(script, action_set)
     }
 
-    fn tool_imports(&self, script: &Script) -> Option<BTreeSet<String>> {
-        self.0.executor().tool_imports(script)
+    fn action_imports(&self, script: &Script) -> Option<BTreeSet<String>> {
+        self.0.executor().action_imports(script)
     }
 
     async fn start(

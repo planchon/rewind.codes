@@ -4,8 +4,9 @@
 //! Everything that can be refused without running the script is refused here, so that a run
 //! is never created for a script that cannot load (`archi/03-execution.md`, "Starting a
 //! run"): syntax errors, dynamic `import()`, imports of modules other than `rewind`,
-//! `rewind:tools` and `rewind:workflows`, imports of names those modules do not export, a
-//! missing default export.
+//! `rewind:actions` and `rewind:workflows`, imports of names those modules do not export, a
+//! missing default export. The old names code already written uses are accepted without being
+//! offered: the module `rewind:tools`, and `rewind`'s `ToolError` (`archi/08-decisions.md`, R1).
 
 use std::collections::BTreeSet;
 
@@ -23,6 +24,7 @@ use rewind_core::{ActionSet, Script};
 use rewind_engine::ports::{CompiledScript, InvalidScript};
 
 use crate::epochs::Glue;
+use crate::loader::OLD_ACTIONS_SPECIFIER;
 
 /// Specifier of the model's script inside the isolate. Stack traces and callsites refer to it.
 pub(crate) const SCRIPT_SPECIFIER: &str = "file:///script.ts";
@@ -41,7 +43,8 @@ pub(crate) fn compile(
             .iter()
             .map(|name| (*name).to_owned())
             .collect(),
-        tools: (glue.tool_exports)(action_set),
+        std_aliases: glue.std_aliases,
+        actions: (glue.action_exports)(action_set),
         workflows: (glue.workflow_exports)(action_set),
     }
     .check()?;
@@ -55,22 +58,27 @@ pub(crate) fn compile(
     })
 }
 
-/// The names a script imports from `rewind:tools`, from its syntax tree; `None` when it may
+/// The names a script imports from `rewind:actions`, from its syntax tree; `None` when it may
 /// reach every one: it imports or re-exports the whole module, or it does not parse. Type-only
 /// imports are left out: they are erased before the script loads.
-pub(crate) fn tool_imports(script: &Script) -> Option<BTreeSet<String>> {
+pub(crate) fn action_imports(script: &Script) -> Option<BTreeSet<String>> {
     let parsed = parse(script, SCRIPT_SPECIFIER).ok()?;
     let ProgramRef::Module(module) = parsed.program_ref() else {
         return Some(BTreeSet::new());
     };
-    let is_tools = |src: &Str| src.value.to_atom_lossy().as_str() == "rewind:tools";
+    let is_actions = |src: &Str| {
+        matches!(
+            src.value.to_atom_lossy().as_str(),
+            "rewind:actions" | OLD_ACTIONS_SPECIFIER
+        )
+    };
     let mut names = BTreeSet::new();
     for item in &module.body {
         let ModuleItem::ModuleDecl(decl) = item else {
             continue;
         };
         match decl {
-            ModuleDecl::Import(import) if !import.type_only && is_tools(&import.src) => {
+            ModuleDecl::Import(import) if !import.type_only && is_actions(&import.src) => {
                 for specifier in &import.specifiers {
                     match specifier {
                         ImportSpecifier::Named(named) if !named.is_type_only => {
@@ -86,11 +94,11 @@ pub(crate) fn tool_imports(script: &Script) -> Option<BTreeSet<String>> {
                     }
                 }
             }
-            ModuleDecl::ExportAll(export) if !export.type_only && is_tools(&export.src) => {
+            ModuleDecl::ExportAll(export) if !export.type_only && is_actions(&export.src) => {
                 return None;
             }
             ModuleDecl::ExportNamed(export)
-                if !export.type_only && export.src.as_deref().is_some_and(is_tools) =>
+                if !export.type_only && export.src.as_deref().is_some_and(is_actions) =>
             {
                 for specifier in &export.specifiers {
                     match specifier {
@@ -165,8 +173,10 @@ struct Checker<'a> {
     parsed: &'a ParsedSource,
     /// What `rewind` exports.
     std: BTreeSet<String>,
-    /// What `rewind:tools` exports for the run's action set.
-    tools: BTreeSet<String>,
+    /// The old names `rewind` still exports, never listed (R1).
+    std_aliases: &'static [&'static str],
+    /// What `rewind:actions` exports for the run's action set.
+    actions: BTreeSet<String>,
     /// What `rewind:workflows` exports for the run's action set.
     workflows: BTreeSet<String>,
 }
@@ -178,7 +188,7 @@ impl Checker<'_> {
         if let Some(position) = dynamic.first {
             return Err(invalid(format!(
                 "dynamic import() is not available in Rewind scripts ({}): import from \"rewind\", \
-                 \"rewind:tools\" and \"rewind:workflows\" at the top of the script",
+                 \"rewind:actions\" and \"rewind:workflows\" at the top of the script",
                 self.at(position)
             )));
         }
@@ -188,7 +198,7 @@ impl Checker<'_> {
         if let Some(position) = requires.first.filter(|_| !requires.bound) {
             return Err(invalid(format!(
                 "require() is not available in Rewind scripts ({}): use `import` from \"rewind\", \
-                 \"rewind:tools\" and \"rewind:workflows\"",
+                 \"rewind:actions\" and \"rewind:workflows\"",
                 self.at(position)
             )));
         }
@@ -218,7 +228,7 @@ impl Checker<'_> {
                                 return Err(invalid(format!(
                                     "{} has no default export ({}): import names from it, as in \
                                      `import {{ sleep }} from \"rewind\"`, or the whole module with \
-                                     `import * as tools from \"rewind:tools\"`",
+                                     `import * as actions from \"rewind:actions\"`",
                                     quoted(&import.src),
                                     self.at(SourcePos::unsafely_from_byte_pos(default.span.lo))
                                 )));
@@ -265,7 +275,7 @@ impl Checker<'_> {
                     if let TsModuleRef::TsExternalModuleRef(require) = &import.module_ref {
                         return Err(invalid(format!(
                             "require() is not available in Rewind scripts ({}): use `import` \
-                             from \"rewind\", \"rewind:tools\" and \"rewind:workflows\"",
+                             from \"rewind\", \"rewind:actions\" and \"rewind:workflows\"",
                             self.at(SourcePos::unsafely_from_byte_pos(require.span.lo))
                         )));
                     }
@@ -295,10 +305,10 @@ impl Checker<'_> {
     fn module(&self, src: &Str) -> Result<&BTreeSet<String>, InvalidScript> {
         match src.value.to_atom_lossy().as_str() {
             "rewind" => Ok(&self.std),
-            "rewind:tools" => Ok(&self.tools),
+            "rewind:actions" | OLD_ACTIONS_SPECIFIER => Ok(&self.actions),
             "rewind:workflows" => Ok(&self.workflows),
             other => Err(invalid(format!(
-                "cannot import {other:?} ({}): scripts can only import \"rewind\", \"rewind:tools\" \
+                "cannot import {other:?} ({}): scripts can only import \"rewind\", \"rewind:actions\" \
                  and \"rewind:workflows\"",
                 self.at(SourcePos::unsafely_from_byte_pos(src.span.lo))
             ))),
@@ -312,7 +322,9 @@ impl Checker<'_> {
         name: &str,
         position: deno_ast::swc::common::BytePos,
     ) -> Result<(), InvalidScript> {
-        if exports.contains(name) {
+        if exports.contains(name)
+            || (std::ptr::eq(exports, &self.std) && self.std_aliases.contains(&name))
+        {
             return Ok(());
         }
         let available = if exports.is_empty() {
@@ -440,13 +452,13 @@ mod tests {
     }
 
     #[test]
-    fn tells_what_a_script_imports_from_rewind_tools() {
-        let imports = |source: &str| tool_imports(&Script::new(source));
+    fn tells_what_a_script_imports_from_rewind_actions() {
+        let imports = |source: &str| action_imports(&Script::new(source));
         let names = |names: &[&str]| Some(names.iter().map(|name| (*name).to_owned()).collect());
         assert_eq!(
             imports(
                 "import { sleep } from \"rewind\";\nimport { github, ask_user as ask, type Issue } \
-                 from \"rewind:tools\";\nimport type { Linear } from \"rewind:tools\";\nexport \
+                 from \"rewind:actions\";\nimport type { Linear } from \"rewind:actions\";\nexport \
                  default async () => [sleep, github, ask];"
             ),
             names(&["ask_user", "github"]),
@@ -458,14 +470,14 @@ mod tests {
             "nothing imported"
         );
         assert_eq!(
-            imports("export { zendesk } from \"rewind:tools\";\nexport default async () => 1;"),
+            imports("export { zendesk } from \"rewind:actions\";\nexport default async () => 1;"),
             names(&["zendesk"]),
             "a re-export reaches what it names"
         );
         for whole in [
-            "import * as tools from \"rewind:tools\";\nexport default async () => tools;",
-            "export * from \"rewind:tools\";\nexport default async () => 1;",
-            "export * as tools from \"rewind:tools\";\nexport default async () => 1;",
+            "import * as actions from \"rewind:actions\";\nexport default async () => actions;",
+            "export * from \"rewind:actions\";\nexport default async () => 1;",
+            "export * as actions from \"rewind:actions\";\nexport default async () => 1;",
         ] {
             assert_eq!(imports(whole), None, "{whole}");
         }
@@ -490,8 +502,8 @@ mod tests {
     #[test]
     fn accepts_what_the_modules_export() {
         for source in [
-            "import { sleep, signal } from \"rewind\";\nimport { github, ask_user } from \"rewind:tools\";\nexport default async () => [sleep, signal, github, ask_user];",
-            "import * as tools from \"rewind:tools\";\nexport default async () => tools;",
+            "import { sleep, signal } from \"rewind\";\nimport { github, ask_user } from \"rewind:actions\";\nexport default async () => [sleep, signal, github, ask_user];",
+            "import * as actions from \"rewind:actions\";\nexport default async () => actions;",
             "import { sleep as wait } from \"rewind\";\nexport default async () => wait;",
             "import type { Nothing } from \"./types\";\nimport { type Other } from \"rewind\";\nexport default async function main(input: Nothing): Promise<Other> { return input; }",
             "async function main() { return 1; }\nexport { main as default };",
@@ -516,7 +528,7 @@ mod tests {
                 "export default async function main() {\n  return await import(\"rewind\");\n}"
             ),
             "dynamic import() is not available in Rewind scripts (script.ts:2:16): import from \
-             \"rewind\", \"rewind:tools\" and \"rewind:workflows\" at the top of the script"
+             \"rewind\", \"rewind:actions\" and \"rewind:workflows\" at the top of the script"
         );
     }
 
@@ -525,7 +537,7 @@ mod tests {
         assert_eq!(
             refused("import fs from \"node:fs\";\nexport default async () => fs;"),
             "cannot import \"node:fs\" (script.ts:1:16): scripts can only import \"rewind\", \
-             \"rewind:tools\" and \"rewind:workflows\""
+             \"rewind:actions\" and \"rewind:workflows\""
         );
         assert!(
             refused("import hooks from \"rewind:internal\";\nexport default async () => hooks;")
@@ -542,7 +554,7 @@ mod tests {
         assert_eq!(
             refused("export default async function main() {\n  return require(\"fs\");\n}"),
             "require() is not available in Rewind scripts (script.ts:2:10): use `import` from \
-             \"rewind\", \"rewind:tools\" and \"rewind:workflows\""
+             \"rewind\", \"rewind:actions\" and \"rewind:workflows\""
         );
     }
 
@@ -564,17 +576,19 @@ mod tests {
     fn refuses_names_the_modules_do_not_export() {
         assert_eq!(
             refused("import { fetch } from \"rewind\";\nexport default async () => fetch;"),
-            "\"rewind\" has no export named \"fetch\" (script.ts:1:10); it exports CancelledError, \
-             ToolError, WorkflowError, run, signal, sleep, webhook"
+            "\"rewind\" has no export named \"fetch\" (script.ts:1:10); it exports ActionError, \
+             CancelledError, WorkflowError, run, signal, sleep, webhook"
         );
         assert_eq!(
-            refused("import { jira } from \"rewind:tools\";\nexport default async () => jira;"),
-            "\"rewind:tools\" has no export named \"jira\" (script.ts:1:10); it exports ask_user, \
+            refused("import { jira } from \"rewind:actions\";\nexport default async () => jira;"),
+            "\"rewind:actions\" has no export named \"jira\" (script.ts:1:10); it exports ask_user, \
              github"
         );
         assert!(
-            refused("import { list_issues } from \"rewind:tools\";\nexport default async () => 1;")
-                .contains("no export named \"list_issues\"")
+            refused(
+                "import { list_issues } from \"rewind:actions\";\nexport default async () => 1;"
+            )
+            .contains("no export named \"list_issues\"")
         );
         assert!(
             refused("import rewind from \"rewind\";\nexport default async () => rewind;")

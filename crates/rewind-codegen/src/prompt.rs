@@ -1,28 +1,28 @@
-//! The compact prompt rendering: the same declarations, one line per tool, for the model.
+//! The compact prompt rendering: the same declarations, one line per action, for the model.
 //!
 //! ```text
-//! import { ask_user, github } from "rewind:tools";
+//! import { ask_user, github } from "rewind:actions";
 //! github.list_issues({ repo: string, state?: "open" | "closed" }) → { number: number, title: string }[] · List the issues of a repository.
 //! ask_user({ question: string }) → unknown · Ask the end user a question.
-//! fetch(url, { method?, headers?, body? }) → Response · The http tool, for these hosts only: api.example.com.
-//! ToolContent<T> = { content: ContentBlock[], structuredContent?: T, text(): string, json(): T } · What an MCP tool without an output schema returns.
+//! fetch(url, { method?, headers?, body? }) → Response · The http action, for these hosts only: api.example.com.
+//! ActionContent<T> = { content: ContentBlock[], structuredContent?: T, text(): string, json(): T } · What an MCP action without an output schema returns.
 //! ```
 //!
 //! Named types are written out where they are used, as the prompt has no other place for them.
 //! Arguments and results longer than [`BUDGET`] characters are shortened: deeper objects
 //! become `{…}`, then named types keep their names, then arguments keep only their names.
 
-use rewind_core::{Builtin, Tool, ToolRoute};
+use rewind_core::{Action, ActionRoute, Builtin};
 
 use crate::model::{Export, ExportKind, Signature};
 use crate::ty::{Compact, Ty, is_identifier, string_literal};
 
 /// Characters of arguments, or of a result, before they are shortened.
 const BUDGET: usize = 160;
-/// Characters of a tool's description in its line.
+/// Characters of an action's description in its line.
 const DESCRIPTION: usize = 200;
 
-pub(crate) const CONTENT_LINE: &str = "ToolContent<T> = { content: ContentBlock[], structuredContent?: T, text(): string, json(): T } · What an MCP tool without an output schema returns: its content blocks (text, image, audio, resource), with helpers.";
+pub(crate) const CONTENT_LINE: &str = "ActionContent<T> = { content: ContentBlock[], structuredContent?: T, text(): string, json(): T } · What an MCP action without an output schema returns: its content blocks (text, image, audio, resource), with helpers.";
 
 /// The line that imports every export.
 pub(crate) fn imports(exports: &[Export<'_>]) -> Option<String> {
@@ -31,19 +31,19 @@ pub(crate) fn imports(exports: &[Export<'_>]) -> Option<String> {
     }
     let names: Vec<&str> = exports.iter().map(|export| export.name).collect();
     Some(format!(
-        "import {{ {} }} from \"rewind:tools\";",
+        "import {{ {} }} from \"rewind:actions\";",
         names.join(", ")
     ))
 }
 
-/// A tool's line.
-pub(crate) fn tool(export: &Export<'_>, signature: &Signature<'_>) -> String {
+/// An action's line.
+pub(crate) fn action(export: &Export<'_>, signature: &Signature<'_>) -> String {
     let named = |name: &str| export.body(name);
     let compact = Compact { named: &named };
     let callee = match export.kind {
         ExportKind::Function => export.name.to_owned(),
         ExportKind::Namespace => {
-            let local = signature.tool.local_name();
+            let local = signature.action.local_name();
             if is_identifier(local) {
                 format!("{}.{local}", export.name)
             } else {
@@ -59,7 +59,7 @@ pub(crate) fn tool(export: &Export<'_>, signature: &Signature<'_>) -> String {
         ""
     };
     let mut line = format!("{callee}({args}) → {result}{observed}");
-    if let Some(description) = summary(signature.tool) {
+    if let Some(description) = summary(signature.action) {
         line.push_str(" · ");
         line.push_str(&description);
     }
@@ -70,7 +70,7 @@ pub(crate) fn tool(export: &Export<'_>, signature: &Signature<'_>) -> String {
 pub(crate) fn builtin(builtin: &Builtin) -> String {
     match builtin {
         Builtin::Http { allowed_hosts } => format!(
-            "fetch(url, {{ method?, headers?, body? }}) → Response · The http tool, a global: \
+            "fetch(url, {{ method?, headers?, body? }}) → Response · The http action, a global: \
              HTTP requests to these hosts only: {}.",
             allowed_hosts.join(", ")
         ),
@@ -123,9 +123,9 @@ fn shortest(render: impl Fn(usize) -> String, depth: usize) -> String {
     text
 }
 
-/// The first paragraph of the tool's description, on one line, shortened.
-fn summary(tool: &Tool) -> Option<String> {
-    let description = tool.description.as_deref()?;
+/// The first paragraph of the action's description, on one line, shortened.
+fn summary(action: &Action) -> Option<String> {
+    let description = action.description.as_deref()?;
     let paragraph = description.trim().split("\n\n").next().unwrap_or_default();
     let line = paragraph.split_whitespace().collect::<Vec<_>>().join(" ");
     if line.is_empty() {
@@ -143,9 +143,9 @@ fn summary(tool: &Tool) -> Option<String> {
 }
 
 /// Whether the route is one the prompt lists as a built-in.
-pub(crate) fn builtin_of(tool: &Tool) -> Option<&Builtin> {
-    match &tool.route {
-        ToolRoute::Builtin(builtin) => Some(builtin),
+pub(crate) fn builtin_of(action: &Action) -> Option<&Builtin> {
+    match &action.route {
+        ActionRoute::Builtin(builtin) => Some(builtin),
         _ => None,
     }
 }

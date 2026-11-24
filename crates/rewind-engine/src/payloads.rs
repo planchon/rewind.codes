@@ -17,7 +17,7 @@ use std::collections::BTreeSet;
 use std::future::Future;
 
 use rewind_core::{
-    Command, Completion, Digest, Event, HistoryEntry, JsonValue, Lifecycle, Payload, ToolFailure,
+    ActionFailure, Command, Completion, Digest, Event, HistoryEntry, JsonValue, Lifecycle, Payload,
     canonical_json, canonicalize,
 };
 
@@ -60,9 +60,9 @@ pub trait PayloadSource: Send + Sync {
 pub(crate) fn payload_of(event: &Event) -> Option<&Payload> {
     match event {
         Event::Lifecycle(Lifecycle::RunStarted(started)) => Some(&started.input),
-        Event::Command(Command::ScheduleToolCall { args, .. }) => Some(args),
+        Event::Command(Command::ScheduleCall { args, .. }) => Some(args),
         Event::Command(Command::CompleteRun { output }) => Some(output),
-        Event::Completion(Completion::ToolCallCompleted { result, .. }) => Some(result),
+        Event::Completion(Completion::CallCompleted { result, .. }) => Some(result),
         Event::Completion(Completion::SignalReceived { payload, .. }) => Some(payload),
         _ => None,
     }
@@ -72,9 +72,9 @@ pub(crate) fn payload_of(event: &Event) -> Option<&Payload> {
 pub(crate) fn payload_mut(event: &mut Event) -> Option<&mut Payload> {
     match event {
         Event::Lifecycle(Lifecycle::RunStarted(started)) => Some(&mut started.input),
-        Event::Command(Command::ScheduleToolCall { args, .. }) => Some(args),
+        Event::Command(Command::ScheduleCall { args, .. }) => Some(args),
         Event::Command(Command::CompleteRun { output }) => Some(output),
-        Event::Completion(Completion::ToolCallCompleted { result, .. }) => Some(result),
+        Event::Completion(Completion::CallCompleted { result, .. }) => Some(result),
         Event::Completion(Completion::SignalReceived { payload, .. }) => Some(payload),
         _ => None,
     }
@@ -192,13 +192,13 @@ pub(crate) async fn delivery<P: PayloadSource>(
     completion: &Completion,
 ) -> Result<Delivery, BlobError> {
     Ok(match completion {
-        Completion::ToolCallCompleted { seq, result } => Delivery::ToolCallCompleted {
+        Completion::CallCompleted { seq, result } => Delivery::CallCompleted {
             seq: *seq,
             result: load(source, tenant, result).await?,
         },
-        Completion::ToolCallFailed { seq, error } => Delivery::ToolCallFailed {
+        Completion::CallFailed { seq, error } => Delivery::CallFailed {
             seq: *seq,
-            error: ToolFailure {
+            error: ActionFailure {
                 data: error.data.as_ref().map(canonicalize),
                 ..error.clone()
             },
@@ -230,7 +230,7 @@ mod tests {
         HistoryEntry {
             index: 0,
             recorded_at: Timestamp(0),
-            event: Event::Completion(Completion::ToolCallCompleted {
+            event: Event::Completion(Completion::CallCompleted {
                 seq: Seq(1),
                 result: Payload::Value(value),
             }),

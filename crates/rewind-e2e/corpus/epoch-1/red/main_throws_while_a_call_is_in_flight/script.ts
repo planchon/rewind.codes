@@ -1,4 +1,4 @@
-import { audit } from "rewind:tools";
+import { audit } from "rewind:actions";
 
 export default async function main(input: { amount: number }) {
   audit.record({ amount: input.amount }).then(() => console.log("must not run"));

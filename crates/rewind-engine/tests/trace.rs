@@ -17,7 +17,7 @@ fn triage() -> FakeExecutor {
             run.call("a", json!({ "repo": "acme/api", "state": "open" }));
         },
         |run, delivery| match delivery {
-            Delivery::ToolCallCompleted { .. } => {
+            Delivery::CallCompleted { .. } => {
                 run.log("3 stale issues");
                 run.timer(3 * DAY);
                 run.await_signal("approval");

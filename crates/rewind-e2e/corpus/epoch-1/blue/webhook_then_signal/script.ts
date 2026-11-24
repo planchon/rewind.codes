@@ -1,4 +1,4 @@
-import { github } from "rewind:tools";
+import { github } from "rewind:actions";
 import { signal, webhook } from "rewind";
 
 export default async function main(input: { repo: string }) {

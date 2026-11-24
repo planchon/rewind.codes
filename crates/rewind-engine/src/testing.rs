@@ -26,9 +26,9 @@ use std::time::Duration;
 use futures_util::StreamExt;
 use futures_util::stream;
 use rewind_core::{
-    AbortReason, ActionSet, Command, Event, HistoryEntry, JsonValue, Observed, ObservedCall,
-    PartitionId, RunId, RunMode, RunOutcome, RunState, RunStatus, Script, ScriptError, Seed,
-    SignalWhen, Test, Timestamp, ToolOutcome, WorkflowOp, WorkflowSchemas,
+    AbortReason, ActionOutcome, ActionSet, Command, Event, HistoryEntry, JsonValue, Observed,
+    ObservedCall, PartitionId, RunId, RunMode, RunOutcome, RunState, RunStatus, Script,
+    ScriptError, Seed, SignalWhen, Test, Timestamp, WorkflowOp, WorkflowSchemas,
 };
 
 use crate::adapters::{
@@ -39,7 +39,7 @@ use crate::driver::{DriveError, Driver, PlaneClock, Steps};
 use crate::edge::Edge;
 use crate::mock::{MockDispatcher, Mocks, NoMocks};
 use crate::plane::{HostTools, NodeConfig, Wiring};
-use crate::ports::{Enqueued, Entropy, NodeId, QuarantineKind, ScriptExecutor, ToolDispatcher};
+use crate::ports::{ActionDispatcher, Enqueued, Entropy, NodeId, QuarantineKind, ScriptExecutor};
 use crate::schema::{Refused, Validator};
 use crate::start::{StartError, StartRun};
 
@@ -64,7 +64,7 @@ pub struct Subject<'a> {
 pub struct TestOptions {
     /// The run's TTL; the engine's default when `None`.
     pub ttl: Option<Duration>,
-    /// Static responses in the `rewind.tools.json` format, tried after every source of the
+    /// Static responses in the `rewind.actions.json` format, tried after every source of the
     /// test's world (`rewind test`).
     pub statics: Option<JsonValue>,
 }
@@ -72,7 +72,7 @@ pub struct TestOptions {
 /// Why a test did not pass.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TestProblem {
-    /// The test names tools, answers or args its action set no longer has. It is not run.
+    /// The test names actions, answers or args its action set no longer has. It is not run.
     Stale,
     /// The workflow's interface refuses the test's input or signals. It is not run.
     Incompatible,
@@ -104,7 +104,7 @@ pub struct TestReport {
     pub output: Option<JsonValue>,
     pub error: Option<ScriptError>,
     pub abort: Option<AbortReason>,
-    /// How many times each tool was called.
+    /// How many times each action was called.
     pub calls: BTreeMap<String, u64>,
     /// The LLM trace of the run; empty for a test that was not run.
     pub trace: String,
@@ -155,7 +155,7 @@ pub enum MockLoadError {
 /// Loads the TypeScript mock handlers of a test. `rewind-runtime` runs them in an isolate of
 /// their own, with the sandbox's globals and the time of a clock started at `start`.
 pub trait MockLoader: Sync {
-    type Handlers: ToolDispatcher + 'static;
+    type Handlers: ActionDispatcher + 'static;
 
     fn load(
         &self,
@@ -182,7 +182,7 @@ impl MockLoader for NoMockLoader {
     }
 }
 
-/// Checks a test against what it runs with, without starting an isolate: the tools it names,
+/// Checks a test against what it runs with, without starting an isolate: the actions it names,
 /// the answers and args it gives them, and for a test of a workflow its input and signals. The
 /// first problem found, with every reason for it.
 pub fn check_test(test: &Test, subject: &Subject<'_>) -> Option<(TestProblem, Vec<String>)> {
@@ -203,29 +203,29 @@ pub fn check_test(test: &Test, subject: &Subject<'_>) -> Option<(TestProblem, Ve
 fn stale(test: &Test, action_set: &ActionSet) -> Vec<String> {
     let mut reasons = Vec::new();
     let mut missing: Vec<&str> = test
-        .tools()
-        .filter(|tool| !action_set.contains(tool))
+        .actions()
+        .filter(|action| !action_set.contains(action))
         .collect();
     missing.sort_unstable();
     missing.dedup();
-    for tool in missing {
-        reasons.push(format!("the action set has no tool {tool}"));
+    for action in missing {
+        reasons.push(format!("the action set has no action {action}"));
     }
-    for (name, rules) in &test.world.tools {
-        let Some(tool) = action_set.tool(name) else {
+    for (name, rules) in &test.world.actions {
+        let Some(action) = action_set.action(name) else {
             continue;
         };
         // The answer to a start of a workflow is the child's output.
-        let output = match WorkflowOp::of_tool(name) {
+        let output = match WorkflowOp::of_action(name) {
             Some((workflow, WorkflowOp::Start)) => action_set
                 .workflow(workflow)
                 .map(|pinned| pinned.schemas.output.clone()),
             Some((_, WorkflowOp::Signal)) => None,
-            None => tool.output_schema.clone(),
+            None => action.output_schema.clone(),
         };
         let output = output.map(|schema| Validator::compile(&schema));
         for (position, rule) in rules.iter().enumerate() {
-            if let (Some(validator), ToolOutcome::Result(result)) = (&output, &rule.answer)
+            if let (Some(validator), ActionOutcome::Result(result)) = (&output, &rule.answer)
                 && let Err(refused) = validator.check("result", result)
             {
                 reasons.push(format!(
@@ -235,7 +235,7 @@ fn stale(test: &Test, action_set: &ActionSet) -> Vec<String> {
                 ));
             }
             if let Some(args) = &rule.args {
-                for key in undeclared(args, &tool.input_schema) {
+                for key in undeclared(args, &action.input_schema) {
                     reasons.push(format!(
                         "rule {} of {name} matches the args key {key:?}, which its input schema \
                          does not declare",
@@ -246,14 +246,14 @@ fn stale(test: &Test, action_set: &ActionSet) -> Vec<String> {
         }
     }
     for call in &test.expect.calls {
-        let (Some(tool), Some(args)) = (action_set.tool(&call.tool), &call.args) else {
+        let (Some(action), Some(args)) = (action_set.action(&call.action), &call.args) else {
             continue;
         };
-        for key in undeclared(args, &tool.input_schema) {
+        for key in undeclared(args, &action.input_schema) {
             reasons.push(format!(
                 "the test expects a call of {} with the args key {key:?}, which its input schema \
                  does not declare",
-                call.tool
+                call.action
             ));
         }
     }
@@ -362,7 +362,7 @@ where
     }
     let start = test.start.unwrap_or(DEFAULT_START);
     let mut dispatcher =
-        MockDispatcher::<L::Handlers>::without_mocks().with_rules(test.world.tools.clone());
+        MockDispatcher::<L::Handlers>::without_mocks().with_rules(test.world.actions.clone());
     if let Some(cassette) = &test.world.cassette {
         dispatcher = dispatcher.with_cassette(cassette.clone());
     }
@@ -495,8 +495,8 @@ where
     let calls: Vec<ObservedCall> = history
         .iter()
         .filter_map(|entry| match &entry.event {
-            Event::Command(Command::ScheduleToolCall { tool, args, .. }) => Some(ObservedCall {
-                tool: tool.clone(),
+            Event::Command(Command::ScheduleCall { action, args, .. }) => Some(ObservedCall {
+                action: action.clone(),
                 args: args.value().cloned().unwrap_or(JsonValue::Null),
             }),
             _ => None,
@@ -504,7 +504,7 @@ where
         .collect();
     let mut counts: BTreeMap<String, u64> = BTreeMap::new();
     for call in &calls {
-        *counts.entry(call.tool.clone()).or_default() += 1;
+        *counts.entry(call.action.clone()).or_default() += 1;
     }
     let (output, error, abort) = match state.outcome() {
         Some(RunOutcome::Completed { output }) => (output.value().cloned(), None, None),
@@ -566,7 +566,7 @@ type TestPlane<X, M> = Wiring<
 struct TestWorld<X, M>
 where
     X: ScriptExecutor<Instance: 'static> + 'static,
-    M: ToolDispatcher + 'static,
+    M: ActionDispatcher + 'static,
 {
     driver: Driver<TestPlane<X, M>, MemoryCluster>,
     edge: Edge<TestPlane<X, M>>,
@@ -576,7 +576,7 @@ where
 impl<X, M> TestWorld<X, M>
 where
     X: ScriptExecutor<Instance: 'static> + 'static,
-    M: ToolDispatcher + 'static,
+    M: ActionDispatcher + 'static,
 {
     async fn new(
         executor: X,
@@ -664,15 +664,15 @@ impl Entropy for TestEntropy {
 
 #[cfg(test)]
 mod tests {
-    use rewind_core::{ExpectedCall, Tool, ToolRoute, ToolRule};
+    use rewind_core::{Action, ActionRoute, ActionRule, ExpectedCall};
     use serde_json::json;
 
     use super::*;
 
     fn action_set() -> ActionSet {
-        let mut list = Tool::new(
+        let mut list = Action::new(
             "github.list_issues",
-            ToolRoute::Host {
+            ActionRoute::Host {
                 group: Some("github".into()),
             },
             json!({ "type": "object", "properties": { "state": { "type": "string" } } }),
@@ -691,16 +691,16 @@ mod tests {
             interface: None,
         };
         let mut test = Test::new("lists");
-        test.world.tools.insert(
+        test.world.actions.insert(
             "github.list_issues".into(),
-            vec![ToolRule {
+            vec![ActionRule {
                 args: Some(json!({ "status": "open" })),
-                answer: ToolOutcome::Result(json!({ "issues": [] })),
+                answer: ActionOutcome::Result(json!({ "issues": [] })),
                 times: None,
             }],
         );
         test.expect.calls.push(ExpectedCall {
-            tool: "github.close_issue".into(),
+            action: "github.close_issue".into(),
             args: None,
             times: Some(0),
         });
@@ -709,7 +709,7 @@ mod tests {
         assert_eq!(
             reasons,
             vec![
-                "the action set has no tool github.close_issue",
+                "the action set has no action github.close_issue",
                 "rule 1 of github.list_issues answers what its output schema refuses: result: \
                  {\"issues\":[]} is not of type \"array\"",
                 "rule 1 of github.list_issues matches the args key \"status\", which its input \

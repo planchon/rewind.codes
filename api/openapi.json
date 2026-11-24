@@ -35,9 +35,291 @@
         ],
         "type": "string"
       },
+      "Action": {
+        "description": "A pinned action.",
+        "properties": {
+          "api": {
+            "description": "The API, for an API action.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "description": {
+            "type": "string"
+          },
+          "inputSchema": {
+            "type": "object"
+          },
+          "name": {
+            "description": "As scripts call it: `github.list_issues`, `ask_user`, `http`.",
+            "type": "string"
+          },
+          "outputSchema": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "policy": {
+            "$ref": "#/components/schemas/ActionPolicy",
+            "description": "The policy with its defaults filled in."
+          },
+          "route": {
+            "$ref": "#/components/schemas/Route"
+          },
+          "server": {
+            "description": "The MCP server, for an MCP action.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "route",
+          "description",
+          "inputSchema",
+          "policy"
+        ],
+        "type": "object"
+      },
+      "ActionFailure": {
+        "description": "How a call failed, as the script sees it (a thrown `ActionError`).",
+        "properties": {
+          "data": {},
+          "kind": {
+            "$ref": "#/components/schemas/ActionFailureKind"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "message"
+        ],
+        "type": "object"
+      },
+      "ActionFailureKind": {
+        "enum": [
+          "error",
+          "unavailable",
+          "timeout",
+          "outcome_unknown"
+        ],
+        "type": "string"
+      },
+      "ActionMatch": {
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "dts": {
+            "description": "The action's declaration in `rewind-actions.d.ts`, with the types it uses.",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "prompt": {
+            "description": "The action's line of the prompt rendering.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "description",
+          "prompt",
+          "dts"
+        ],
+        "type": "object"
+      },
+      "ActionPolicy": {
+        "additionalProperties": false,
+        "description": "An action's policy, pinned in the action set (`archi/04-tools.md`, \"Policies\"). Every field is\noptional: what is not given takes its default.",
+        "properties": {
+          "approval": {
+            "description": "The call waits for the harness's approval (`POST /v1/tasks/{id}/approve`) before it is\nsent. Off by default.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "concurrency": {
+            "description": "At most this many calls of the action in flight per run. The run's own limit (16) still\napplies.",
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "heartbeatTimeout": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Duration",
+                "description": "The grace after a stream closes: how long a host task handed on a stream that closed\nwaits for its worker to come back before it is handed again, as attempt + 1. 60 seconds\nby default."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "onInterruption": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/OnInterruption",
+                "description": "What happens to a call interrupted mid-flight. `retry` by default."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "timeout": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Duration",
+                "description": "How long one attempt may take. 5 minutes by default for MCP actions."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "ActionRule": {
+        "additionalProperties": false,
+        "description": "An answer to the calls whose args contain `args`: `returns` (the result, `null` included) or\n`error`, for `times` calls at most.",
+        "properties": {
+          "args": {
+            "description": "The call's args contain these (objects compared key by key); any call when absent.",
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "error": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RuleError",
+                "description": "The call fails with an `ActionError`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "returns": {
+            "description": "The result."
+          },
+          "times": {
+            "description": "How many calls it answers; any number when absent.",
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "ActionRules": {
+        "description": "One rule, or several tried in order.",
+        "oneOf": [
+          {
+            "items": {
+              "$ref": "#/components/schemas/ActionRule"
+            },
+            "type": "array"
+          },
+          {
+            "$ref": "#/components/schemas/ActionRule"
+          }
+        ]
+      },
+      "ActionSchemaChanged": {
+        "description": "A call parked because the action no longer matches its pinned schema\n(`archi/04-tools.md`, \"When an action set changes during a run\"). Approve the task to continue\nagainst the new schema, reject it, fork the run, or cancel it. The pinned schema is in the\naction set; `message` says what changed.",
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "actionSet": {
+            "description": "The run's action set, where the pinned schema is.",
+            "type": "string"
+          },
+          "labels": {
+            "$ref": "#/components/schemas/Labels"
+          },
+          "message": {
+            "description": "What changed, as the dispatcher saw it: the action is gone, its input schema refuses the\ncall's arguments, or its output schema changed. Written for the harness developer and\nthe model.",
+            "type": "string"
+          },
+          "namespace": {
+            "$ref": "#/components/schemas/NamespaceName"
+          },
+          "runId": {
+            "type": "string"
+          },
+          "seq": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "server": {
+            "description": "The action's MCP server.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "taskId": {
+            "description": "For `POST /v1/tasks/{id}/approve` and `/reject`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "runId",
+          "namespace",
+          "labels",
+          "taskId",
+          "seq",
+          "action",
+          "actionSet",
+          "message"
+        ],
+        "type": "object"
+      },
+      "ActionSearchResults": {
+        "description": "The actions matching a search, best first.",
+        "properties": {
+          "actions": {
+            "items": {
+              "$ref": "#/components/schemas/ActionMatch"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "actions"
+        ],
+        "type": "object"
+      },
       "ActionSet": {
         "description": "A registered action set, as pinned.",
         "properties": {
+          "actions": {
+            "description": "Every action a script of this action set can call, sorted by name.",
+            "items": {
+              "$ref": "#/components/schemas/Action"
+            },
+            "type": "array"
+          },
           "apis": {
             "description": "Its APIs, sorted by name.",
             "items": {
@@ -65,13 +347,6 @@
             },
             "type": "array"
           },
-          "tools": {
-            "description": "Every tool a script of this action set can call, sorted by name.",
-            "items": {
-              "$ref": "#/components/schemas/Tool"
-            },
-            "type": "array"
-          },
           "workflows": {
             "description": "The workflows its scripts may start, sorted by name.",
             "items": {
@@ -83,7 +358,7 @@
         "required": [
           "id",
           "servers",
-          "tools",
+          "actions",
           "declarations"
         ],
         "type": "object"
@@ -106,6 +381,13 @@
       "ActionSetSummary": {
         "description": "A registered action set, without its schemas and declarations.",
         "properties": {
+          "actions": {
+            "description": "The names of its actions, sorted.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "apis": {
             "description": "Its APIs, sorted by name.",
             "items": {
@@ -122,13 +404,6 @@
             },
             "type": "array"
           },
-          "tools": {
-            "description": "The names of its tools, sorted.",
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
-          },
           "workflows": {
             "description": "The names of the workflows it pins, sorted.",
             "items": {
@@ -140,13 +415,88 @@
         "required": [
           "id",
           "servers",
-          "tools"
+          "actions"
+        ],
+        "type": "object"
+      },
+      "ActionStats": {
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "calls": {
+            "description": "Calls scheduled in the window.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "errorKinds": {
+            "additionalProperties": {
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "description": "Failed calls by kind: `error`, `unavailable`, `timeout`, `outcome_unknown`.",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "errors": {
+            "description": "Calls that failed, whatever the kind.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "latencyMs": {
+            "$ref": "#/components/schemas/Latency",
+            "description": "From `schedule_call` to the completion, in milliseconds, over the calls that have an\noutcome; zeros when none has."
+          },
+          "retries": {
+            "description": "Attempts beyond the first, over every call.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "action",
+          "calls",
+          "errors",
+          "errorKinds",
+          "retries",
+          "latencyMs"
+        ],
+        "type": "object"
+      },
+      "ActionStatsPage": {
+        "properties": {
+          "actions": {
+            "description": "By action name.",
+            "items": {
+              "$ref": "#/components/schemas/ActionStats"
+            },
+            "type": "array"
+          },
+          "since": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "until": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "since",
+          "until",
+          "actions"
         ],
         "type": "object"
       },
       "Api": {
         "additionalProperties": false,
-        "description": "An API described by an OpenAPI 3.0 or 3.1 document (`archi/04-tools.md`, \"API tools\"). Each\noperation is a tool: its input the path, query and header parameters by name and the JSON\nbody under `body`; its output the schema of its first `2xx` JSON response.",
+        "description": "An API described by an OpenAPI 3.0 or 3.1 document (`archi/04-tools.md`, \"API actions\"). Each\noperation is an action: its input the path, query and header parameters by name and the JSON\nbody under `body`; its output the schema of its first `2xx` JSON response.",
         "properties": {
           "auth": {
             "oneOf": [
@@ -176,7 +526,7 @@
             ]
           },
           "name": {
-            "description": "The namespace of its tools in `rewind:tools`, an identifier as a server's name is.",
+            "description": "The namespace of its actions in `rewind:actions`, an identifier as a server's name is.",
             "type": "string"
           },
           "openapi": {
@@ -195,9 +545,9 @@
           },
           "policies": {
             "additionalProperties": {
-              "$ref": "#/components/schemas/ToolPolicy"
+              "$ref": "#/components/schemas/ActionPolicy"
             },
-            "description": "Policies of its tools, by operation name. An operation not listed gets the default of\nits method: `retry` for `GET`, `HEAD`, `OPTIONS`, `PUT` and `DELETE`; `at_most_once`\nfor `POST` and `PATCH` unless it declares an `Idempotency-Key` header.",
+            "description": "Policies of its actions, by operation name. An operation not listed gets the default of\nits method: `retry` for `GET`, `HEAD`, `OPTIONS`, `PUT` and `DELETE`; `at_most_once`\nfor `POST` and `PATCH` unless it declares an `Idempotency-Key` header.",
             "propertyNames": {
               "type": "string"
             },
@@ -285,6 +635,12 @@
       "ApiSummary": {
         "description": "An API of an action set, as pinned.",
         "properties": {
+          "actions": {
+            "description": "How many actions it has.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
           "auth": {
             "oneOf": [
               {
@@ -301,18 +657,12 @@
           },
           "name": {
             "type": "string"
-          },
-          "tools": {
-            "description": "How many tools it has.",
-            "format": "int32",
-            "minimum": 0,
-            "type": "integer"
           }
         },
         "required": [
           "name",
           "baseUrl",
-          "tools"
+          "actions"
         ],
         "type": "object"
       },
@@ -650,7 +1000,7 @@
         "type": "object"
       },
       "CallAttempts": {
-        "description": "How many times a tool call was sent.",
+        "description": "How many times a call was sent.",
         "properties": {
           "attempts": {
             "description": "From 1.",
@@ -768,7 +1118,7 @@
         "description": "`POST /v1/check`: type-checks a script against the sandbox lib and an action set's\ndeclarations, in strict mode, before anything runs.",
         "properties": {
           "actionSet": {
-            "description": "The action set whose `rewind:tools` the script imports. Without one, `rewind:tools` is empty.",
+            "description": "The action set whose `rewind:actions` the script imports. Without one, `rewind:actions` is empty.",
             "type": [
               "string",
               "null"
@@ -890,7 +1240,7 @@
       },
       "CompleteTask": {
         "additionalProperties": false,
-        "description": "`POST /v1/tasks/{token}/complete`: the tool's result, delivered to the script.",
+        "description": "`POST /v1/tasks/{token}/complete`: the action's result, delivered to the script.",
         "properties": {
           "result": {}
         },
@@ -1231,7 +1581,7 @@
       },
       "CreateActionSet": {
         "additionalProperties": false,
-        "description": "`POST /v1/action-sets`: MCP servers, APIs, host tools and the `http` tool, with a policy per\ntool. Registering connects to the MCP servers and lists their tools, reads the APIs' OpenAPI\ndocuments, and pins their schemas. The action set is content-addressed: registering the same\naction set twice gives the same id. It holds no secret: a run attaches its secrets when it\nstarts.",
+        "description": "`POST /v1/action-sets`: MCP servers, APIs, host tools and the `http` action, with a policy per\naction. Registering connects to the MCP servers and lists their actions, reads the APIs' OpenAPI\ndocuments, and pins their schemas. The action set is content-addressed: registering the same\naction set twice gives the same id. It holds no secret: a run attaches its secrets when it\nstarts.",
         "example": {
           "apis": [
             {
@@ -1276,21 +1626,21 @@
         },
         "properties": {
           "apis": {
-            "description": "APIs described by OpenAPI documents: one tool per operation, named\n`<api>.<operationId>`, called by Rewind.",
+            "description": "APIs described by OpenAPI documents: one action per operation, named\n`<api>.<operationId>`, called by Rewind.",
             "items": {
               "$ref": "#/components/schemas/Api"
             },
             "type": "array"
           },
           "base": {
-            "description": "Derives the action set from a registered one: its servers, tools and workflows are kept as\npinned, without listing the servers again; `workflows` adds workflows or pins them again.\n`mcp`, `host` and `http` must then be empty.",
+            "description": "Derives the action set from a registered one: its servers, actions and workflows are kept as\npinned, without listing the servers again; `workflows` adds workflows or pins them again.\n`mcp`, `host` and `http` must then be empty.",
             "type": [
               "string",
               "null"
             ]
           },
           "host": {
-            "description": "Host tools: functions of the harness, executed by its SDK worker (`GET /v1/tasks`). A\nname `group.tool` puts the tool in the `group` namespace of `rewind:tools`.",
+            "description": "Host tools: functions of the harness, executed by its SDK worker (`GET /v1/tasks`). A\nname `group.action` puts the action in the `group` namespace of `rewind:actions`.",
             "items": {
               "$ref": "#/components/schemas/HostTool"
             },
@@ -1299,8 +1649,8 @@
           "http": {
             "oneOf": [
               {
-                "$ref": "#/components/schemas/HttpTool",
-                "description": "Enables the built-in `http` tool, and `fetch` in scripts, for these hosts only."
+                "$ref": "#/components/schemas/HttpAction",
+                "description": "Enables the built-in `http` action, and `fetch` in scripts, for these hosts only."
               },
               {
                 "type": "null"
@@ -1308,7 +1658,7 @@
             ]
           },
           "mcp": {
-            "description": "MCP servers. Their tools are called by Rewind and named `<server>.<tool>`.",
+            "description": "MCP servers. Their actions are called by Rewind and named `<server>.<action>`.",
             "items": {
               "$ref": "#/components/schemas/McpServer"
             },
@@ -1316,7 +1666,7 @@
           },
           "secrets": {
             "$ref": "#/components/schemas/BTreeMap",
-            "description": "The organization's secrets that list the tools of the MCP servers whose `auth` takes one,\nby server: `{ \"github\": \"org/github\" }`. Only `org/` secrets; no run keeps them, and they\nare not part of the action set's id. Requires `secrets:use`."
+            "description": "The organization's secrets that list the actions of the MCP servers whose `auth` takes one,\nby server: `{ \"github\": \"org/github\" }`. Only `org/` secrets; no run keeps them, and they\nare not part of the action set's id. Requires `secrets:use`."
           },
           "workflows": {
             "description": "The workflows its scripts may start, from `rewind:workflows`: `triage` pins the latest\nversion, `triage@<version>` or `triage@v12` one version. The versions are pinned: the\naction set's scripts are checked against them, and start them, for their whole life.",
@@ -1334,7 +1684,7 @@
         "properties": {
           "allowedLabels": {
             "$ref": "#/components/schemas/Labels",
-            "description": "The key only sees runs carrying all these labels: an agent's tools see only their own\nconversation's runs."
+            "description": "The key only sees runs carrying all these labels: an agent's actions see only their own\nconversation's runs."
           },
           "name": {
             "description": "What the key is for.",
@@ -1598,6 +1948,9 @@
       "CredentialsExpired": {
         "description": "A call parked because its server refused the secret or the signature (`refused`), or\nbecause the secret the run attached no longer exists (`missing`, nothing was sent). Put the\nsecret again (`PUT /v1/secrets/{name}`, `PUT /v1/namespaces/{name}/secrets/{secret}`), or,\nfor a refused signature, approve the call once the server accepts the key: the call is then\nsent again with the same idempotency key.",
         "properties": {
+          "action": {
+            "type": "string"
+          },
           "actionSet": {
             "type": "string"
           },
@@ -1630,16 +1983,13 @@
             "type": "integer"
           },
           "server": {
-            "description": "The tool's MCP server or API.",
+            "description": "The action's MCP server or API.",
             "type": [
               "string",
               "null"
             ]
           },
           "taskId": {
-            "type": "string"
-          },
-          "tool": {
             "type": "string"
           }
         },
@@ -1649,7 +1999,7 @@
           "labels",
           "taskId",
           "seq",
-          "tool",
+          "action",
           "actionSet",
           "reason",
           "message"
@@ -1718,11 +2068,11 @@
         "description": "The action set's declarations, generated by `rewind-codegen`.",
         "properties": {
           "dts": {
-            "description": "`rewind-tools.d.ts`: the `rewind:tools` module, with tool descriptions as JSDoc, and the\n`rewind:workflows` module when the action set pins workflows.",
+            "description": "`rewind-actions.d.ts`: the `rewind:actions` module, with action descriptions as JSDoc, and the\n`rewind:workflows` module when the action set pins workflows.",
             "type": "string"
           },
           "prompt": {
-            "description": "The compact rendering for the model's prompt, one line per tool.",
+            "description": "The compact rendering for the model's prompt, one line per action.",
             "type": "string"
           }
         },
@@ -1985,6 +2335,9 @@
           },
           {
             "properties": {
+              "action": {
+                "type": "string"
+              },
               "args": {
                 "$ref": "#/components/schemas/Payload"
               },
@@ -2003,19 +2356,16 @@
                 "minimum": 0,
                 "type": "integer"
               },
-              "tool": {
-                "type": "string"
-              },
               "type": {
                 "enum": [
-                  "schedule_tool_call"
+                  "schedule_call"
                 ],
                 "type": "string"
               }
             },
             "required": [
               "seq",
-              "tool",
+              "action",
               "args",
               "type"
             ],
@@ -2130,7 +2480,7 @@
               },
               "type": {
                 "enum": [
-                  "tool_call_completed"
+                  "call_completed"
                 ],
                 "type": "string"
               }
@@ -2145,7 +2495,7 @@
           {
             "properties": {
               "error": {
-                "$ref": "#/components/schemas/ToolFailure"
+                "$ref": "#/components/schemas/ActionFailure"
               },
               "seq": {
                 "format": "int32",
@@ -2154,7 +2504,7 @@
               },
               "type": {
                 "enum": [
-                  "tool_call_failed"
+                  "call_failed"
                 ],
                 "type": "string"
               }
@@ -2309,7 +2659,7 @@
         "description": "What must hold at the end of a test. Everything not given is not checked.",
         "properties": {
           "calls": {
-            "description": "Calls that must happen: those to `tool` whose args contain `args`, exactly `times` of\nthem, at least one when `times` is absent; `times: 0` forbids them. Calls the world\nanswers that are not listed are allowed.",
+            "description": "Calls that must happen: those to `action` whose args contain `args`, exactly `times` of\nthem, at least one when `times` is absent; `times: 0` forbids them. Calls the world\nanswers that are not listed are allowed.",
             "items": {
               "$ref": "#/components/schemas/ExpectedCall"
             },
@@ -2357,6 +2707,9 @@
       "ExpectedCall": {
         "additionalProperties": false,
         "properties": {
+          "action": {
+            "type": "string"
+          },
           "args": {
             "type": [
               "object",
@@ -2370,13 +2723,10 @@
               "integer",
               "null"
             ]
-          },
-          "tool": {
-            "type": "string"
           }
         },
         "required": [
-          "tool"
+          "action"
         ],
         "type": "object"
       },
@@ -2418,6 +2768,12 @@
       "Facets": {
         "description": "The most frequent values among the runs, most frequent first: what to suggest in a query\nbar, and the counts beside a list. The counters count the runs of the window by status, by\nworkflow and by namespace; the facets they do not count are empty.",
         "properties": {
+          "actions": {
+            "items": {
+              "$ref": "#/components/schemas/FacetValue"
+            },
+            "type": "array"
+          },
           "errors": {
             "description": "Errors the runs ended with (names and abort kinds), and kinds their calls failed with.",
             "items": {
@@ -2459,12 +2815,6 @@
             },
             "type": "array"
           },
-          "tools": {
-            "items": {
-              "$ref": "#/components/schemas/FacetValue"
-            },
-            "type": "array"
-          },
           "waiting": {
             "items": {
               "$ref": "#/components/schemas/FacetValue"
@@ -2482,7 +2832,7 @@
         "required": [
           "statuses",
           "labels",
-          "tools",
+          "actions",
           "errors",
           "scripts",
           "waiting",
@@ -2492,13 +2842,13 @@
       },
       "FailTask": {
         "additionalProperties": false,
-        "description": "`POST /v1/tasks/{token}/fail`: the tool failed. The script gets a `ToolError`, unless the\nfailure is retryable and the tool's policy is `retry`: the call is then made again, with\nbackoff.",
+        "description": "`POST /v1/tasks/{token}/fail`: the action failed. The script gets an `ActionError`, unless the\nfailure is retryable and the action's policy is `retry`: the call is then made again, with\nbackoff.",
         "properties": {
           "data": {
-            "description": "`ToolError.data`."
+            "description": "`ActionError.data`."
           },
           "message": {
-            "description": "The message of the `ToolError`, written for the model.",
+            "description": "The message of the `ActionError`, written for the model.",
             "type": "string"
           },
           "retryable": {
@@ -2513,6 +2863,9 @@
       },
       "FailedCall": {
         "properties": {
+          "action": {
+            "type": "string"
+          },
           "args": {
             "$ref": "#/components/schemas/Payload"
           },
@@ -2527,20 +2880,17 @@
             ]
           },
           "error": {
-            "$ref": "#/components/schemas/ToolFailure"
+            "$ref": "#/components/schemas/ActionFailure"
           },
           "seq": {
             "format": "int32",
             "minimum": 0,
             "type": "integer"
-          },
-          "tool": {
-            "type": "string"
           }
         },
         "required": [
           "seq",
-          "tool",
+          "action",
           "args",
           "error"
         ],
@@ -2723,7 +3073,7 @@
       },
       "ForkRun": {
         "additionalProperties": false,
-        "description": "`POST /v1/runs/{id}/fork` (`retry_run`): a new run with a corrected script. While its\ncommands match the parent's, the parent's recorded results are reused and no tool is called\nagain; it continues live at the first difference, at `at`, or at the end of the parent's\nhistory (`archi/03-execution.md`, \"Forks\"). Takes `Idempotency-Key` as `POST /v1/runs`.",
+        "description": "`POST /v1/runs/{id}/fork` (`retry_run`): a new run with a corrected script. While its\ncommands match the parent's, the parent's recorded results are reused and no action is called\nagain; it continues live at the first difference, at `at`, or at the end of the parent's\nhistory (`archi/03-execution.md`, \"Forks\"). Takes `Idempotency-Key` as `POST /v1/runs`.",
         "properties": {
           "at": {
             "description": "Go live from this journal entry even if the commands still match.",
@@ -2845,8 +3195,11 @@
       "HandedTask": {
         "description": "A host-tool call handed to a worker on its task stream. The worker answers it by its token,\nwith `/complete` or `/fail`, or `/defer` to answer later; nothing else is asked of it while it\nworks.",
         "properties": {
+          "action": {
+            "type": "string"
+          },
           "args": {
-            "description": "The arguments, validated against the tool's input schema."
+            "description": "The arguments, validated against the action's input schema."
           },
           "attempt": {
             "description": "From 1. Above 1, an earlier attempt was interrupted: the stream it was handed on closed\nand did not come back within its grace.",
@@ -2879,7 +3232,7 @@
             "type": "integer"
           },
           "timeoutMs": {
-            "description": "The tool's execution timeout, in milliseconds: past it, the call is not waited for any\nmore. Absent when the tool has none, the default of host tools: the run's TTL bounds it.",
+            "description": "The action's execution timeout, in milliseconds: past it, the call is not waited for any\nmore. Absent when the action has none, the default of host tools: the run's TTL bounds it.",
             "format": "int64",
             "minimum": 0,
             "type": [
@@ -2891,11 +3244,8 @@
             "description": "The hand-out's secret token: `/v1/tasks/{token}/…`. A new one at each hand-out. It names\nthe run, so an answer reaches the run's owner from whichever process receives it.",
             "type": "string"
           },
-          "tool": {
-            "type": "string"
-          },
           "traceparent": {
-            "description": "W3C trace context, with the tool call's span as parent.",
+            "description": "W3C trace context, with the call's span as parent.",
             "type": [
               "string",
               "null"
@@ -2914,7 +3264,7 @@
           "runId",
           "namespace",
           "seq",
-          "tool",
+          "action",
           "args",
           "idempotencyKey",
           "attempt",
@@ -2935,7 +3285,7 @@
             "type": "object"
           },
           "name": {
-            "description": "`group.tool` puts the tool in a group, the namespace `rewind:tools` exports it under. The\ngroup, and a name without a dot, may not be a reserved word of JavaScript.",
+            "description": "`group.action` puts the action in a group, the namespace `rewind:actions` exports it under. The\ngroup, and a name without a dot, may not be a reserved word of JavaScript.",
             "type": "string"
           },
           "outputSchema": {
@@ -2948,7 +3298,7 @@
           "policy": {
             "oneOf": [
               {
-                "$ref": "#/components/schemas/ToolPolicy"
+                "$ref": "#/components/schemas/ActionPolicy"
               },
               {
                 "type": "null"
@@ -2963,9 +3313,9 @@
         ],
         "type": "object"
       },
-      "HttpTool": {
+      "HttpAction": {
         "additionalProperties": false,
-        "description": "The built-in `http` tool: requests leave from the dispatcher, never from the isolate, and\nonly toward these hosts (`archi/04-tools.md`, \"The `http` tool and egress\").",
+        "description": "The built-in `http` action: requests leave from the dispatcher, never from the isolate, and\nonly toward these hosts (`archi/04-tools.md`, \"The `http` action and egress\").",
         "properties": {
           "allow": {
             "description": "Host names, such as `api.example.com`. `*.example.com` allows the subdomains.",
@@ -2977,7 +3327,7 @@
           "policy": {
             "oneOf": [
               {
-                "$ref": "#/components/schemas/ToolPolicy"
+                "$ref": "#/components/schemas/ActionPolicy"
               },
               {
                 "type": "null"
@@ -3230,7 +3580,7 @@
         "type": "object"
       },
       "LastRead": {
-        "description": "The last read of a secret: by which run, of which namespace, when. An action set's registration\nreads an organization's secret to list the tools of the MCP server it is attached for, before\nany run exists: such a read names neither run nor namespace.",
+        "description": "The last read of a secret: by which run, of which namespace, when. An action set's registration\nreads an organization's secret to list the actions of the MCP server it is attached for, before\nany run exists: such a read names neither run nor namespace.",
         "properties": {
           "at": {
             "format": "date-time",
@@ -3463,14 +3813,14 @@
             "type": "object"
           },
           "name": {
-            "description": "The namespace of its tools in `rewind:tools`: an identifier that is not a reserved word of\nJavaScript (`default`, `delete`, `let`…).",
+            "description": "The namespace of its actions in `rewind:actions`: an identifier that is not a reserved word of\nJavaScript (`default`, `delete`, `let`…).",
             "type": "string"
           },
           "policies": {
             "additionalProperties": {
-              "$ref": "#/components/schemas/ToolPolicy"
+              "$ref": "#/components/schemas/ActionPolicy"
             },
-            "description": "Policies of its tools, by tool name as the server defines it. Tools not listed get the\ndefault policy.",
+            "description": "Policies of its actions, by action name as the server defines it. Actions not listed get the\ndefault policy.",
             "propertyNames": {
               "type": "string"
             },
@@ -3899,7 +4249,7 @@
         "type": "string"
       },
       "Payload": {
-        "description": "A JSON value carried by a run (its input and output, tool arguments and results, signal\npayloads), identified by the SHA-256 of its canonical JSON (RFC 8785).",
+        "description": "A JSON value carried by a run (its input and output, action arguments and results, signal\npayloads), identified by the SHA-256 of its canonical JSON (RFC 8785).",
         "properties": {
           "bytes": {
             "description": "Size of the canonical JSON, in bytes.",
@@ -4812,7 +5162,7 @@
       },
       "RejectTask": {
         "additionalProperties": false,
-        "description": "`POST /v1/tasks/{id}/reject`: the call fails with a `ToolError` carrying this message.",
+        "description": "`POST /v1/tasks/{id}/reject`: the call fails with an `ActionError` carrying this message.",
         "properties": {
           "message": {
             "description": "Why, written for the model. \"rejected by the harness\" when absent.",
@@ -4960,7 +5310,7 @@
         "type": "object"
       },
       "Route": {
-        "description": "Who calls the tool (`archi/04-tools.md`, \"Routes\").",
+        "description": "Who calls the action (`archi/04-tools.md`, \"Routes\").",
         "enum": [
           "mcp",
           "api",
@@ -4977,7 +5327,7 @@
           "kind": {
             "oneOf": [
               {
-                "$ref": "#/components/schemas/ToolFailureKind",
+                "$ref": "#/components/schemas/ActionFailureKind",
                 "description": "`error` when absent."
               },
               {
@@ -5013,7 +5363,7 @@
             "type": "string"
           },
           "attempts": {
-            "description": "How many times each tool call was sent, by seq, for the calls sent more than once: a\ncall retried after a transient failure, or sent again after its worker or dispatcher\ndied. Attempts live in the tool tasks, not in the journal: the read model keeps them.",
+            "description": "How many times each call was sent, by seq, for the calls sent more than once: a\ncall retried after a transient failure, or sent again after its worker or dispatcher\ndied. Attempts live in the call tasks, not in the journal: the read model keeps them.",
             "items": {
               "$ref": "#/components/schemas/CallAttempts"
             },
@@ -5253,7 +5603,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/FailedCall",
-                "description": "The tool call whose failure the script did not catch, if that is how it failed."
+                "description": "The call whose failure the script did not catch, if that is how it failed."
               },
               {
                 "type": "null"
@@ -5282,7 +5632,7 @@
             "type": "string"
           },
           "name": {
-            "description": "`ToolError`, `TypeError`, `DeadlockError`, `CancelledError`…",
+            "description": "`ActionError`, `TypeError`, `DeadlockError`, `CancelledError`…",
             "type": "string"
           },
           "stack": {
@@ -5312,7 +5662,7 @@
         "type": "object"
       },
       "RunMode": {
-        "description": "`live`: tools are really called and time is real. `mock`: tools are answered by cassettes\nand mocks, and time is virtual.",
+        "description": "`live`: actions are really called and time is real. `mock`: actions are answered by cassettes\nand mocks, and time is virtual.",
         "enum": [
           "live",
           "mock"
@@ -5429,6 +5779,11 @@
           "actionSet": {
             "type": "string"
           },
+          "calls": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
           "endedAt": {
             "format": "date-time",
             "type": [
@@ -5460,7 +5815,7 @@
             ]
           },
           "errors": {
-            "description": "Tool calls that failed.",
+            "description": "Calls that failed.",
             "format": "int64",
             "minimum": 0,
             "type": "integer"
@@ -5532,11 +5887,6 @@
           "status": {
             "$ref": "#/components/schemas/RunStatus"
           },
-          "toolCalls": {
-            "format": "int64",
-            "minimum": 0,
-            "type": "integer"
-          },
           "waitingFor": {
             "description": "With `active`: what the run waits for.",
             "items": {
@@ -5572,7 +5922,7 @@
           "labels",
           "startedAt",
           "lastActivityAt",
-          "toolCalls",
+          "calls",
           "errors",
           "historyLen"
         ],
@@ -5595,7 +5945,7 @@
             "$ref": "#/components/schemas/WaitKind"
           },
           "name": {
-            "description": "The signal's name, or the call's tool.",
+            "description": "The signal's name, or the call's action.",
             "type": [
               "string",
               "null"
@@ -5656,6 +6006,13 @@
       "Script": {
         "description": "`GET /v1/scripts/{digest}`: one script's source, and what its runs did.",
         "properties": {
+          "actions": {
+            "description": "The actions its runs called.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "description": {
             "type": [
               "string",
@@ -5709,13 +6066,6 @@
                 "type": "null"
               }
             ]
-          },
-          "tools": {
-            "description": "The tools its runs called.",
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
           }
         },
         "required": [
@@ -5723,7 +6073,7 @@
           "source",
           "headline",
           "runs",
-          "tools"
+          "actions"
         ],
         "type": "object"
       },
@@ -5787,6 +6137,13 @@
       "ScriptSummary": {
         "description": "A distinct script: content-addressed, so every run of the same source counts here.",
         "properties": {
+          "actions": {
+            "description": "The actions its runs called.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "description": {
             "description": "The description that goes with the title: the person's with theirs, else the rest of\nthe comment.",
             "type": [
@@ -5831,13 +6188,6 @@
                 "type": "null"
               }
             ]
-          },
-          "tools": {
-            "description": "The tools its runs called.",
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
           }
         },
         "required": [
@@ -5846,7 +6196,7 @@
           "firstRunAt",
           "lastRunAt",
           "runs",
-          "tools"
+          "actions"
         ],
         "type": "object"
       },
@@ -6112,6 +6462,12 @@
       },
       "ServerSummary": {
         "properties": {
+          "actions": {
+            "description": "How many actions it has.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
           "auth": {
             "oneOf": [
               {
@@ -6126,12 +6482,6 @@
           "name": {
             "type": "string"
           },
-          "tools": {
-            "description": "How many tools it has.",
-            "format": "int32",
-            "minimum": 0,
-            "type": "integer"
-          },
           "transport": {
             "$ref": "#/components/schemas/McpTransport"
           }
@@ -6139,7 +6489,7 @@
         "required": [
           "name",
           "transport",
-          "tools"
+          "actions"
         ],
         "type": "object"
       },
@@ -6395,7 +6745,7 @@
             "agent": "triage",
             "conversation": "c-42"
           },
-          "script": "import { github } from \"rewind:tools\";\nexport default async function main(input: { repo: string }) {\n  return (await github.list_issues({ repo: input.repo })).length;\n}\n",
+          "script": "import { github } from \"rewind:actions\";\nexport default async function main(input: { repo: string }) {\n  return (await github.list_issues({ repo: input.repo })).length;\n}\n",
           "secrets": {
             "github": "ns/github"
           },
@@ -6403,7 +6753,7 @@
         },
         "properties": {
           "actionSet": {
-            "description": "The action set the script imports from `rewind:tools`. Without one, `rewind:tools` is empty.",
+            "description": "The action set the script imports from `rewind:actions`. Without one, `rewind:actions` is empty.",
             "type": [
               "string",
               "null"
@@ -6680,7 +7030,7 @@
         "type": "object"
       },
       "TaskState": {
-        "description": "The state of a tool task.",
+        "description": "The state of a call's task.",
         "enum": [
           "approval",
           "ready",
@@ -6706,13 +7056,13 @@
       },
       "Test": {
         "additionalProperties": false,
-        "description": "A test: what the run is given (its input, the tools' answers, signals), and what must hold\nat the end. It never names its script.",
+        "description": "A test: what the run is given (its input, the actions' answers, signals), and what must hold\nat the end. It never names its script.",
         "example": {
           "expect": {
             "calls": [
               {
-                "times": 1,
-                "tool": "github.close_issue"
+                "action": "github.close_issue",
+                "times": 1
               }
             ],
             "output": {
@@ -6733,7 +7083,7 @@
             }
           ],
           "world": {
-            "tools": {
+            "actions": {
               "github.close_issue": {
                 "returns": {}
               },
@@ -6874,7 +7224,7 @@
         "additionalProperties": false,
         "description": "`POST /v1/test`: runs tests in mock mode, in virtual time (`archi/05-testing-and-observability.md`,\n\"Running tests\"). The given tests run against the script; with `workflow`, that version's\nsuite runs too, and its interface checks every test. This is how a candidate is checked\nbefore it is saved: a corrected script, or the version on a new action set.",
         "example": {
-          "script": "import { github } from \"rewind:tools\";\nexport default async function main(input: { repo: string }) {\n  const issues = await github.list_issues({ repo: input.repo, state: \"open\" });\n  return { open: issues.length };\n}\n",
+          "script": "import { github } from \"rewind:actions\";\nexport default async function main(input: { repo: string }) {\n  const issues = await github.list_issues({ repo: input.repo, state: \"open\" });\n  return { open: issues.length };\n}\n",
           "tests": [
             {
               "expect": {
@@ -6888,7 +7238,7 @@
               },
               "name": "counts the open issues",
               "world": {
-                "tools": {
+                "actions": {
                   "github.list_issues": {
                     "returns": [
                       {
@@ -6903,7 +7253,7 @@
         },
         "properties": {
           "actionSet": {
-            "description": "The action set the script imports from `rewind:tools`. With `workflow`, the version's own\nwhen absent.",
+            "description": "The action set the script imports from `rewind:actions`. With `workflow`, the version's own\nwhen absent.",
             "type": [
               "string",
               "null"
@@ -6951,7 +7301,7 @@
               "minimum": 0,
               "type": "integer"
             },
-            "description": "How many times each tool was called.",
+            "description": "How many times each action was called.",
             "propertyNames": {
               "type": "string"
             },
@@ -7338,356 +7688,6 @@
         ],
         "type": "object"
       },
-      "Tool": {
-        "description": "A pinned tool.",
-        "properties": {
-          "api": {
-            "description": "The API, for an API tool.",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "description": {
-            "type": "string"
-          },
-          "inputSchema": {
-            "type": "object"
-          },
-          "name": {
-            "description": "As scripts call it: `github.list_issues`, `ask_user`, `http`.",
-            "type": "string"
-          },
-          "outputSchema": {
-            "type": [
-              "object",
-              "null"
-            ]
-          },
-          "policy": {
-            "$ref": "#/components/schemas/ToolPolicy",
-            "description": "The policy with its defaults filled in."
-          },
-          "route": {
-            "$ref": "#/components/schemas/Route"
-          },
-          "server": {
-            "description": "The MCP server, for an MCP tool.",
-            "type": [
-              "string",
-              "null"
-            ]
-          }
-        },
-        "required": [
-          "name",
-          "route",
-          "description",
-          "inputSchema",
-          "policy"
-        ],
-        "type": "object"
-      },
-      "ToolFailure": {
-        "description": "How a tool call failed, as the script sees it (a thrown `ToolError`).",
-        "properties": {
-          "data": {},
-          "kind": {
-            "$ref": "#/components/schemas/ToolFailureKind"
-          },
-          "message": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "kind",
-          "message"
-        ],
-        "type": "object"
-      },
-      "ToolFailureKind": {
-        "enum": [
-          "error",
-          "unavailable",
-          "timeout",
-          "outcome_unknown"
-        ],
-        "type": "string"
-      },
-      "ToolMatch": {
-        "properties": {
-          "description": {
-            "type": "string"
-          },
-          "dts": {
-            "description": "The tool's declaration in `rewind-tools.d.ts`, with the types it uses.",
-            "type": "string"
-          },
-          "name": {
-            "type": "string"
-          },
-          "prompt": {
-            "description": "The tool's line of the prompt rendering.",
-            "type": "string"
-          }
-        },
-        "required": [
-          "name",
-          "description",
-          "prompt",
-          "dts"
-        ],
-        "type": "object"
-      },
-      "ToolPolicy": {
-        "additionalProperties": false,
-        "description": "A tool's policy, pinned in the action set (`archi/04-tools.md`, \"Policies\"). Every field is\noptional: what is not given takes its default.",
-        "properties": {
-          "approval": {
-            "description": "The call waits for the harness's approval (`POST /v1/tasks/{id}/approve`) before it is\nsent. Off by default.",
-            "type": [
-              "boolean",
-              "null"
-            ]
-          },
-          "concurrency": {
-            "description": "At most this many calls of the tool in flight per run. The run's own limit (16) still\napplies.",
-            "format": "int32",
-            "minimum": 0,
-            "type": [
-              "integer",
-              "null"
-            ]
-          },
-          "heartbeatTimeout": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/Duration",
-                "description": "The grace after a stream closes: how long a host task handed on a stream that closed\nwaits for its worker to come back before it is handed again, as attempt + 1. 60 seconds\nby default."
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "onInterruption": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/OnInterruption",
-                "description": "What happens to a call interrupted mid-flight. `retry` by default."
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "timeout": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/Duration",
-                "description": "How long one attempt may take. 5 minutes by default for MCP tools."
-              },
-              {
-                "type": "null"
-              }
-            ]
-          }
-        },
-        "type": "object"
-      },
-      "ToolRule": {
-        "additionalProperties": false,
-        "description": "An answer to the calls whose args contain `args`: `returns` (the result, `null` included) or\n`error`, for `times` calls at most.",
-        "properties": {
-          "args": {
-            "description": "The call's args contain these (objects compared key by key); any call when absent.",
-            "type": [
-              "object",
-              "null"
-            ]
-          },
-          "error": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/RuleError",
-                "description": "The call fails with a `ToolError`."
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "returns": {
-            "description": "The result."
-          },
-          "times": {
-            "description": "How many calls it answers; any number when absent.",
-            "format": "int32",
-            "minimum": 0,
-            "type": [
-              "integer",
-              "null"
-            ]
-          }
-        },
-        "type": "object"
-      },
-      "ToolRules": {
-        "description": "One rule, or several tried in order.",
-        "oneOf": [
-          {
-            "items": {
-              "$ref": "#/components/schemas/ToolRule"
-            },
-            "type": "array"
-          },
-          {
-            "$ref": "#/components/schemas/ToolRule"
-          }
-        ]
-      },
-      "ToolSchemaChanged": {
-        "description": "A call parked because the tool no longer matches its pinned schema\n(`archi/04-tools.md`, \"When an action set changes during a run\"). Approve the task to continue\nagainst the new schema, reject it, fork the run, or cancel it. The pinned schema is in the\naction set; `message` says what changed.",
-        "properties": {
-          "actionSet": {
-            "description": "The run's action set, where the pinned schema is.",
-            "type": "string"
-          },
-          "labels": {
-            "$ref": "#/components/schemas/Labels"
-          },
-          "message": {
-            "description": "What changed, as the dispatcher saw it: the tool is gone, its input schema refuses the\ncall's arguments, or its output schema changed. Written for the harness developer and\nthe model.",
-            "type": "string"
-          },
-          "namespace": {
-            "$ref": "#/components/schemas/NamespaceName"
-          },
-          "runId": {
-            "type": "string"
-          },
-          "seq": {
-            "format": "int32",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "server": {
-            "description": "The tool's MCP server.",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "taskId": {
-            "description": "For `POST /v1/tasks/{id}/approve` and `/reject`.",
-            "type": "string"
-          },
-          "tool": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "runId",
-          "namespace",
-          "labels",
-          "taskId",
-          "seq",
-          "tool",
-          "actionSet",
-          "message"
-        ],
-        "type": "object"
-      },
-      "ToolSearchResults": {
-        "description": "The tools matching a search, best first.",
-        "properties": {
-          "tools": {
-            "items": {
-              "$ref": "#/components/schemas/ToolMatch"
-            },
-            "type": "array"
-          }
-        },
-        "required": [
-          "tools"
-        ],
-        "type": "object"
-      },
-      "ToolStats": {
-        "properties": {
-          "calls": {
-            "description": "Calls scheduled in the window.",
-            "format": "int64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "errorKinds": {
-            "additionalProperties": {
-              "format": "int64",
-              "minimum": 0,
-              "type": "integer"
-            },
-            "description": "Failed calls by kind: `error`, `unavailable`, `timeout`, `outcome_unknown`.",
-            "propertyNames": {
-              "type": "string"
-            },
-            "type": "object"
-          },
-          "errors": {
-            "description": "Calls that failed, whatever the kind.",
-            "format": "int64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "latencyMs": {
-            "$ref": "#/components/schemas/Latency",
-            "description": "From `schedule_tool_call` to the completion, in milliseconds, over the calls that have an\noutcome; zeros when none has."
-          },
-          "retries": {
-            "description": "Attempts beyond the first, over every call.",
-            "format": "int64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "tool": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "tool",
-          "calls",
-          "errors",
-          "errorKinds",
-          "retries",
-          "latencyMs"
-        ],
-        "type": "object"
-      },
-      "ToolStatsPage": {
-        "properties": {
-          "since": {
-            "format": "date-time",
-            "type": "string"
-          },
-          "tools": {
-            "description": "By tool name.",
-            "items": {
-              "$ref": "#/components/schemas/ToolStats"
-            },
-            "type": "array"
-          },
-          "until": {
-            "format": "date-time",
-            "type": "string"
-          }
-        },
-        "required": [
-          "since",
-          "until",
-          "tools"
-        ],
-        "type": "object"
-      },
       "Trace": {
         "properties": {
           "format": {
@@ -7874,8 +7874,11 @@
         "description": "Something an active run waits for.",
         "oneOf": [
           {
-            "description": "A tool call in flight, and the state of its task.",
+            "description": "A call in flight, and the state of its task.",
             "properties": {
+              "action": {
+                "type": "string"
+              },
               "args": {
                 "$ref": "#/components/schemas/Payload",
                 "description": "The call's arguments: what the harness approves or rejects."
@@ -7898,7 +7901,7 @@
               },
               "kind": {
                 "enum": [
-                  "tool_call"
+                  "call"
                 ],
                 "type": "string"
               },
@@ -7924,14 +7927,11 @@
               "taskId": {
                 "description": "For `POST /v1/tasks/{id}/approve` and `/reject`.",
                 "type": "string"
-              },
-              "tool": {
-                "type": "string"
               }
             },
             "required": [
               "seq",
-              "tool",
+              "action",
               "args",
               "taskId",
               "state",
@@ -8128,7 +8128,7 @@
             "type": "object"
           },
           {
-            "description": "An activation left the run waiting for something other than its tool calls in flight:\na signal, a timer, or a task that waits for the harness. `data.run.waitingFor` says\nwhat.",
+            "description": "An activation left the run waiting for something other than its calls in flight:\na signal, a timer, or a task that waits for the harness. `data.run.waitingFor` says\nwhat.",
             "properties": {
               "data": {
                 "$ref": "#/components/schemas/RunEvent"
@@ -8176,10 +8176,10 @@
             "type": "object"
           },
           {
-            "description": "A call was parked because the server's schema of the tool changed during the run.",
+            "description": "A call was parked because the server's schema of the action changed during the run.",
             "properties": {
               "data": {
-                "$ref": "#/components/schemas/ToolSchemaChanged"
+                "$ref": "#/components/schemas/ActionSchemaChanged"
               },
               "timestamp": {
                 "format": "date-time",
@@ -8187,7 +8187,7 @@
               },
               "type": {
                 "enum": [
-                  "tool.schema_changed"
+                  "action.schema_changed"
                 ],
                 "type": "string"
               }
@@ -8258,7 +8258,7 @@
           "run.aborted",
           "run.suspended",
           "run.quarantined",
-          "tool.schema_changed",
+          "action.schema_changed",
           "credentials.expired",
           "quota.alert"
         ],
@@ -8449,6 +8449,16 @@
         "additionalProperties": false,
         "description": "What answers the run's calls: the rules, then the mock handlers, then the cassette. A call\nno source answers fails, and fails the test.",
         "properties": {
+          "actions": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ActionRules"
+            },
+            "description": "By action, one answer for every call, or rules tried in order. A start of a workflow\n(`workflows.<name>.start`) is answered with the child's output, or its failure.",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
           "cassette": {
             "description": "Calls and signals recorded from a run: a cassette document.",
             "type": [
@@ -8457,21 +8467,11 @@
             ]
           },
           "mocks": {
-            "description": "TypeScript mock handlers, run in a separate isolate: a module default-exporting its\nhandlers by tool name or by namespace.",
+            "description": "TypeScript mock handlers, run in a separate isolate: a module default-exporting its\nhandlers by action name or by namespace.",
             "type": [
               "string",
               "null"
             ]
-          },
-          "tools": {
-            "additionalProperties": {
-              "$ref": "#/components/schemas/ToolRules"
-            },
-            "description": "By tool, one answer for every call, or rules tried in order. A start of a workflow\n(`workflows.<name>.start`) is answered with the child's output, or its failure.",
-            "propertyNames": {
-              "type": "string"
-            },
-            "type": "object"
           }
         },
         "type": "object"
@@ -9937,7 +9937,7 @@
     },
     "/v1/action-sets": {
       "get": {
-        "description": "The action sets the tenant registered, by id, with their servers and tool names.",
+        "description": "The action sets the tenant registered, by id, with their servers and action names.",
         "operationId": "listActionSets",
         "parameters": [
           {
@@ -10018,7 +10018,7 @@
         ]
       },
       "post": {
-        "description": "Connects to the MCP servers and lists their tools, reads the APIs' OpenAPI documents\n(one tool per operation), pins their schemas, policies and `auth`, and returns the\naction set with its declarations, for the model's prompt, and the API operations it left\nout. Content-addressed: registering the same action set again returns it (200). `secrets`\nattaches organization's secrets to list the tools of an MCP server that needs one\n(`secrets:use`). Requires `actions:write`.",
+        "description": "Connects to the MCP servers and lists their actions, reads the APIs' OpenAPI documents\n(one action per operation), pins their schemas, policies and `auth`, and returns the\naction set with its declarations, for the model's prompt, and the API operations it left\nout. Content-addressed: registering the same action set again returns it (200). `secrets`\nattaches organization's secrets to list the actions of an MCP server that needs one\n(`secrets:use`). Requires `actions:write`.",
         "operationId": "createActionSet",
         "parameters": [
           {
@@ -10255,8 +10255,8 @@
     },
     "/v1/action-sets/{id}/search": {
       "get": {
-        "description": "For action sets too large for the prompt: the declarations of the tools matching a query.",
-        "operationId": "searchTools",
+        "description": "For action sets too large for the prompt: the declarations of the actions matching a query.",
+        "operationId": "searchActions",
         "parameters": [
           {
             "description": "The action set's id.",
@@ -10268,7 +10268,7 @@
             }
           },
           {
-            "description": "Words to look for in tool names and descriptions.",
+            "description": "Words to look for in action names and descriptions.",
             "in": "query",
             "name": "query",
             "required": true,
@@ -10277,7 +10277,7 @@
             }
           },
           {
-            "description": "At most this many tools (10 by default).",
+            "description": "At most this many actions (10 by default).",
             "in": "query",
             "name": "limit",
             "required": false,
@@ -10302,11 +10302,11 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ToolSearchResults"
+                  "$ref": "#/components/schemas/ActionSearchResults"
                 }
               }
             },
-            "description": "The matching tools, best first."
+            "description": "The matching actions, best first."
           },
           "400": {
             "content": {
@@ -10369,9 +10369,157 @@
             "description": "The server cannot serve the request now (`unavailable`)."
           }
         },
-        "summary": "Search the action set's tools (`search_tools`)",
+        "summary": "Search the action set's actions (`search_actions`)",
         "tags": [
           "action-sets"
+        ]
+      }
+    },
+    "/v1/actions/stats": {
+      "get": {
+        "description": "From the hourly counters, over a window of whole hours: per action, the calls of the runs of\na namespace or the tenant, filtered by the start of an action's name. The scope as\n`GET /v1/runs/stats` takes it.",
+        "operationId": "getActionStats",
+        "parameters": [
+          {
+            "description": "The scope, as a query: one term `namespace:<name>` of one value, or nothing for the\ntenant. Any other term is refused with its position (`invalid-query`).",
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only the actions of this group, their name's prefix (`github` for `github.list_issues`).",
+            "in": "query",
+            "name": "group",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only calls of runs of this action set.",
+            "in": "query",
+            "name": "actionSet",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only this action.",
+            "in": "query",
+            "name": "action",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Calls scheduled at or after this time, rounded down to the hour. 24 hours ago by default.",
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Calls scheduled before this time, rounded up to the hour. Now by default.",
+            "in": "query",
+            "name": "until",
+            "required": false,
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Namespace",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActionStatsPage"
+                }
+              }
+            },
+            "description": "Statistics per action over the window."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "`q` cannot be read, or holds another term than one `namespace:` of one value (`invalid-query`, with `query`); or the window is invalid."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The caller lacks `runs:read`, or its grant or token is limited to labels, which counters do not know (`forbidden`)."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A fault of the platform (`internal`)."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The server cannot serve the request now (`unavailable`)."
+          }
+        },
+        "summary": "Latency, errors and retries per action",
+        "tags": [
+          "reading"
         ]
       }
     },
@@ -15289,7 +15437,7 @@
             }
           },
           {
-            "description": "`started` (the default): the most recently started first; `oldest`: the first started\nfirst; `activity`: the most recent activity first; `wakes`: the soonest to wake by itself\nfirst, the runs that do not wake by themselves last; `duration`: the longest from start to\nend first, the runs that have not ended last; `calls`: the most tool calls first. Ties go\nto the most recently started (`wakes`: the first started).",
+            "description": "`started` (the default): the most recently started first; `oldest`: the first started\nfirst; `activity`: the most recent activity first; `wakes`: the soonest to wake by itself\nfirst, the runs that do not wake by themselves last; `duration`: the longest from start to\nend first, the runs that have not ended last; `calls`: the most calls first. Ties go\nto the most recently started (`wakes`: the first started).",
             "in": "query",
             "name": "sort",
             "required": false,
@@ -15336,9 +15484,9 @@
             }
           },
           {
-            "description": "Only runs that called this tool.",
+            "description": "Only runs that called this action.",
             "in": "query",
-            "name": "tool",
+            "name": "action",
             "required": false,
             "schema": {
               "type": "string"
@@ -15354,7 +15502,7 @@
             }
           },
           {
-            "description": "Only runs whose tool calls failed with this kind (`error`, `timeout`…), or that failed\nwith this error name (`TypeError`, `DeadlockError`…).",
+            "description": "Only runs whose calls failed with this kind (`error`, `timeout`…), or that failed\nwith this error name (`TypeError`, `DeadlockError`…).",
             "in": "query",
             "name": "error",
             "required": false,
@@ -17429,7 +17577,7 @@
     },
     "/v1/scripts": {
       "get": {
-        "description": "From the hourly counters, over a window of whole hours: each script the runs of a\nnamespace or the tenant ran, with its runs by status and the tools it called. The scope as\n`GET /v1/runs/stats` takes it.",
+        "description": "From the hourly counters, over a window of whole hours: each script the runs of a\nnamespace or the tenant ran, with its runs by status and the actions it called. The scope as\n`GET /v1/runs/stats` takes it.",
         "operationId": "listScripts",
         "parameters": [
           {
@@ -17471,9 +17619,9 @@
             }
           },
           {
-            "description": "Only scripts that called this tool.",
+            "description": "Only scripts that called this action.",
             "in": "query",
-            "name": "tool",
+            "name": "action",
             "required": false,
             "schema": {
               "type": "string"
@@ -18643,11 +18791,11 @@
     },
     "/v1/tasks/stream": {
       "get": {
-        "description": "The tasks of the host tools it names (`actionSet`, `tools`), as they become ready, among\nthe runs the caller sees: an end user's token those of its namespace, a key limited to labels those of the\nruns carrying them. At most `slots` are in flight on the stream at once. Each event's\n`event` field names it and its `data` is a `TaskStreamEvent`: `task`, a task handed with\nits token, to answer with `/complete`, `/fail` or `/defer`; `gone`, a task handed on this\nstream that no longer waits for its answer. The open stream is the liveness of every task\nhanded on it: no heartbeat. When it closes, its tasks wait for the grace of their tool\n(60 s by default) for a stream opened again with the same `worker`, which keeps them; then\neach is handed to another worker with its attempt + 1, or fails with `outcomeUnknown`\nunder `at_most_once`. A worker opens the stream again after it drops, with a backoff. The\nserver writes a comment line at least every 15 seconds while it sends nothing else.",
+        "description": "The tasks of the host tools it names (`actionSet`, `actions`), as they become ready, among\nthe runs the caller sees: an end user's token those of its namespace, a key limited to labels those of the\nruns carrying them. At most `slots` are in flight on the stream at once. Each event's\n`event` field names it and its `data` is a `TaskStreamEvent`: `task`, a task handed with\nits token, to answer with `/complete`, `/fail` or `/defer`; `gone`, a task handed on this\nstream that no longer waits for its answer. The open stream is the liveness of every task\nhanded on it: no heartbeat. When it closes, its tasks wait for the grace of their action\n(60 s by default) for a stream opened again with the same `worker`, which keeps them; then\neach is handed to another worker with its attempt + 1, or fails with `outcomeUnknown`\nunder `at_most_once`. A worker opens the stream again after it drops, with a backoff. The\nserver writes a comment line at least every 15 seconds while it sends nothing else.",
         "operationId": "streamTasks",
         "parameters": [
           {
-            "description": "The action set whose host tools this worker executes: only the tasks of runs of this action set.\nWithout it, the tasks of the tools named in `tools`, whatever the action set of their run (a\naction set derived from another, as saving a workflow does, keeps its host tools' names).",
+            "description": "The action set whose host tools this worker executes: only the tasks of runs of this action set.\nWithout it, the tasks of the actions named in `actions`, whatever the action set of their run (an\naction set derived from another, as saving a workflow does, keeps its host tools' names).",
             "in": "query",
             "name": "actionSet",
             "required": false,
@@ -18665,9 +18813,9 @@
             }
           },
           {
-            "description": "Only these tools. Repeat for several. All the host tools of `actionSet` when absent, every\nhost tool without `actionSet` either.",
+            "description": "Only these actions. Repeat for several. All the host tools of `actionSet` when absent, every\nhost tool without `actionSet` either.",
             "in": "query",
-            "name": "tools",
+            "name": "actions",
             "required": false,
             "schema": {
               "items": {
@@ -18909,7 +19057,7 @@
     },
     "/v1/tasks/{id}/reject": {
       "post": {
-        "description": "The call fails with a `ToolError`.",
+        "description": "The call fails with an `ActionError`.",
         "operationId": "rejectTask",
         "parameters": [
           {
@@ -19326,7 +19474,7 @@
         },
         "responses": {
           "204": {
-            "description": "Recorded: delivered as a `ToolError`, or retried."
+            "description": "Recorded: delivered as an `ActionError`, or retried."
           },
           "400": {
             "content": {
@@ -19397,7 +19545,7 @@
     },
     "/v1/test": {
       "post": {
-        "description": "In virtual time, each test against its world: rules, mock handlers and a cassette. No\ntool is really called. With `workflow`, the suite of that version runs too, against the\ngiven script or action set. Served by a server with the worker role.",
+        "description": "In virtual time, each test against its world: rules, mock handlers and a cassette. No\naction is really called. With `workflow`, the suite of that version runs too, against the\ngiven script or action set. Served by a server with the worker role.",
         "operationId": "testScript",
         "parameters": [
           {
@@ -19723,154 +19871,6 @@
         "summary": "Revoke an end user's token",
         "tags": [
           "namespaces"
-        ]
-      }
-    },
-    "/v1/tools/stats": {
-      "get": {
-        "description": "From the hourly counters, over a window of whole hours: per tool, the calls of the runs of\na namespace or the tenant, filtered by the start of a tool's name. The scope as\n`GET /v1/runs/stats` takes it.",
-        "operationId": "getToolStats",
-        "parameters": [
-          {
-            "description": "The scope, as a query: one term `namespace:<name>` of one value, or nothing for the\ntenant. Any other term is refused with its position (`invalid-query`).",
-            "in": "query",
-            "name": "q",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Only the tools whose name starts with this (`github.`).",
-            "in": "query",
-            "name": "prefix",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Only calls of runs of this action set.",
-            "in": "query",
-            "name": "actionSet",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Only this tool.",
-            "in": "query",
-            "name": "tool",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Calls scheduled at or after this time, rounded down to the hour. 24 hours ago by default.",
-            "in": "query",
-            "name": "since",
-            "required": false,
-            "schema": {
-              "format": "date-time",
-              "type": "string"
-            }
-          },
-          {
-            "description": "Calls scheduled before this time, rounded up to the hour. Now by default.",
-            "in": "query",
-            "name": "until",
-            "required": false,
-            "schema": {
-              "format": "date-time",
-              "type": "string"
-            }
-          },
-          {
-            "description": "The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`.",
-            "in": "header",
-            "name": "Rewind-Namespace",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
-            "in": "header",
-            "name": "Rewind-Organization",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ToolStatsPage"
-                }
-              }
-            },
-            "description": "Statistics per tool over the window."
-          },
-          "400": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "`q` cannot be read, or holds another term than one `namespace:` of one value (`invalid-query`, with `query`); or the window is invalid."
-          },
-          "401": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
-          },
-          "403": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "The caller lacks `runs:read`, or its grant or token is limited to labels, which counters do not know (`forbidden`)."
-          },
-          "500": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "A fault of the platform (`internal`)."
-          },
-          "503": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "The server cannot serve the request now (`unavailable`)."
-          }
-        },
-        "summary": "Latency, errors and retries per tool",
-        "tags": [
-          "reading"
         ]
       }
     },
@@ -20451,7 +20451,7 @@
       "name": "webhooks"
     },
     {
-      "description": "The scripts executed on the platform, tool statistics and payloads, for the dashboard.",
+      "description": "The scripts executed on the platform, action statistics and payloads, for the dashboard.",
       "name": "reading"
     },
     {
@@ -20488,6 +20488,60 @@
     }
   ],
   "webhooks": {
+    "action.schema_changed": {
+      "post": {
+        "description": "Sent to every subscription to `action.schema_changed` whose labels the run carries. Signed following Standard Webhooks: verify `webhook-signature` with the subscription's secret before trusting the body, and deduplicate on `webhook-id`. A delivery that does not get a 2xx answer is retried.",
+        "operationId": "webhook_action_schema_changed",
+        "parameters": [
+          {
+            "description": "The delivery's id; a retried delivery keeps it.",
+            "in": "header",
+            "name": "webhook-id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "When the delivery was signed, in seconds since the Unix epoch.",
+            "in": "header",
+            "name": "webhook-timestamp",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "`v1,<base64 HMAC-SHA256 of {id}.{timestamp}.{body}>`, space-separated while a secret is rotated.",
+            "in": "header",
+            "name": "webhook-signature",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebhookEvent"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "2XX": {
+            "description": "Received."
+          }
+        },
+        "summary": "The lifecycle event `action.schema_changed`",
+        "tags": [
+          "webhooks"
+        ]
+      }
+    },
     "credentials.expired": {
       "post": {
         "description": "Sent to every subscription to `credentials.expired` whose labels the run carries. Signed following Standard Webhooks: verify `webhook-signature` with the subscription's secret before trusting the body, and deduplicate on `webhook-id`. A delivery that does not get a 2xx answer is retried.",
@@ -20915,60 +20969,6 @@
           }
         },
         "summary": "The lifecycle event `run.suspended`",
-        "tags": [
-          "webhooks"
-        ]
-      }
-    },
-    "tool.schema_changed": {
-      "post": {
-        "description": "Sent to every subscription to `tool.schema_changed` whose labels the run carries. Signed following Standard Webhooks: verify `webhook-signature` with the subscription's secret before trusting the body, and deduplicate on `webhook-id`. A delivery that does not get a 2xx answer is retried.",
-        "operationId": "webhook_tool_schema_changed",
-        "parameters": [
-          {
-            "description": "The delivery's id; a retried delivery keeps it.",
-            "in": "header",
-            "name": "webhook-id",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "When the delivery was signed, in seconds since the Unix epoch.",
-            "in": "header",
-            "name": "webhook-timestamp",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "`v1,<base64 HMAC-SHA256 of {id}.{timestamp}.{body}>`, space-separated while a secret is rotated.",
-            "in": "header",
-            "name": "webhook-signature",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/WebhookEvent"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "2XX": {
-            "description": "Received."
-          }
-        },
-        "summary": "The lifecycle event `tool.schema_changed`",
         "tags": [
           "webhooks"
         ]

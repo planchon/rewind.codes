@@ -1,4 +1,4 @@
-import { crm } from "rewind:tools";
+import { crm } from "rewind:actions";
 
 export default async function main() {
   const exported = await crm.export();

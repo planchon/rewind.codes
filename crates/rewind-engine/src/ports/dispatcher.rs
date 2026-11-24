@@ -1,32 +1,32 @@
 use std::collections::BTreeMap;
 use std::future::Future;
 
-use rewind_core::{Api, JsonValue, McpServer, RunId, SecretPlacement, Seq, Tool, ToolFailure};
+use rewind_core::{Action, ActionFailure, Api, JsonValue, McpServer, RunId, SecretPlacement, Seq};
 
 use crate::ports::journal::{ParkReason, TaskToken, TraceContext};
 use crate::ports::namespaces::NamespaceName;
 use crate::ports::secrets::{Secret, SigningKey};
 use crate::ports::tenancy::{RunRef, TenantId};
 
-/// One attempt at a tool call, as handed to a [`ToolDispatcher`].
+/// One attempt at a call, as handed to a [`ActionDispatcher`].
 #[derive(Debug, Clone, PartialEq)]
-pub struct ToolCall {
+pub struct Call {
     pub run: RunRef,
     /// The run's namespace: the end user it acts for.
     pub namespace: NamespaceName,
     /// The run's labels.
     pub labels: BTreeMap<String, String>,
     pub seq: Seq,
-    /// The tool as pinned in the run's action set: route, operation, schemas and policy. The
+    /// The action as pinned in the run's action set: route, operation, schemas and policy. The
     /// dispatcher checks an MCP call against the server's current schema, and enforces the
     /// execution timeout.
-    pub tool: Tool,
-    /// For an MCP tool, its server as pinned: how to reach it and how its calls authenticate.
+    pub action: Action,
+    /// For an MCP action, its server as pinned: how to reach it and how its calls authenticate.
     pub server: Option<McpServer>,
-    /// For an API tool, its API as pinned: where its calls go and how they authenticate.
+    /// For an API action, its API as pinned: where its calls go and how they authenticate.
     pub api: Option<Api>,
     pub args: JsonValue,
-    /// `"{run_id}/{seq}"`: the same for every attempt of the call, so that the tool can
+    /// `"{run_id}/{seq}"`: the same for every attempt of the call, so that the action can
     /// deduplicate (`archi/04-tools.md`, "Routes"), passed in MCP `_meta` as
     /// `codes.rewind/idempotency-key`, and to an API in the `Idempotency-Key` header when its
     /// operation declares one. A fork's calls carry other keys (`archi/03-execution.md`,
@@ -34,13 +34,13 @@ pub struct ToolCall {
     pub idempotency_key: String,
     /// 1 for the first attempt.
     pub attempt: u32,
-    /// The harness approved the call after a schema change (`tool.schema_changed`): send it
-    /// against the tool's current schema, without checking it against the pinned one again.
+    /// The harness approved the call after a schema change (`action.schema_changed`): send it
+    /// against the action's current schema, without checking it against the pinned one again.
     pub schema_change_approved: bool,
     /// The token of this attempt. A handler that answers later keeps it and answers through it
     /// ([`Dispatched::Deferred`]).
     pub token: TaskToken,
-    /// The W3C trace context to forward, with the tool call span as parent, so the server's own
+    /// The W3C trace context to forward, with the call span as parent, so the server's own
     /// spans join the run's trace.
     pub trace_context: Option<TraceContext>,
 }
@@ -77,8 +77,8 @@ pub struct CallClaims {
     pub labels: BTreeMap<String, String>,
     /// `run`.
     pub run: RunId,
-    /// `tool`: the tool's name, as scripts call it.
-    pub tool: String,
+    /// `action`: the action's name, as scripts call it.
+    pub action: String,
     /// `idempotency_key`: `{run_id}/{seq}`, or a fork's inherited key.
     pub idempotency_key: String,
     pub seq: Seq,
@@ -106,20 +106,20 @@ impl CallClaims {
 /// The key of a transient failure's `data` that holds, in seconds, how long the server asked to
 /// wait before the call is sent again (an API's `Retry-After` that the dispatcher could not wait
 /// out within the execution timeout): the engine retries no sooner (`archi/04-tools.md`, "API
-/// tools": "never before its `Retry-After`").
+/// actions": "never before its `Retry-After`").
 pub const RETRY_AFTER_DATA: &str = "retryAfter";
 
-/// What became of one attempt (`archi/04-tools.md`, "Tool task lifecycle").
+/// What became of one attempt (`archi/04-tools.md`, "Call lifecycle").
 #[derive(Debug, Clone, PartialEq)]
 pub enum Dispatched {
-    /// The tool answered: the script receives this result.
+    /// The action answered: the script receives this result.
     Result(JsonValue),
-    /// The tool failed for good: the script receives this failure as a `ToolError`.
-    Failed(ToolFailure),
+    /// The action failed for good: the script receives this failure as an `ActionError`.
+    Failed(ActionFailure),
     /// A failure worth retrying (unreachable, overloaded, timed out): under `retry`, the engine
     /// puts the task back to `ready` with backoff; under `at_most_once`, it fails the call with
     /// this failure.
-    Transient(ToolFailure),
+    Transient(ActionFailure),
     /// The handler took the call's token and answers through it later, maybe days later: the
     /// task is `deferred`.
     Deferred,
@@ -130,7 +130,7 @@ pub enum Dispatched {
     Park(ParkReason),
 }
 
-/// Executes tool calls outside the sandbox: MCP servers, APIs and built-ins, or mocks in mock
+/// Executes calls outside the sandbox: MCP servers, APIs and built-ins, or mocks in mock
 /// mode (`archi/07-code-architecture.md`, "The other ports"). Host tools have no dispatcher:
 /// their tasks are handed to the SDK workers' streams.
 ///
@@ -139,6 +139,6 @@ pub enum Dispatched {
 /// (`secret_missing`) when the secret the run attached no longer exists, before anything is
 /// sent. The dispatcher never writes to the journal, and `auth` goes into the transport and
 /// nowhere else.
-pub trait ToolDispatcher: Send + Sync {
-    fn dispatch(&self, call: ToolCall, auth: CallAuth) -> impl Future<Output = Dispatched> + Send;
+pub trait ActionDispatcher: Send + Sync {
+    fn dispatch(&self, call: Call, auth: CallAuth) -> impl Future<Output = Dispatched> + Send;
 }

@@ -1,7 +1,7 @@
 //! What the engine needs from the outside world (`archi/07-code-architecture.md`, "Ports").
 //!
 //! Every source of non-determinism and every I/O goes through one of these traits: storage,
-//! access, identity, payload values, the script sandbox, tool calls, type-checking,
+//! access, identity, payload values, the script sandbox, calls, type-checking,
 //! projections, telemetry, secrets, webhooks, time, ids and seeds. Ports are shaped by the
 //! domain's invariants, not by tables. They return `impl Future + Send`, and the engine is
 //! generic over them (static dispatch): composition roots pick the concrete adapters.
@@ -17,7 +17,7 @@
 //! | [`IdentityProvider`] | memory, `rewind-workos` (WorkOS) |
 //! | [`BlobStore`] | memory, `rewind-blob` (files, S3) |
 //! | [`ScriptExecutor`] / [`ScriptInstance`] | `rewind-runtime` (V8) |
-//! | [`ToolDispatcher`] | static responses (memory), mocks, `rewind-mcp`, `rewind-openapi` |
+//! | [`ActionDispatcher`] | static responses (memory), mocks, `rewind-mcp`, `rewind-openapi` |
 //! | [`TypeChecker`] | static (memory), `rewind-check` (tsgo) |
 //! | [`SpanExporter`] | memory, `rewind-otel` |
 //! | [`SecretStore`] | memory, `rewind-store-turso`, `rewind-store-postgres` |
@@ -30,7 +30,7 @@
 //! have a conformance suite in the module `conformance` (feature `conformance`) that every
 //! adapter passes.
 //!
-//! What a run's history, inbox and tool tasks are made of lives in `journal`, what a search and
+//! What a run's history, inbox and call tasks are made of lives in `journal`, what a search and
 //! a summary are in `read_model` (`archi/05-testing-and-observability.md`, "Read model"): both
 //! are re-exported here. The modules [`catalog`], [`partition`], [`archive`], [`cluster`] and
 //! [`link`] are public: the names they share with other modules ([`partition::CreateRun`],
@@ -75,7 +75,7 @@ pub use catalog::{
     CatalogError, CatalogStore, NamespaceFilter, NamespacePage, TEST_DELETION_TIMEOUT,
 };
 pub use checker::{
-    CheckerError, Diagnostic, DiagnosticSource, Severity, ToolDeclarations, TypeChecker,
+    ActionDeclarations, CheckerError, Diagnostic, DiagnosticSource, Severity, TypeChecker,
     WorkflowDeclarations,
 };
 pub use clock::{Clock, Entropy, VirtualTime};
@@ -88,9 +88,7 @@ pub use connections::{
     ConnectionTokenKind, NewConnection, NewToken, OAuthClient, OAuthCode, OpenedOrganization,
     Rotation,
 };
-pub use dispatcher::{
-    CallAuth, CallClaims, Dispatched, RETRY_AFTER_DATA, ToolCall, ToolDispatcher,
-};
+pub use dispatcher::{ActionDispatcher, Call, CallAuth, CallClaims, Dispatched, RETRY_AFTER_DATA};
 pub use executor::{
     CompiledScript, Delivery, Emitted, ExecutorError, InvalidScript, ScriptExecutor,
     ScriptInstance, StartScript,
@@ -101,10 +99,10 @@ pub use identity::{
     Organization, OrganizationId, PendingToken, Provider, Session, SessionId, Tokens, User, UserId,
 };
 pub use journal::{
-    Created, Enqueued, ForkParent, InboxItem, ParkKind, ParkReason, PayloadRecord,
+    CallTask, Created, Enqueued, ForkParent, InboxItem, ParkKind, ParkReason, PayloadRecord,
     QUARANTINE_AFTER_FAILURES, Quarantine, QuarantineKind, RunMetadata, RunWorkflow, ScriptTitle,
     StartedBy, StoreError, StoredActionSet, StoredScript, StoredWorkflow, TEST_GRACE, TaskRef,
-    TaskState, TaskToken, TestRecord, ToolTask, TraceContext, Trigger, WebhookTarget, WebhookToken,
+    TaskState, TaskToken, TestRecord, TraceContext, Trigger, WebhookTarget, WebhookToken,
     WorkflowFilter, deferred_timeout_failure,
 };
 pub use link::{LinkError, NodeLink};
@@ -114,11 +112,11 @@ pub use namespaces::{
     QuotaExceeded, QuotaKind, QuotaScope, Quotas, Threshold, Usage, limits,
 };
 pub use partition::{
-    Admission, Attempt, Batch, Change, CountedNamespace, CounterDelta, Counters, DueTimer,
-    FailureCounts, Found, Gauges, Hour, IndexedSummary, LATEST_RUNS, LatestRun, OrganizationState,
-    OutboxChange, OutboxEntry, OutboxId, Page, PartitionError, PartitionLog, PartitionStore,
-    Projection, Recovery, RunCounts, RunHead, SCAN_BUDGET, Scope, ScriptCounts, SearchPosition,
-    Sketch, TaskChange, TaskRecord, TimerChange, TimerKind, ToolCounts, Watcher, Window,
+    ActionCounts, Admission, Attempt, Batch, Change, CountedNamespace, CounterDelta, Counters,
+    DueTimer, FailureCounts, Found, Gauges, Hour, IndexedSummary, LATEST_RUNS, LatestRun,
+    OrganizationState, OutboxChange, OutboxEntry, OutboxId, Page, PartitionError, PartitionLog,
+    PartitionStore, Projection, Recovery, RunCounts, RunHead, SCAN_BUDGET, Scope, ScriptCounts,
+    SearchPosition, Sketch, TaskChange, TaskRecord, TimerChange, TimerKind, Watcher, Window,
     home_partition, namespace_partition,
 };
 pub use read_model::{

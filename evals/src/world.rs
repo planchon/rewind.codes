@@ -3,7 +3,7 @@
 //!
 //! The run plane is wired in process (`archi/08-decisions.md`, "Taken while building the
 //! evals"): one node holding the one partition, over the engine's memory adapters, stepped by its
-//! driver; `McpDispatcher` for MCP tools, the type checker `rewind-check`, codegen
+//! driver; `McpDispatcher` for MCP actions, the type checker `rewind-check`, codegen
 //! `rewind-codegen`, and one virtual clock shared with the fake servers. Time only moves when the
 //! world is driven: a run's `wait`, a server's webhook, a signal sent by the world after a delay,
 //! a timer.
@@ -19,9 +19,9 @@ use std::time::Duration;
 
 use rewind_check::TsgoChecker;
 use rewind_core::{
-    ActionSet, Builtin, Command, Completion, Digest, Event, HistoryEntry, McpServer, McpTransport,
-    RetiredTest, RunId, RunOutcome, RunState, RunStatus, Script, Seq, Timestamp, Tool, ToolRoute,
-    UpdatedTest,
+    Action, ActionRoute, ActionSet, Builtin, Command, Completion, Digest, Event, HistoryEntry,
+    McpServer, McpTransport, RetiredTest, RunId, RunOutcome, RunState, RunStatus, Script, Seq,
+    Timestamp, UpdatedTest,
 };
 use rewind_engine::adapters::{
     ControlPlaneChanges, MemoryArchive, MemoryBlobs, MemoryCatalog, MemoryCluster,
@@ -33,15 +33,15 @@ use rewind_engine::edge::{Edge, EdgeError, RecordFrom, Recording, RecordingError
 use rewind_engine::plane::{NodeConfig, Wiring};
 use rewind_engine::ports::link::RunView;
 use rewind_engine::ports::{
-    CatalogError, CatalogStore, Clock, Created, Enqueued, NamespaceName, NodeId, Page, RunMetadata,
-    RunOrder, RunQuery, RunRef, RunSummary, RunWorkflow, Scope, StoredWorkflow, TenantId,
-    ToolDeclarations, ToolTask, VirtualTime, WaitKind, WorkflowFilter,
+    ActionDeclarations, CallTask, CatalogError, CatalogStore, Clock, Created, Enqueued,
+    NamespaceName, NodeId, Page, RunMetadata, RunOrder, RunQuery, RunRef, RunSummary, RunWorkflow,
+    Scope, StoredWorkflow, TenantId, VirtualTime, WaitKind, WorkflowFilter,
 };
 use rewind_engine::suites::{LoadedTest, SuiteLoadError, TestFormat, TestKit};
 use rewind_engine::testing::TestOptions;
 use rewind_engine::{ForkError, ForkRun, StartError, StartRun, StartWorkflow};
 use rewind_mcp::{ListingAuth, McpConfig, McpDispatcher};
-use rewind_outbound::ToolEgress;
+use rewind_outbound::ActionEgress;
 use rewind_runtime::{SandboxLimits, TsMockLoader, V8Executor};
 use serde_json::Value;
 
@@ -117,7 +117,7 @@ pub enum WorldError {
     UnknownServer(String),
     #[error("cannot serve a fake server: {0}")]
     Serve(#[from] std::io::Error),
-    #[error("cannot list the tools of {server}: {message}")]
+    #[error("cannot list the actions of {server}: {message}")]
     Discovery { server: String, message: String },
     #[error("invalid action set: {0}")]
     ActionSet(String),
@@ -189,7 +189,7 @@ pub struct World {
     pub config: NodeConfig,
     pub clock: SharedClock,
     pub servers: Vec<Running>,
-    /// The pinned action set the agent's scripts import from `rewind:tools`.
+    /// The pinned action set the agent's scripts import from `rewind:actions`.
     pub action_set: ActionSet,
     /// What codegen generated for it.
     pub declarations: rewind_codegen::Declarations,
@@ -228,7 +228,7 @@ fn drive_error(error: DriveError) -> WorldError {
 }
 
 impl World {
-    /// Serves the fake servers, pins their tools as `POST /v1/action-sets` does (discovery through
+    /// Serves the fake servers, pins their actions as `POST /v1/action-sets` does (discovery through
     /// `McpDispatcher`), generates the declarations, and wires the run plane at [`T0`].
     pub async fn new(
         spec: &WorldSpec,
@@ -245,12 +245,12 @@ impl World {
 
         // The fake servers listen on 127.0.0.1, as a developer's would for the embedded server.
         let mcp = McpDispatcher::new(McpConfig {
-            egress: ToolEgress::open(),
+            egress: ActionEgress::open(),
             ..McpConfig::default()
         });
         let tenant = TenantId::local();
         let mut pinned_servers = Vec::new();
-        let mut tools: Vec<Tool> = Vec::new();
+        let mut actions: Vec<Action> = Vec::new();
         for running in &servers {
             let server = McpServer::new(
                 running.service.name(),
@@ -265,17 +265,17 @@ impl World {
                     server: server.name.clone(),
                     message: err.to_string(),
                 })?;
-            tools.extend(listed);
+            actions.extend(listed);
             pinned_servers.push(server);
         }
         if spec.webhook {
-            tools.push(Tool::new(
+            actions.push(Action::new(
                 "webhook",
-                ToolRoute::Builtin(Builtin::Webhook),
+                ActionRoute::Builtin(Builtin::Webhook),
                 rewind_runtime::builtins::webhook_input_schema(),
             ));
         }
-        let action_set = ActionSet::new(pinned_servers, tools)
+        let action_set = ActionSet::new(pinned_servers, actions)
             .map_err(|err| WorldError::ActionSet(err.to_string()))?;
 
         let executor = V8Executor::new(SandboxLimits::default())
@@ -344,8 +344,8 @@ impl World {
     }
 
     /// The declarations stored with the action set, as the engine and the checker take them.
-    pub fn tool_declarations(&self) -> ToolDeclarations {
-        ToolDeclarations {
+    pub fn action_declarations(&self) -> ActionDeclarations {
+        ActionDeclarations {
             typescript: self.declarations.typescript.clone(),
             prompt: self.declarations.prompt.clone(),
         }
@@ -363,7 +363,7 @@ impl World {
     /// Starts a run of the agent: with its labels, live, in virtual time. The caller has
     /// type-checked the script.
     pub fn start_request(&self, script: Script, input: Value) -> StartRun {
-        self.start_request_on(script, &self.action_set, self.tool_declarations(), input)
+        self.start_request_on(script, &self.action_set, self.action_declarations(), input)
     }
 
     /// [`start_request`](Self::start_request), with another action set: one derived from the
@@ -372,7 +372,7 @@ impl World {
         &self,
         script: Script,
         action_set: &ActionSet,
-        declarations: ToolDeclarations,
+        declarations: ActionDeclarations,
         input: Value,
     ) -> StartRun {
         let mut request = StartRun::new(script, action_set.clone(), input);
@@ -451,11 +451,11 @@ impl World {
         Ok(self.edge.export_journal(&mut gateway, run).await?.entries)
     }
 
-    /// The run's tool tasks.
-    pub async fn tool_tasks(&self, run: &RunRef) -> Result<Vec<ToolTask>, EdgeError> {
+    /// The run's call tasks.
+    pub async fn call_tasks(&self, run: &RunRef) -> Result<Vec<CallTask>, EdgeError> {
         let mut driver = self.driver.lock().await;
         let mut gateway = driver.gateway(&self.at);
-        self.edge.tool_tasks(&mut gateway, run).await
+        self.edge.call_tasks(&mut gateway, run).await
     }
 
     pub async fn signal(
@@ -915,7 +915,7 @@ impl World {
 /// that answered it.
 fn webhook_name(history: &[HistoryEntry], url: &str) -> Option<String> {
     let answered: Option<Seq> = history.iter().find_map(|entry| match &entry.event {
-        Event::Completion(Completion::ToolCallCompleted { seq, result, .. })
+        Event::Completion(Completion::CallCompleted { seq, result, .. })
             if result
                 .value()
                 .and_then(|result| result.get("url"))
@@ -928,12 +928,12 @@ fn webhook_name(history: &[HistoryEntry], url: &str) -> Option<String> {
     });
     let seq = answered?;
     history.iter().find_map(|entry| match &entry.event {
-        Event::Command(Command::ScheduleToolCall {
+        Event::Command(Command::ScheduleCall {
             seq: scheduled,
-            tool,
+            action,
             args,
             ..
-        }) if *scheduled == seq && tool == "webhook" => args
+        }) if *scheduled == seq && action == "webhook" => args
             .value()
             .and_then(|args| args.get("name"))
             .and_then(Value::as_str)
@@ -1002,7 +1002,7 @@ async fn register_action_set(
         .put_action_set(
             &TenantId::local(),
             action_set,
-            &ToolDeclarations {
+            &ActionDeclarations {
                 typescript: declarations.typescript.clone(),
                 prompt: declarations.prompt.clone(),
             },

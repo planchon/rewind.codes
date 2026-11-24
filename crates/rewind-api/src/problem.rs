@@ -54,7 +54,7 @@ pub enum ProblemType {
     UnsupportedMediaType,
     /// 422: the script was refused before any run exists; `diagnostics` says why.
     InvalidScript,
-    /// 422: the action set was refused: an invalid schema, a duplicate tool name, or a transport
+    /// 422: the action set was refused: an invalid schema, a duplicate action name, or a transport
     /// this server does not allow.
     InvalidActionSet,
     /// 422: the workflow was refused: its name, a signal's name, or a schema that cannot be

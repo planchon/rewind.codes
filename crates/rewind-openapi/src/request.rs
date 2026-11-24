@@ -1,4 +1,4 @@
-//! The request of an API call, built from its args (`archi/04-tools.md`, "API tools"): the
+//! The request of an API call, built from its args (`archi/04-tools.md`, "API actions"): the
 //! path parameters percent-encoded into the path, the query, the headers, the body as JSON.
 //! Parameters are written in OpenAPI's default styles, the only ones a pinned operation knows:
 //!

@@ -3,7 +3,7 @@
 // journaled.
 //
 // Evaluates to setup(handlers), which takes the module's default export and returns
-// { tools, call }: the names of the tools with a handler, sorted, and call(tool, argsJson,
+// { actions, call }: the names of the actions with a handler, sorted, and call(action, argsJson,
 // callJson), a promise of the JSON of { result } or { failure: { kind, message, data? } }.
 
 ((globalThis) => {
@@ -37,7 +37,7 @@
   return function setup(handlers) {
     if (handlers === null || typeof handlers !== "object") {
       throw new TypeError(
-        "a module of mock handlers must `export default` an object of handlers, by tool name or by namespace",
+        "a module of mock handlers must `export default` an object of handlers, by action name or by group",
       );
     }
     const table = new Map();
@@ -56,19 +56,19 @@
       }
     }
 
-    async function run(tool, argsJson, callJson) {
-      const value = await table.get(tool)(parse(argsJson), parse(callJson));
+    async function run(action, argsJson, callJson) {
+      const value = await table.get(action)(parse(argsJson), parse(callJson));
       const json = stringify(value === undefined ? null : value);
       if (json === undefined) {
-        throw new TypeError(`the mock handler of ${tool} returned a value that is not JSON`);
+        throw new TypeError(`the mock handler of ${action} returned a value that is not JSON`);
       }
       return json;
     }
 
     return {
-      tools: [...table.keys()].sort(),
-      call(tool, argsJson, callJson) {
-        return Promise.resolve().then(() => run(tool, argsJson, callJson)).then(
+      actions: [...table.keys()].sort(),
+      call(action, argsJson, callJson) {
+        return Promise.resolve().then(() => run(action, argsJson, callJson)).then(
           (json) => `{"result":${wellFormed(json)}}`,
           (error) => wellFormed(stringify({ failure: failure(error) })),
         );

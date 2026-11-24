@@ -1,17 +1,17 @@
 //! `$ref` within the document, and the schemas of an OpenAPI document as JSON Schema
-//! (`archi/04-tools.md`, "API tools").
+//! (`archi/04-tools.md`, "API actions").
 //!
 //! - A `$ref` is resolved within the document (`#/…`); one to another document refuses the
 //!   registration.
 //! - A schema's references to `#/components/schemas/<name>` become `#/$defs/<name>`, and the
-//!   component joins the `$defs` of the tool's schema, converted in turn: recursive schemas
+//!   component joins the `$defs` of the action's schema, converted in turn: recursive schemas
 //!   stay recursive, and each component is written once. Any other reference (a parameter's
 //!   schema, a path) is inlined, a cycle through one refused.
 //! - OpenAPI 3.0 schemas are a dialect of JSON Schema draft 4: `nullable: true` becomes `"null"`
 //!   among the types (and the values of `enum`), and the boolean `exclusiveMinimum` and
 //!   `exclusiveMaximum` become the numbers of JSON Schema 2020-12. OpenAPI 3.1 schemas are JSON
 //!   Schema 2020-12 already. `$id` and `$schema` are dropped: the references are rewritten
-//!   relative to the tool's schema.
+//!   relative to the action's schema.
 //!
 //! The values of `example`, `examples`, `default`, `enum`, `const` and of the extensions
 //! (`x-…`) are data, not schemas: they are copied as they are.
@@ -42,7 +42,7 @@ pub(crate) struct Document<'a> {
     pub(crate) values: &'a Cell<usize>,
 }
 
-/// The component schemas one tool's schema designates, converted, by name.
+/// The component schemas one action's schema designates, converted, by name.
 #[derive(Debug, Default)]
 pub(crate) struct Defs(BTreeMap<String, Value>);
 
@@ -93,7 +93,7 @@ impl<'a> Document<'a> {
         Err("its $ref chain does not end".into())
     }
 
-    /// `schema` as a tool pins it, its component references gathered in `defs`.
+    /// `schema` as an action pins it, its component references gathered in `defs`.
     pub(crate) fn schema(&self, schema: &Value, defs: &mut Defs) -> Result<Value, String> {
         self.convert(schema, defs, 0)
     }

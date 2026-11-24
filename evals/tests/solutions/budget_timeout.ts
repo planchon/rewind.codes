@@ -1,4 +1,4 @@
-import { chat, office } from "rewind:tools";
+import { chat, office } from "rewind:actions";
 import { signal } from "rewind";
 
 export default async function main() {

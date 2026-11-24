@@ -1,6 +1,6 @@
 {
   "description": "More commands in one activation than the limit allows: the trigger is committed with run_aborted, and the commands are dropped with their effects.",
-  "tools": {
+  "actions": {
     "audit.record": {
       "ok": true
     }

@@ -4,7 +4,7 @@
 //!
 //! - **Clients.** A `client_id` that is an `https` URL with a path is a client's metadata
 //!   document (CIMD): fetched with the egress rules of MCP servers (public addresses only, and
-//!   the internal hosts the operator lets through, `--allow-internal-tools`, which are the only
+//!   the internal hosts the operator lets through, `--allow-internal-addresses`, which are the only
 //!   ones a document may also be fetched from over `http`), without redirect, at most 5 KiB
 //!   within 5 s, and kept as its `Cache-Control` says, 24 hours at most. Other clients register
 //!   and get `rc_…`.

@@ -19,8 +19,8 @@ use crate::access::{
     ApiKey, ApiKeyList, CreateApiKey, Grant, PermissionList, PutRole, Role, RoleList, SetGrant,
 };
 use crate::action_sets::{
-    ActionSet, ActionSetList, CreateActionSet, DeclarationFormat, DeclarationsQuery,
-    DeclarationsText, SearchQuery, ToolSearchResults,
+    ActionSearchResults, ActionSet, ActionSetList, CreateActionSet, DeclarationFormat,
+    DeclarationsQuery, DeclarationsText, SearchQuery,
 };
 use crate::admin::ServerInfo;
 use crate::common::Duration;
@@ -37,7 +37,7 @@ use crate::organization::{
     Organization, OrganizationSettings, UpdateOrganization,
 };
 use crate::problem::Problem;
-use crate::reading::{PayloadQuery, ToolStatsFilter, ToolStatsPage};
+use crate::reading::{ActionStatsFilter, ActionStatsPage, PayloadQuery};
 use crate::routes;
 use crate::runs::{
     CancelRun, FailureGroupPage, FailureQuery, ForkRun, GetRunQuery, JournalExport, JournalQuery,
@@ -248,11 +248,11 @@ impl Client {
     }
 
     /// `GET /v1/action-sets/{id}/search`.
-    pub async fn search_tools(
+    pub async fn search_actions(
         &self,
         action_set: &str,
         query: &SearchQuery,
-    ) -> Result<ToolSearchResults, Error> {
+    ) -> Result<ActionSearchResults, Error> {
         let request =
             self.request_with(Method::GET, routes::ACTION_SET_SEARCH, &[action_set], query)?;
         self.json(request).await
@@ -604,9 +604,9 @@ impl Client {
     // ---------------------------------------------------------------------------------------
     // Reading
 
-    /// `GET /v1/tools/stats`.
-    pub async fn tool_stats(&self, filter: &ToolStatsFilter) -> Result<ToolStatsPage, Error> {
-        let request = self.request_with(Method::GET, routes::TOOL_STATS, &[], filter)?;
+    /// `GET /v1/actions/stats`.
+    pub async fn action_stats(&self, filter: &ActionStatsFilter) -> Result<ActionStatsPage, Error> {
+        let request = self.request_with(Method::GET, routes::ACTION_STATS, &[], filter)?;
         self.json(request).await
     }
 
@@ -1304,7 +1304,7 @@ mod tests {
 
         let tasks = TaskStreamQuery {
             action_set: Some("ab".into()),
-            tools: vec!["ask_user".into(), "approve".into()],
+            actions: vec!["ask_user".into(), "approve".into()],
             slots: Some(5),
             worker: Some("w-1".into()),
             ..TaskStreamQuery::default()

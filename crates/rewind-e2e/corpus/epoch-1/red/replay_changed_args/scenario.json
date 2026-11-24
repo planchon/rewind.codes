@@ -3,7 +3,7 @@
   "input": {
     "repo": "acme/api"
   },
-  "tools": {
+  "actions": {
     "github.get_issue": {
       "$echo": true
     }
@@ -13,6 +13,6 @@
   },
   "replay": {
     "script": "changed.ts",
-    "diverges": "history entry 3 is tool call #3 github.get_issue({\"number\":3,\"repo\":\"acme/api\"}), but the script emitted tool call #3 github.get_issue({\"number\":4,\"repo\":\"acme/api\"})"
+    "diverges": "history entry 3 is call #3 github.get_issue({\"number\":3,\"repo\":\"acme/api\"}), but the script emitted call #3 github.get_issue({\"number\":4,\"repo\":\"acme/api\"})"
   }
 }

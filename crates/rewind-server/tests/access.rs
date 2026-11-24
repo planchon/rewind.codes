@@ -13,7 +13,7 @@ use rewind_api::access::{BuiltInRole, CreateApiKey, OPERATOR, Permission};
 use rewind_api::action_sets::{CreateActionSet, HostTool};
 use rewind_api::common::Labels;
 use rewind_api::organization::Principal as CallerPrincipal;
-use rewind_api::reading::ToolStatsFilter;
+use rewind_api::reading::ActionStatsFilter;
 use rewind_api::runs::{CancelRun, ForkRun, RunFilter, StartRun};
 use rewind_api::scripts::{CheckRequest, ScriptFilter, SetScriptTitle};
 use rewind_api::tasks::{CompleteTask, TaskStreamQuery};
@@ -89,7 +89,7 @@ enum Call {
     DeleteSubscription,
     ListScripts,
     SetScriptTitle,
-    ToolStats,
+    ActionStats,
     ListApiKeys,
     RevokeApiKey,
 }
@@ -111,7 +111,7 @@ const CALLS: [Call; 19] = [
     Call::DeleteSubscription,
     Call::ListScripts,
     Call::SetScriptTitle,
-    Call::ToolStats,
+    Call::ActionStats,
     Call::ListApiKeys,
     Call::RevokeApiKey,
 ];
@@ -135,7 +135,7 @@ impl Call {
             Call::CreateActionSet => Permission::ActionsWrite,
             Call::SetScriptTitle => Permission::ScriptsWrite,
             Call::Check | Call::ForkRun => Permission::RunsStart,
-            Call::ListRuns | Call::ListScripts | Call::ToolStats => Permission::RunsRead,
+            Call::ListRuns | Call::ListScripts | Call::ActionStats => Permission::RunsRead,
             Call::CancelRun => Permission::RunsControl,
             Call::ReleaseRun | Call::GiveUpRun => Permission::RunsQuarantine,
             Call::DeleteRun => Permission::RunsDelete,
@@ -199,7 +199,7 @@ impl Call {
                     )
                     .await,
             ),
-            Call::ToolStats => outcome(client.tool_stats(&ToolStatsFilter::default()).await),
+            Call::ActionStats => outcome(client.action_stats(&ActionStatsFilter::default()).await),
             Call::ListApiKeys => outcome(client.list_api_keys().await),
             Call::RevokeApiKey => outcome(client.revoke_api_key("unknown").await),
         }
@@ -433,7 +433,7 @@ async fn keys_are_given_within_what_their_creator_holds() {
     server.stop().await;
 }
 
-/// A grant limited to labels sees its runs but administers nothing and reads no tool
+/// A grant limited to labels sees its runs but administers nothing and reads no action
 /// statistics.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_key_limited_to_labels_does_not_administer() {
@@ -476,7 +476,7 @@ async fn a_key_limited_to_labels_does_not_administer() {
         assert_eq!(status, 403, "{detail}");
         assert!(detail.contains("limited to labels"), "{detail}");
     }
-    let (status, detail) = outcome(scoped.tool_stats(&ToolStatsFilter::default()).await);
+    let (status, detail) = outcome(scoped.action_stats(&ActionStatsFilter::default()).await);
     assert_eq!(status, 403, "{detail}");
     server.stop().await;
 }
@@ -503,7 +503,7 @@ async fn a_key_limited_to_labels_claims_the_tasks_of_its_runs_only() {
         .await
         .unwrap();
     let mut asking = StartRun::new(
-        r#"import { ask_user } from "rewind:tools";
+        r#"import { ask_user } from "rewind:actions";
 export default async function main() {
   return await ask_user({});
 }
@@ -523,7 +523,7 @@ export default async function main() {
     let prod = server.key(BuiltInRole::Worker, &[("env", "prod")]).await;
     let query = TaskStreamQuery {
         action_set: Some(action_set.id.clone()),
-        tools: vec!["ask_user".into()],
+        actions: vec!["ask_user".into()],
         slots: Some(10),
         ..TaskStreamQuery::default()
     };

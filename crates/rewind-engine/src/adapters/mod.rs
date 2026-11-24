@@ -1,7 +1,7 @@
 //! Adapters that need no infrastructure: the in-memory control plane (catalog, cluster and the
 //! broadcast of its changes, access, secrets), run plane (partitions), archive and blobs, and the
 //! link between the nodes of one process; in-memory telemetry and webhooks; a fake identity
-//! provider; static tool responses, routing of tool calls by route, and type-checking; system
+//! provider; static action responses, routing of calls by route, and type-checking; system
 //! and virtual time; system and seeded entropy; the set-aside runs `migrate-runs` moves.
 //! Wired together with a virtual clock, they make the engine's mock mode and its test harness
 //! (`archi/07-code-architecture.md`, principle 6), and the server's tests. Each adapter of a

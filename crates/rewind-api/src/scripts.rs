@@ -16,7 +16,7 @@ use crate::testing::TestInput;
 pub struct CheckRequest {
     /// The TypeScript source: a single ES module whose default export is the entry point.
     pub script: String,
-    /// The action set whose `rewind:tools` the script imports. Without one, `rewind:tools` is empty.
+    /// The action set whose `rewind:actions` the script imports. Without one, `rewind:actions` is empty.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub action_set: Option<String>,
 }
@@ -119,11 +119,11 @@ pub struct Location {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[schema(example = json!({
-    "script": "import { github } from \"rewind:tools\";\nexport default async function main(input: { repo: string }) {\n  const issues = await github.list_issues({ repo: input.repo, state: \"open\" });\n  return { open: issues.length };\n}\n",
+    "script": "import { github } from \"rewind:actions\";\nexport default async function main(input: { repo: string }) {\n  const issues = await github.list_issues({ repo: input.repo, state: \"open\" });\n  return { open: issues.length };\n}\n",
     "tests": [{
         "name": "counts the open issues",
         "input": { "repo": "acme/api" },
-        "world": { "tools": { "github.list_issues": { "returns": [{ "number": 4 }] } } },
+        "world": { "actions": { "github.list_issues": { "returns": [{ "number": 4 }] } } },
         "expect": { "status": "completed", "output": { "open": 1 } }
     }]
 }))]
@@ -131,7 +131,7 @@ pub struct TestRequest {
     /// The TypeScript source. With `workflow`, the version's own when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub script: Option<String>,
-    /// The action set the script imports from `rewind:tools`. With `workflow`, the version's own
+    /// The action set the script imports from `rewind:actions`. With `workflow`, the version's own
     /// when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub action_set: Option<String>,
@@ -147,7 +147,7 @@ pub struct TestRequest {
 // Scripts executed on the platform
 
 /// `GET /v1/scripts`: every distinct script the runs of a scope ran in a window, most recently run
-/// first, each with its runs by status and the tools it called, from the hourly counters. A scope
+/// first, each with its runs by status and the actions it called, from the hourly counters. A scope
 /// and a window, as `GET /v1/runs/stats` takes them (`crate::runs::RunStatsQuery`).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, IntoParams)]
 #[serde(rename_all = "camelCase")]
@@ -168,9 +168,9 @@ pub struct ScriptFilter {
     /// Only this script: its digest.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub digest: Option<String>,
-    /// Only scripts that called this tool.
+    /// Only scripts that called this action.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tool: Option<String>,
+    pub action: Option<String>,
     /// At most this many scripts (50 by default, 500 at most).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<u32>,
@@ -211,8 +211,8 @@ pub struct ScriptSummary {
     pub last_run_at: Timestamp,
     /// Runs of this script, by status.
     pub runs: RunCounts,
-    /// The tools its runs called.
-    pub tools: Vec<String>,
+    /// The actions its runs called.
+    pub actions: Vec<String>,
 }
 
 /// A number of runs per status.
@@ -246,8 +246,8 @@ pub struct Script {
     pub headline: String,
     /// Runs of this script, by status, as the read model keeps them.
     pub runs: RunCounts,
-    /// The tools its runs called.
-    pub tools: Vec<String>,
+    /// The actions its runs called.
+    pub actions: Vec<String>,
     /// When its first and last runs started; absent when no run is kept.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub first_run_at: Option<Timestamp>,

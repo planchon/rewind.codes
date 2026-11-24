@@ -1,4 +1,4 @@
-import { github, slack } from "rewind:tools";
+import { github, slack } from "rewind:actions";
 import { sleep, signal } from "rewind";
 
 export default async function main(input: { repo: string }) {

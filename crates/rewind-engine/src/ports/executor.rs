@@ -3,8 +3,8 @@ use std::future::Future;
 use std::time::Duration;
 
 use rewind_core::{
-    ActionSet, Annotation, CancelReason, Command, Epoch, Event, JsonValue, RunId, Script, Seed,
-    Seq, Timestamp, ToolFailure,
+    ActionFailure, ActionSet, Annotation, CancelReason, Command, Epoch, Event, JsonValue, RunId,
+    Script, Seed, Seq, Timestamp,
 };
 
 /// What an executor compiled from a script's TypeScript source. It is stored with the
@@ -40,8 +40,8 @@ pub struct StartScript {
 /// A completion, with its payloads loaded: what reaches the script.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Delivery {
-    ToolCallCompleted { seq: Seq, result: JsonValue },
-    ToolCallFailed { seq: Seq, error: ToolFailure },
+    CallCompleted { seq: Seq, result: JsonValue },
+    CallFailed { seq: Seq, error: ActionFailure },
     TimerFired { seq: Seq },
     SignalReceived { name: String, payload: JsonValue },
     CancelRequested { reason: CancelReason },
@@ -106,13 +106,13 @@ pub trait ScriptExecutor: Send + Sync {
         action_set: &ActionSet,
     ) -> Result<CompiledScript, InvalidScript>;
 
-    /// The names a script imports from `rewind:tools`: its MCP servers, APIs and host-tool groups
+    /// The names a script imports from `rewind:actions`: its MCP servers, APIs and host-tool groups
     /// by their namespace, and its host tools without a group by name. A start checks that each
     /// server or API it imports whose `auth` takes a secret has one attached
     /// (`archi/04-tools.md`, "Secrets"). `None` when the script may reach every one: it imports
-    /// the whole module (`import * as tools`), or the executor cannot tell, which is the
+    /// the whole module (`import * as actions`), or the executor cannot tell, which is the
     /// default. Called on a script [`compile`](Self::compile) accepted.
-    fn tool_imports(&self, script: &Script) -> Option<BTreeSet<String>> {
+    fn action_imports(&self, script: &Script) -> Option<BTreeSet<String>> {
         let _ = script;
         None
     }
@@ -171,8 +171,8 @@ impl<X: ScriptExecutor> ScriptExecutor for &X {
         (**self).compile(script, action_set)
     }
 
-    fn tool_imports(&self, script: &Script) -> Option<BTreeSet<String>> {
-        (**self).tool_imports(script)
+    fn action_imports(&self, script: &Script) -> Option<BTreeSet<String>> {
+        (**self).action_imports(script)
     }
 
     fn start(

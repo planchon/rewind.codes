@@ -1,7 +1,7 @@
-//! Where a deployed server's MCP client goes (`ToolEgress::checked`). The servers of these tests
+//! Where a deployed server's MCP client goes (`ActionEgress::checked`). The servers of these tests
 //! listen on 127.0.0.1: for a deployment, internal services. They are refused unless the
 //! operator's allow-list lets them through, and once let through, what they answer is never
-//! quoted to the tenant. The embedded server's configuration (`ToolEgress::open`) reaches them.
+//! quoted to the tenant. The embedded server's configuration (`ActionEgress::open`) reaches them.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::net::IpAddr;
@@ -11,10 +11,10 @@ use std::time::Duration;
 
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use rewind_core::{Tool, ToolFailureKind, ToolRoute};
-use rewind_engine::ports::{CallAuth, ToolDispatcher};
+use rewind_core::{Action, ActionFailureKind, ActionRoute};
+use rewind_engine::ports::{ActionDispatcher, CallAuth};
 use rewind_mcp::{ListingAuth, McpConfig, McpDispatcher, McpError};
-use rewind_outbound::{InternalAllowList, NameResolver, Resolving, ToolEgress};
+use rewind_outbound::{ActionEgress, InternalAllowList, NameResolver, Resolving};
 use serde_json::json;
 
 use crate::fixture::{self, Auth, Fixture};
@@ -25,7 +25,7 @@ const REFUSAL: &str = "MCP servers and APIs are not reached there unless the ope
 /// A deployed server's dispatcher, letting `internal` through, resolving with the system.
 fn deployed(internal: &[&str]) -> McpDispatcher {
     McpDispatcher::new(McpConfig {
-        egress: ToolEgress::checked(InternalAllowList::parse(internal).unwrap()),
+        egress: ActionEgress::checked(InternalAllowList::parse(internal).unwrap()),
         ..McpConfig::default()
     })
 }
@@ -33,7 +33,7 @@ fn deployed(internal: &[&str]) -> McpDispatcher {
 /// A deployed server's dispatcher resolving with `resolver`.
 fn deployed_with(resolver: Arc<Scripted>, internal: &[&str]) -> McpDispatcher {
     McpDispatcher::new(McpConfig {
-        egress: ToolEgress::checked_with(resolver, InternalAllowList::parse(internal).unwrap()),
+        egress: ActionEgress::checked_with(resolver, InternalAllowList::parse(internal).unwrap()),
         ..McpConfig::default()
     })
 }
@@ -145,9 +145,9 @@ pub(crate) async fn a_local_server_is_refused_by_a_deployed_server() {
         "{message}"
     );
     // A call, at each connection: it fails for good.
-    let lookup = Tool::new(
+    let lookup = Action::new(
         "fx.lookup",
-        ToolRoute::Mcp {
+        ActionRoute::Mcp {
             server: "fx".into(),
         },
         json!({ "type": "object" }),
@@ -157,7 +157,7 @@ pub(crate) async fn a_local_server_is_refused_by_a_deployed_server() {
             .dispatch(call(&mcp, &lookup, json!({ "id": "c-1" })), CallAuth::None)
             .await,
     );
-    assert_eq!(failure.kind, ToolFailureKind::Unavailable);
+    assert_eq!(failure.kind, ActionFailureKind::Unavailable);
     assert_eq!(
         failure.message,
         format!("fx cannot be reached: 127.0.0.1 is a loopback address: {REFUSAL}")
@@ -175,11 +175,11 @@ pub(crate) async fn a_local_server_is_refused_by_a_deployed_server() {
     assert_eq!(fixture.state().sessions, 0, "nothing reached the server");
 
     // The embedded server's configuration reaches it.
-    let tools = open()
+    let actions = open()
         .list_tools(&tenant(), &mcp, ListingAuth::None)
         .await
         .unwrap();
-    assert_eq!(tools.len(), 8);
+    assert_eq!(actions.len(), 8);
     assert_eq!(fixture.state().sessions, 1);
 }
 
@@ -190,12 +190,15 @@ pub(crate) async fn an_allowed_internal_server_is_reached() {
 
     // By network: discovery, then a call.
     let dispatcher = deployed(&["127.0.0.0/8"]);
-    let tools = dispatcher
+    let actions = dispatcher
         .list_tools(&tenant(), &mcp, ListingAuth::None)
         .await
         .unwrap();
-    assert_eq!(tools.len(), 8);
-    let lookup = tools.iter().find(|tool| tool.name == "fx.lookup").unwrap();
+    assert_eq!(actions.len(), 8);
+    let lookup = actions
+        .iter()
+        .find(|action| action.name == "fx.lookup")
+        .unwrap();
     result(
         dispatcher
             .dispatch(call(&mcp, lookup, json!({ "id": "c-1" })), CallAuth::None)
@@ -306,11 +309,11 @@ pub(crate) async fn redirects_go_nowhere_else() {
     // Within the server's origin, a 307 is followed: the session works through it.
     let resolver = Scripted::new(&[("mcp.test", &["127.0.0.1"])]);
     let moved = http_server(&format!("http://mcp.test:{port}/moved"));
-    let tools = deployed_with(resolver, &["mcp.test"])
+    let actions = deployed_with(resolver, &["mcp.test"])
         .list_tools(&tenant(), &moved, ListingAuth::None)
         .await
         .unwrap();
-    assert_eq!(tools.len(), 8);
+    assert_eq!(actions.len(), 8);
 
     // To a private address: another origin, never reached.
     let (internal_port, accepted) = internal_service().await;

@@ -3,7 +3,7 @@
 //! that every store behaves alike and a request carrying it is told why.
 //!
 //! Payload values are not concerned: they are stored as JSON, where U+0000 is escaped. Tenants,
-//! tool names and server names already refuse control characters. A diagnostic the engine
+//! action names and server names already refuse control characters. A diagnostic the engine
 //! writes, such as a quarantine reason, has its NUL characters replaced instead.
 
 use std::collections::BTreeMap;

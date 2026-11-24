@@ -181,9 +181,9 @@ async fn seen_script(app: &App, caller: &Caller, digest: &str) -> Result<Script,
         runs: counted
             .as_ref()
             .map_or_else(RunCounts::default, |counts| run_counts(&counts.runs)),
-        tools: counted
+        actions: counted
             .as_ref()
-            .map(|counts| counts.tools.iter().cloned().collect::<BTreeSet<_>>())
+            .map(|counts| counts.actions.iter().cloned().collect::<BTreeSet<_>>())
             .unwrap_or_default()
             .into_iter()
             .collect(),

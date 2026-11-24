@@ -1,4 +1,4 @@
-import { ops } from "rewind:tools";
+import { ops } from "rewind:actions";
 import { signal, webhook } from "rewind";
 
 export default async function main() {

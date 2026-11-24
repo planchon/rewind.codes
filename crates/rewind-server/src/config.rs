@@ -27,7 +27,7 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use clap::{Parser, ValueEnum};
 use rewind_engine::CacheConfig;
 use rewind_engine::ports::{MasterKeyId, NodeId, Quotas, Retention, TenantId};
-use rewind_outbound::{InternalAllowList, ToolEgress};
+use rewind_outbound::{ActionEgress, InternalAllowList};
 
 use crate::wiring::bucket::{BucketLocation, S3Options};
 use crate::wiring::control::StoreLocation;
@@ -216,7 +216,7 @@ pub struct ServerArgs {
     #[arg(long, env = "REWIND_EXECUTORS")]
     pub executors: Option<usize>,
 
-    /// Tool calls sent at once by this node.
+    /// Calls sent at once by this node.
     #[arg(long, env = "REWIND_CALLS", default_value_t = 256)]
     pub calls: usize,
 
@@ -264,11 +264,11 @@ pub struct ServerArgs {
     /// link-local and cloud-metadata addresses are refused. What such an internal server
     /// answers is never quoted to the tenant. The embedded server reaches any address.
     #[arg(
-        long = "allow-internal-tools",
-        env = "REWIND_ALLOW_INTERNAL_TOOLS",
+        long = "allow-internal-addresses",
+        env = "REWIND_ALLOW_INTERNAL_ADDRESSES",
         value_delimiter = ','
     )]
-    pub allow_internal_tools: Vec<String>,
+    pub allow_internal_addresses: Vec<String>,
 
     /// Send lifecycle webhooks to private, loopback and link-local addresses too, over
     /// `http://` or `https://`: for a harness on the same trusted network. Without it, a server
@@ -556,9 +556,9 @@ pub(crate) struct Config {
     pub(crate) ceiling: Quotas,
     pub(crate) allow_stdio: bool,
     /// Where MCP servers, APIs and OpenAPI documents may be: anywhere for the embedded server;
-    /// public addresses and the internal hosts of `--allow-internal-tools` for a deployed one.
-    pub(crate) tool_egress: ToolEgress,
-    /// The internal hosts and networks of `--allow-internal-tools`: MCP servers, APIs, and the
+    /// public addresses and the internal hosts of `--allow-internal-addresses` for a deployed one.
+    pub(crate) action_egress: ActionEgress,
+    /// The internal hosts and networks of `--allow-internal-addresses`: MCP servers, APIs, and the
     /// metadata documents of OAuth clients, may be there.
     pub(crate) internal_hosts: InternalAllowList,
     /// Lifecycle webhooks may go to the private network, over `http://` too.
@@ -695,10 +695,10 @@ impl ServerArgs {
                     "the embedded server has one partition: --partitions does not apply to it",
                 ));
             }
-            if !self.allow_internal_tools.is_empty() {
+            if !self.allow_internal_addresses.is_empty() {
                 return Err(ConfigError::new(
                     "the embedded server reaches MCP servers and APIs at any address: \
-                     --allow-internal-tools does not apply to it",
+                     --allow-internal-addresses does not apply to it",
                 ));
             }
             let dir = self.dir.clone();
@@ -723,7 +723,7 @@ impl ServerArgs {
                     .map(|url| url.trim_end_matches('/').to_owned()),
                 ceiling: Quotas::default(),
                 allow_stdio: true,
-                tool_egress: ToolEgress::open(),
+                action_egress: ActionEgress::open(),
                 internal_hosts: InternalAllowList::default(),
                 allow_private_webhooks: true,
                 virtual_time,
@@ -740,8 +740,8 @@ impl ServerArgs {
             });
         }
 
-        let internal_tools = InternalAllowList::parse(&self.allow_internal_tools)
-            .map_err(|error| ConfigError::new(format!("--allow-internal-tools: {error}")))?;
+        let internal_addresses = InternalAllowList::parse(&self.allow_internal_addresses)
+            .map_err(|error| ConfigError::new(format!("--allow-internal-addresses: {error}")))?;
         let store = if self.in_memory {
             StoreLocation::Memory
         } else {
@@ -880,8 +880,8 @@ impl ServerArgs {
                 max_script_lines: self.quota_max_script_lines,
             },
             allow_stdio: self.allow_stdio,
-            tool_egress: ToolEgress::checked(internal_tools.clone()),
-            internal_hosts: internal_tools,
+            action_egress: ActionEgress::checked(internal_addresses.clone()),
+            internal_hosts: internal_addresses,
             allow_private_webhooks: self.allow_private_webhooks,
             virtual_time,
             idle_timeout: self.idle_timeout,
@@ -1299,25 +1299,25 @@ mod tests {
             parse(&args)
         };
         let checked = deployed(&[]).unwrap_or_else(|error| panic!("{error}"));
-        assert!(!checked.tool_egress.is_open());
+        assert!(!checked.action_egress.is_open());
         let allowed = deployed(&[
-            "--allow-internal-tools",
+            "--allow-internal-addresses",
             "mcp.internal.example,10.20.0.0/16",
-            "--allow-internal-tools",
+            "--allow-internal-addresses",
             "*.svc.cluster.local",
         ])
         .unwrap_or_else(|error| panic!("{error}"));
-        assert!(!allowed.tool_egress.is_open());
-        let invalid = deployed(&["--allow-internal-tools", "10.0.0.0/33"]).unwrap_err();
+        assert!(!allowed.action_egress.is_open());
+        let invalid = deployed(&["--allow-internal-addresses", "10.0.0.0/33"]).unwrap_err();
         assert!(
             invalid
                 .to_string()
-                .starts_with("--allow-internal-tools: \"10.0.0.0/33\""),
+                .starts_with("--allow-internal-addresses: \"10.0.0.0/33\""),
             "{invalid}"
         );
 
         let embedded = parse(&["--embedded"]).unwrap_or_else(|error| panic!("{error}"));
-        assert!(embedded.tool_egress.is_open());
-        assert!(parse(&["--embedded", "--allow-internal-tools", "10.0.0.0/8"]).is_err());
+        assert!(embedded.action_egress.is_open());
+        assert!(parse(&["--embedded", "--allow-internal-addresses", "10.0.0.0/8"]).is_err());
     }
 }

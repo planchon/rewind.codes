@@ -83,8 +83,8 @@ impl ScriptExecutor for V8Executor {
         compile::compile(script, action_set, epochs::latest())
     }
 
-    fn tool_imports(&self, script: &Script) -> Option<BTreeSet<String>> {
-        compile::tool_imports(script)
+    fn action_imports(&self, script: &Script) -> Option<BTreeSet<String>> {
+        compile::action_imports(script)
     }
 
     async fn start(&self, start: StartScript) -> Result<(V8Instance, Vec<Emitted>), ExecutorError> {

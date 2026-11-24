@@ -18,16 +18,17 @@ use crate::connector::{Connector, ConnectorError};
 use crate::organizations;
 
 /// What `initialize` tells the model: from an organization to a run.
-pub const INSTRUCTIONS: &str = "Rewind runs TypeScript scripts that call tools, durably: a \
+pub const INSTRUCTIONS: &str = "Rewind runs TypeScript scripts that call actions, durably: a \
 script can sleep for days and wait for signals, every call it makes is recorded, and a failed run \
 is fixed without calling again what it already called. From an organization to a run:\n\
 1. list_orgs: the organizations you reach. Give one as `org` to the other tools, by its id or \
 its name; leave it out when you reach only one.\n\
 2. list_namespaces: the namespaces of the organization, each one end user. A script runs in the \
 namespace you give as `namespace`; a new name creates one.\n\
-3. list_action_sets: the action sets, the MCP servers and tools a script imports from \
-\"rewind:tools\". Give the action set's id as `action_set`.\n\
-4. search_tools: the TypeScript declarations of the tools you need, before you write the script.\n\
+3. list_action_sets: the action sets, the MCP servers and actions a script imports from \
+\"rewind:actions\". Give the action set's id as `action_set`.\n\
+4. search_actions: the TypeScript declarations of the actions you need, before you write the \
+script.\n\
 5. list_secrets: the secrets you may attach, by name, never a value: the end user's own \
 (ns/<name>) and the organization's (org/<name>). A server whose calls need one takes it in \
 `secrets` of run_script and retry_run: {\"github\": \"ns/github\"}.\n\

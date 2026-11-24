@@ -118,7 +118,7 @@ async fn check_reads_an_action_set_file() {
     let script = write(
         dir.path(),
         "ask.ts",
-        "import { ask_user } from \"rewind:tools\";\nexport default async function main() {\n  const answer = await ask_user({ question: 42 });\n  return answer.toUpperCase();\n}\n",
+        "import { ask_user } from \"rewind:actions\";\nexport default async function main() {\n  const answer = await ask_user({ question: 42 });\n  return answer.toUpperCase();\n}\n",
     );
     let run = rewind(&[
         "check",
@@ -134,7 +134,7 @@ async fn check_reads_an_action_set_file() {
     let fixed = write(
         dir.path(),
         "fixed.ts",
-        "import { ask_user } from \"rewind:tools\";\nexport default async function main() {\n  const answer = await ask_user({ question: \"why?\" });\n  return answer.toUpperCase();\n}\n",
+        "import { ask_user } from \"rewind:actions\";\nexport default async function main() {\n  const answer = await ask_user({ question: \"why?\" });\n  return answer.toUpperCase();\n}\n",
     );
     let run = rewind(&[
         "check",
@@ -144,7 +144,7 @@ async fn check_reads_an_action_set_file() {
     ])
     .await;
     assert_eq!(run.exit, Exit::Success, "{}", run.out);
-    // Without the action set, `rewind:tools` exports nothing.
+    // Without the action set, `rewind:actions` exports nothing.
     let run = rewind(&["check", fixed.to_str().unwrap()]).await;
     assert_eq!(run.exit, Exit::ScriptRefused, "{}", run.out);
 }
@@ -152,7 +152,7 @@ async fn check_reads_an_action_set_file() {
 // -------------------------------------------------------------------------------------------
 // rewind test
 
-const TRIAGE: &str = r#"import { github, notify } from "rewind:tools";
+const TRIAGE: &str = r#"import { github, notify } from "rewind:actions";
 import { signal, sleep } from "rewind";
 
 export default async function main(input: { repo: string }) {
@@ -175,10 +175,10 @@ export default async function main(input: { repo: string }) {
 async fn test_runs_tests_with_static_responses_and_mocks() {
     let dir = tempfile::tempdir().unwrap();
     let script = write(dir.path(), "triage.ts", TRIAGE);
-    // rewind.tools.json next to the tests: tried after each test's own world.
+    // rewind.actions.json next to the tests: tried after each test's own world.
     write(
         dir.path(),
-        "rewind.tools.json",
+        "rewind.actions.json",
         r#"{"github.list_issues": [{"number": 1}], "notify": {"$error": "slack is down"}}"#,
     );
     write(
@@ -194,7 +194,7 @@ async fn test_runs_tests_with_static_responses_and_mocks() {
             "name": "closes the three once approved",
             "input": { "repo": "acme/api" },
             "world": {
-                "tools": {
+                "actions": {
                     "github.list_issues": { "returns": [{ "number": 4 }, { "number": 7 }, { "number": 9 }] },
                     "notify": { "returns": { "ok": true } }
                 },
@@ -205,9 +205,9 @@ async fn test_runs_tests_with_static_responses_and_mocks() {
                 "status": "completed",
                 "output": { "closed": 3 },
                 "calls": [
-                    { "tool": "github.list_issues", "times": 1 },
-                    { "tool": "github.close_issue", "times": 3 },
-                    { "tool": "notify", "times": 1 }
+                    { "action": "github.list_issues", "times": 1 },
+                    { "action": "github.close_issue", "times": 3 },
+                    { "action": "notify", "times": 1 }
                 ]
             }
         }])
@@ -230,7 +230,7 @@ async fn test_runs_tests_with_static_responses_and_mocks() {
         Some(json!({"closed": 3, "repo": "acme/api"}))
     );
 
-    // rewind.tools.json alone: its notify fails, and the expectations say what does not hold.
+    // rewind.actions.json alone: its notify fails, and the expectations say what does not hold.
     let failing = write(
         dir.path(),
         "failing.tests.json",
@@ -240,7 +240,7 @@ async fn test_runs_tests_with_static_responses_and_mocks() {
             "signals": [{ "name": "approval", "when": "3d", "payload": { "close": false } }],
             "expect": {
                 "status": "completed",
-                "calls": [{ "tool": "github.list_issues", "times": 2 }]
+                "calls": [{ "action": "github.list_issues", "times": 2 }]
             }
         }])
         .to_string(),
@@ -260,7 +260,7 @@ async fn test_runs_tests_with_static_responses_and_mocks() {
     );
     assert!(
         run.out.contains(
-            "the run is failed (ToolError: notify failed: slack is down), expected completed"
+            "the run is failed (ActionError: notify failed: slack is down), expected completed"
         ),
         "{}",
         run.out
@@ -321,15 +321,15 @@ async fn test_replays_a_recorded_cassette() {
             "world": {
                 "cassette": "recorded.json",
                 // The recorded run stopped at the signal: what comes after has a rule.
-                "tools": { "github.close_issue": { "returns": { "closed": true } } }
+                "actions": { "github.close_issue": { "returns": { "closed": true } } }
             },
             "signals": [{ "name": "approval", "payload": { "close": true } }],
             "expect": {
                 "status": "completed",
                 "output": { "close": true },
                 "calls": [
-                    { "tool": "github.get_issue", "times": 1 },
-                    { "tool": "github.close_issue", "times": 1 }
+                    { "action": "github.get_issue", "times": 1 },
+                    { "action": "github.close_issue", "times": 1 }
                 ]
             }
         }])
@@ -369,7 +369,7 @@ async fn replay_reports_compatibility_with_a_corrected_script() {
     let moved = write(
         dir.path(),
         "moved.ts",
-        "import { github } from \"rewind:tools\";\nimport { signal } from \"rewind\";\n\n\nexport default async function main() {\n  const issue = await github.get_issue({ number: 4 });\n  const decision = await signal<{ close: boolean }>(\"approval\");\n  if (decision.close) await github.close_issue({ number: issue.number });\n  return decision;\n}\n",
+        "import { github } from \"rewind:actions\";\nimport { signal } from \"rewind\";\n\n\nexport default async function main() {\n  const issue = await github.get_issue({ number: 4 });\n  const decision = await signal<{ close: boolean }>(\"approval\");\n  if (decision.close) await github.close_issue({ number: issue.number });\n  return decision;\n}\n",
     );
     let run = rewind(&[
         "replay",
@@ -390,7 +390,7 @@ async fn replay_reports_compatibility_with_a_corrected_script() {
     let changed = write(
         dir.path(),
         "changed.ts",
-        "import { github } from \"rewind:tools\";\nexport default async function main() {\n  return await github.get_issue({ number: 5 });\n}\n",
+        "import { github } from \"rewind:actions\";\nexport default async function main() {\n  return await github.get_issue({ number: 5 });\n}\n",
     );
     let run = rewind(&[
         "--json",
@@ -481,7 +481,7 @@ async fn the_corpus_replays_through_the_cli() {
     assert!(replayed >= 54, "only {replayed} journals replayed");
 }
 
-/// The corpus cases whose tools and steps a scenario of `rewind test` can express run through
+/// The corpus cases whose actions and steps a scenario of `rewind test` can express run through
 /// `rewind test`, and meet their expectations: status, output, error, calls, abort, refused start.
 /// The others need what only the corpus harness drives (approvals, virtual time moved by hand,
 /// a host worker, limits, forks, MCP servers, `http` hosts, idempotency keys, transient
@@ -560,6 +560,7 @@ async fn the_corpus_runs_through_rewind_test() {
     assert_eq!(
         skipped,
         [
+            "blue/action_called_without_arguments",
             "blue/approval_granted",
             "blue/args_checked_against_the_schema",
             "blue/at_most_once_outcome_unknown",
@@ -567,7 +568,7 @@ async fn the_corpus_runs_through_rewind_test() {
             "blue/cpu_budget_per_trigger",
             "blue/credentials_renewed",
             "blue/fan_out_out_of_order",
-            "blue/fetch_with_the_http_tool",
+            "blue/fetch_with_the_http_action",
             "blue/fork_calls_again_what_its_parent_left",
             "blue/fork_inherits_its_parent_s_secrets",
             "blue/fork_live_from_an_entry",
@@ -577,7 +578,6 @@ async fn the_corpus_runs_through_rewind_test() {
             "blue/mcp_content_helpers",
             "blue/secret_deleted_mid_run_resumes_when_put_again",
             "blue/signals_buffered_then_timed_out",
-            "blue/tool_called_without_arguments",
             "blue/transient_failure_retried",
             "blue/triage_workflow",
             "blue/workflow_attached_run_ends_first",
@@ -586,7 +586,7 @@ async fn the_corpus_runs_through_rewind_test() {
             "blue/workflow_version_reads_its_secrets",
             "blue/workflows_started_signalled_and_awaited",
             "red/approval_rejected",
-            "red/built_in_imported_from_rewind_tools",
+            "red/built_in_imported_from_rewind_actions",
             "red/cancellation_grace_exceeded",
             "red/cancelled",
             "red/cancelled_inside_set_timeout",
@@ -643,7 +643,14 @@ struct Translated {
 /// key is sent twice. A test has no TTL: a scenario that sets one stays with the corpus harness.
 fn translate(scenario: &Value) -> Option<Translated> {
     let fields = scenario.as_object()?;
-    let allowed = ["description", "input", "tools", "steps", "expect", "replay"];
+    let allowed = [
+        "description",
+        "input",
+        "actions",
+        "steps",
+        "expect",
+        "replay",
+    ];
     if fields.keys().any(|key| !allowed.contains(&key.as_str())) {
         return None;
     }
@@ -669,8 +676,8 @@ fn translate(scenario: &Value) -> Option<Translated> {
     }
     let mut rules = BTreeMap::new();
     let mut handlers = Vec::new();
-    for (tool, response) in scenario["tools"].as_object().cloned().unwrap_or_default() {
-        if tool == "http" {
+    for (action, response) in scenario["actions"].as_object().cloned().unwrap_or_default() {
+        if action == "http" {
             return None;
         }
         match handler(&response)? {
@@ -679,14 +686,14 @@ fn translate(scenario: &Value) -> Option<Translated> {
                     Some(message) => json!({ "error": { "message": message } }),
                     None => json!({ "returns": value }),
                 };
-                rules.insert(tool, rule);
+                rules.insert(action, rule);
             }
-            Handler::Script(body) => handlers.push(format!("  {}: {body},", json!(tool))),
+            Handler::Script(body) => handlers.push(format!("  {}: {body},", json!(action))),
         }
     }
     let mocks = (!handlers.is_empty()).then(|| {
         format!(
-            "const counters: Record<string, number> = {{}};\nfunction next(tool: string): number {{\n  counters[tool] = (counters[tool] ?? 0) + 1;\n  return counters[tool] - 1;\n}}\nfunction fail(failure: {{ message: string; kind?: string; data?: unknown }}): never {{\n  throw failure;\n}}\nexport default {{\n{}\n}};\n",
+            "const counters: Record<string, number> = {{}};\nfunction next(action: string): number {{\n  counters[action] = (counters[action] ?? 0) + 1;\n  return counters[action] - 1;\n}}\nfunction fail(failure: {{ message: string; kind?: string; data?: unknown }}): never {{\n  throw failure;\n}}\nexport default {{\n{}\n}};\n",
             handlers.join("\n")
         )
     });
@@ -700,11 +707,11 @@ fn translate(scenario: &Value) -> Option<Translated> {
     if let Some(calls) = expect.get("calls").and_then(Value::as_object) {
         let calls: Vec<Value> = calls
             .iter()
-            .map(|(tool, times)| json!({ "tool": tool, "times": times }))
+            .map(|(action, times)| json!({ "action": action, "times": times }))
             .collect();
         expected.insert("calls".to_owned(), Value::Array(calls));
     }
-    let mut world = json!({ "tools": rules });
+    let mut world = json!({ "actions": rules });
     if mocks.is_some() {
         world["mocks"] = json!("mocks.ts");
     }
@@ -724,7 +731,7 @@ enum Handler {
 }
 
 /// How a mock answers one corpus response; `None` for the responses only the corpus's own
-/// tools give (transient failures, deferrals, crashes, refused credentials).
+/// actions give (transient failures, deferrals, crashes, refused credentials).
 fn handler(response: &Value) -> Option<Handler> {
     let Some(fields) = response.as_object() else {
         return Some(Handler::Static(response.clone()));
@@ -767,9 +774,9 @@ fn handler(response: &Value) -> Option<Handler> {
                 Handler::Script(body) => body,
             });
         }
-        // Past the end, the call fails, as with the corpus's tools.
+        // Past the end, the call fails, as with the corpus's actions.
         return Some(Handler::Script(format!(
-            "(args, call) => {{ const answers = [{}]; const n = next(call.tool); if (n >= answers.length) fail({{ message: `${{call.tool}} has no response left`, kind: \"unavailable\" }}); return answers[n](args); }}",
+            "(args, call) => {{ const answers = [{}]; const n = next(call.action); if (n >= answers.length) fail({{ message: `${{call.action}} has no response left`, kind: \"unavailable\" }}); return answers[n](args); }}",
             answers.join(", ")
         )));
     }

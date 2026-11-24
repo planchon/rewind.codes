@@ -5,7 +5,7 @@
 //! | --- | --- | --- |
 //! | `iss` | `{public-url}/organizations/{tenant}` | The engine |
 //! | `aud` | The API's `baseUrl`, or the MCP server's URL | The dispatcher |
-//! | `sub`, `labels`, `run`, `tool`, `idempotency_key` | The run's namespace and labels, the run, the tool, `{run_id}/{seq}` | The engine, for the request of a call only |
+//! | `sub`, `labels`, `run`, `action`, `idempotency_key` | The run's namespace and labels, the run, the action, `{run_id}/{seq}` | The engine, for the request of a call only |
 //! | `jti` | `{run_id}/{seq}/{attempt}` for the request of a call; a random id for the other requests of an MCP session | The engine; the signer |
 //! | `htm`, `htu`, `body` | The method, the URL (without a fragment), the SHA-256 of the body in base64url (absent without a body) | The request |
 //! | `iat`, `exp` | Now, and [`TOKEN_LIFETIME`] later, in seconds, by the wall clock | The signer |
@@ -34,7 +34,7 @@ pub const TOKEN_LIFETIME: Duration = Duration::from_secs(60);
 pub struct SigningError(pub String);
 
 /// The claims of the request of a call: who it acts for and what it is (`sub`, `labels`, `run`,
-/// `tool`, `idempotency_key`, `jti`).
+/// `action`, `idempotency_key`, `jti`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CallIdentity {
     /// `sub`: the run's namespace, the end user.
@@ -43,8 +43,8 @@ pub struct CallIdentity {
     pub labels: BTreeMap<String, String>,
     /// `run`: the run's id.
     pub run: String,
-    /// `tool`: the tool's name, as scripts call it.
-    pub tool: String,
+    /// `action`: the action's name, as scripts call it.
+    pub action: String,
     /// `idempotency_key`: `{run_id}/{seq}`.
     pub idempotency_key: String,
     /// `jti`: `{run_id}/{seq}/{attempt}`.
@@ -145,7 +145,7 @@ impl Signer {
                 claims.insert("sub".into(), json!(call.subject));
                 claims.insert("labels".into(), json!(call.labels));
                 claims.insert("run".into(), json!(call.run));
-                claims.insert("tool".into(), json!(call.tool));
+                claims.insert("tool".into(), json!(call.action));
                 claims.insert("idempotency_key".into(), json!(call.idempotency_key));
                 claims.insert("jti".into(), json!(call.jti));
             }
@@ -293,7 +293,7 @@ mod tests {
             subject: "alice".into(),
             labels: BTreeMap::from([("env".into(), "prod".into())]),
             run: "run-1".into(),
-            tool: "dax.createMeasure".into(),
+            action: "dax.createMeasure".into(),
             idempotency_key: "run-1/3".into(),
             jti: "run-1/3/2".into(),
         };

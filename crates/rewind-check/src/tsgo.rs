@@ -137,7 +137,7 @@ pub(crate) struct Reported {
 ///
 /// - `--noResolve`: nothing outside `dir` is read. An import or a reference of the script
 ///   could otherwise make tsgo read any file of the host, and its diagnostics show what they
-///   read. The ambient modules `rewind` and `rewind:tools` do not need resolution.
+///   read. The ambient modules `rewind` and `rewind:actions` do not need resolution.
 /// - `--singleThreaded`, `--locale en` and an empty environment: the diagnostics depend on
 ///   nothing but the files.
 /// - `--pretty false`: one diagnostic per line, its chained messages indented below it.

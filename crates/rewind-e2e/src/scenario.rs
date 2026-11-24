@@ -14,17 +14,17 @@ pub struct Scenario {
     /// The run's input.
     #[serde(default = "empty_object")]
     pub input: Value,
-    /// The action set, and how each tool answers (see [`crate::tools::ScenarioTools`]). A tool is a
-    /// host tool (`group.tool` puts it in a group), except `http` and `webhook`, the built-ins,
-    /// and the tools of `mcp_servers`.
+    /// The action set, and how each action answers (see [`crate::actions::ScenarioActions`]). An action is a
+    /// host tool (`group.action` puts it in a group), except `http` and `webhook`, the built-ins,
+    /// and the actions of `mcp_servers`.
     #[serde(default)]
-    pub tools: BTreeMap<String, Value>,
-    /// MCP servers: a tool `server.tool` of one of them is an MCP tool. Pinned without an output
+    pub actions: BTreeMap<String, Value>,
+    /// MCP servers: an action `server.action` of one of them is an MCP action. Pinned without an output
     /// schema (unless `output_schemas` gives one), it answers with MCP content, as `rewind-mcp`
     /// returns it: `{"content": [blocks], "structuredContent"?: value}`.
     #[serde(default)]
     pub mcp_servers: Vec<String>,
-    /// The pinned output schema of some MCP tools, by name.
+    /// The pinned output schema of some MCP actions, by name.
     #[serde(default)]
     pub output_schemas: BTreeMap<String, Value>,
     /// How the calls of some MCP servers authenticate, by server: `secret` (the attached secret
@@ -43,33 +43,33 @@ pub struct Scenario {
     /// namespace's secrets only) or `organization` (`secrets:use`).
     #[serde(default)]
     pub attach: Option<String>,
-    /// The policies that differ from the default, by tool.
+    /// The policies that differ from the default, by action.
     #[serde(default)]
     pub policies: BTreeMap<String, Policy>,
-    /// The tools are host tools answered by a harness's worker, handed their tasks on an SDK
+    /// The actions are host tools answered by a harness's worker, handed their tasks on an SDK
     /// stream and answering through their tokens, instead of mocks called by the engine. A
     /// `$crash` response is a worker that dies with the call: its stream closes.
     #[serde(default)]
     pub host_worker: bool,
-    /// The run is live rather than in mock mode: its tools still answer from `tools`, but the
+    /// The run is live rather than in mock mode: its actions still answer from `actions`, but the
     /// engine serves its built-ins itself, so the runs of `workflows` it starts really run.
     #[serde(default)]
     pub live: bool,
-    /// Workflows the run's action set pins, by name. Each is registered with the scenario's tools
+    /// Workflows the run's action set pins, by name. Each is registered with the scenario's actions
     /// as its action set, before the run starts (`archi/01-product.md`, "Workflows").
     #[serde(default)]
     pub workflows: BTreeMap<String, WorkflowCase>,
-    /// The pinned input schema of some tools, by name. The other host and MCP tools accept any
-    /// arguments; the built-ins get the schemas of `rewind_mcp::http_tool` and
+    /// The pinned input schema of some actions, by name. The other host and MCP actions accept any
+    /// arguments; the built-ins get the schemas of `rewind_mcp::http_action` and
     /// `rewind_runtime::builtins`.
     #[serde(default)]
     pub schemas: BTreeMap<String, Value>,
-    /// The hosts the built-in `http` tool allows, when `tools` has it.
+    /// The hosts the built-in `http` action allows, when `actions` has it.
     #[serde(default)]
     pub http_hosts: Vec<String>,
-    /// The order in which tool calls answer.
+    /// The order in which calls answer.
     #[serde(default)]
-    pub tool_order: ToolOrder,
+    pub action_order: ActionOrder,
     /// Base of the deterministic entropy: the run's id and seed derive from it.
     #[serde(default = "default_seed")]
     pub seed: u64,
@@ -138,7 +138,7 @@ fn default_seed() -> u64 {
     1
 }
 
-/// A tool's policy, where it differs from the default (`archi/04-tools.md`, "Policies").
+/// An action's policy, where it differs from the default (`archi/04-tools.md`, "Policies").
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Policy {
@@ -152,7 +152,7 @@ pub struct Policy {
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum ToolOrder {
+pub enum ActionOrder {
     #[default]
     Scheduled,
     Reversed,
@@ -185,11 +185,11 @@ pub enum Step {
     },
     /// Moves the virtual clock forward, such as `"2h"`.
     Advance(String),
-    /// The harness approves the call of this tool that waits for it.
+    /// The harness approves the call of this action that waits for it.
     Approve(String),
-    /// The harness rejects the call of this tool that waits for it.
+    /// The harness rejects the call of this action that waits for it.
     Reject {
-        tool: String,
+        action: String,
         #[serde(default)]
         message: Option<String>,
     },
@@ -199,9 +199,9 @@ pub enum Step {
     Credentials(BTreeMap<String, BTreeMap<String, String>>),
     /// Deletes the secret the run attached for this server.
     DeleteSecret(String),
-    /// The call of this tool waits for the harness, parked for this reason
+    /// The call of this action waits for the harness, parked for this reason
     /// (`credentials_refused`, `secret_missing`, `schema_changed`).
-    Parked { tool: String, reason: String },
+    Parked { action: String, reason: String },
 }
 
 /// What must be true once the run is driven. Everything not given is not checked.
@@ -218,21 +218,21 @@ pub struct Expect {
     pub error: Option<ExpectedError>,
     /// The host aborted the run.
     pub abort: Option<ExpectedAbort>,
-    /// How many times each tool was called.
+    /// How many times each action was called.
     pub calls: Option<BTreeMap<String, usize>>,
     /// The names of the journal's events, in order.
     pub events: Option<Vec<String>>,
     /// The signals the run is waiting for at the end.
     pub awaiting: Option<Vec<String>>,
-    /// How many times each tool really answered, across the case: a fork that reuses its
-    /// parent's results calls the tools fewer times than its journal schedules calls.
+    /// How many times each action really answered, across the case: a fork that reuses its
+    /// parent's results calls the actions fewer times than its journal schedules calls.
     pub dispatched: Option<BTreeMap<String, usize>>,
     /// The statuses of the runs of workflows the run started, in the order of its calls.
     pub children: Option<Vec<String>>,
-    /// How each call the tools answered authenticated, in order, across the case: the value of
+    /// How each call the actions answered authenticated, in order, across the case: the value of
     /// the secret it carried, `signed`, or `none`.
     pub auth: Option<Vec<String>>,
-    /// The idempotency keys of the calls the tools answered, in order, across the case; `{run}`
+    /// The idempotency keys of the calls the actions answered, in order, across the case; `{run}`
     /// stands for the recorded run's id.
     pub keys: Option<Vec<String>>,
 }

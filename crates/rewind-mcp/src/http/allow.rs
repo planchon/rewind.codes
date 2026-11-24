@@ -1,4 +1,4 @@
-//! The first step of the `http` tool's egress rules (`archi/04-tools.md`, "The http tool and
+//! The first step of the `http` action's egress rules (`archi/04-tools.md`, "The `http` action and
 //! egress"): the host must be in the action set's allow-list. The other steps, a name resolved
 //! once, private and metadata addresses refused, the connection to the checked address, are
 //! `rewind-outbound`'s [`Egress`](rewind_outbound::Egress), the client's only resolver.
@@ -8,8 +8,8 @@ use std::net::IpAddr;
 use rewind_outbound::{AddressPolicy, Refused, domain, is_subdomain};
 use url::{Host, Url};
 
-/// How the `http` tool ends the reason of a refusal.
-pub(crate) const HTTP_TOOL: &str = "the http tool does not reach it";
+/// How the `http` action ends the reason of a refusal.
+pub(crate) const HTTP_ACTION: &str = "the http action does not reach it";
 
 /// The hosts of an action set's allow-list: names (`api.example.com`), wildcards for the subdomains
 /// of a name (`*.example.com`, not `example.com` itself), or IP addresses.
@@ -70,12 +70,12 @@ impl AllowList {
 }
 
 /// Checks a URL before a request is sent to it: an http or https URL, a host in the allow-list,
-/// and for a host given as an address, an address the tool may reach. Hosts given as names are
+/// and for a host given as an address, an address the action may reach. Hosts given as names are
 /// checked by the client's resolver.
 pub(crate) fn check(url: &Url, allowed: &AllowList, policy: AddressPolicy) -> Result<(), Refused> {
     if !matches!(url.scheme(), "http" | "https") {
         return Err(Refused(format!(
-            "the http tool only sends http and https requests, not {}:",
+            "the http action only sends http and https requests, not {}:",
             url.scheme()
         )));
     }
@@ -84,7 +84,7 @@ pub(crate) fn check(url: &Url, allowed: &AllowList, policy: AddressPolicy) -> Re
     };
     if !allowed.allows(&host) {
         return Err(Refused(format!(
-            "{host} is not in the action set's allow-list of the http tool ({})",
+            "{host} is not in the action set's allow-list of the http action ({})",
             allowed.listed
         )));
     }
@@ -97,7 +97,7 @@ pub(crate) fn check(url: &Url, allowed: &AllowList, policy: AddressPolicy) -> Re
         && let Some(reason) = policy(address)
     {
         return Err(Refused(format!(
-            "{address} is a {reason} address: {HTTP_TOOL}"
+            "{address} is a {reason} address: {HTTP_ACTION}"
         )));
     }
     Ok(())
@@ -143,7 +143,7 @@ mod tests {
         .unwrap_err();
         assert_eq!(
             error.0,
-            "127.0.0.1 is a loopback address: the http tool does not reach it"
+            "127.0.0.1 is a loopback address: the http action does not reach it"
         );
         // The WHATWG parser reads every spelling of an address as that address.
         let decimal = check(
@@ -160,7 +160,7 @@ mod tests {
         .unwrap_err();
         assert_eq!(
             error.0,
-            "internal.example is not in the action set's allow-list of the http tool (127.0.0.1, localhost)"
+            "internal.example is not in the action set's allow-list of the http action (127.0.0.1, localhost)"
         );
     }
 }

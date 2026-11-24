@@ -10,9 +10,9 @@ mod support;
 use std::collections::{BTreeMap, BTreeSet};
 
 use rewind_core::{
-    AbortKind, AbortReason, ActionSet, Annotation, Callsite, CancelReason, Command, Completion,
-    Digest, Epoch, Event, HistoryEntry, Lifecycle, McpServer, McpTransport, RunMode, RunStarted,
-    RunStatus, ScriptError, Seed, Seq, Timestamp, Tool, ToolRoute,
+    AbortKind, AbortReason, Action, ActionRoute, ActionSet, Annotation, Callsite, CancelReason,
+    Command, Completion, Digest, Epoch, Event, HistoryEntry, Lifecycle, McpServer, McpTransport,
+    RunMode, RunStarted, RunStatus, ScriptError, Seed, Seq, Timestamp,
 };
 use rewind_engine::failures;
 use rewind_engine::plane::NodeConfig;
@@ -32,7 +32,7 @@ fn programs() -> FakeExecutor {
             run.call("a", json!({ "n": 1 }));
         },
         |run, delivery| match delivery {
-            Delivery::ToolCallCompleted { .. } => {
+            Delivery::CallCompleted { .. } => {
                 run.log("a answered");
                 run.await_signal("go");
             }
@@ -146,10 +146,10 @@ fn at_line(line: u32, column: u32) -> Option<Callsite> {
     Some(Callsite { line, column })
 }
 
-fn schedule(seq: u32, tool: &str, line: u32) -> Event {
-    Event::Command(Command::ScheduleToolCall {
+fn schedule(seq: u32, action: &str, line: u32) -> Event {
+    Event::Command(Command::ScheduleCall {
         seq: Seq(seq),
-        tool: tool.into(),
+        action: action.into(),
         args: json!({}).into(),
         callsite: at_line(line, 1),
     })
@@ -172,7 +172,7 @@ fn awaited(name: &str, timeout: Option<u32>, callsite: Option<Callsite>) -> Even
     })
 }
 
-/// `github.get_issue`, an MCP tool (behind an approval or not), and `ask_user`, a host tool.
+/// `github.get_issue`, an MCP action (behind an approval or not), and `ask_user`, a host tool.
 fn gated_action_set(approval: bool) -> ActionSet {
     let server = McpServer::new(
         "github",
@@ -180,15 +180,15 @@ fn gated_action_set(approval: bool) -> ActionSet {
             url: "https://mcp.example.com/github".into(),
         },
     );
-    let mut issue = Tool::new(
+    let mut issue = Action::new(
         "github.get_issue",
-        ToolRoute::Mcp {
+        ActionRoute::Mcp {
             server: "github".into(),
         },
         json!({}),
     );
     issue.policy.approval = approval;
-    let ask = Tool::new("ask_user", ToolRoute::Host { group: None }, json!({}));
+    let ask = Action::new("ask_user", ActionRoute::Host { group: None }, json!({}));
     ActionSet::new([server], [issue, ask]).unwrap()
 }
 

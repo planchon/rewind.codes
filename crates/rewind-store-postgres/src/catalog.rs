@@ -21,10 +21,11 @@ use std::num::NonZeroU16;
 use rewind_core::{ActionSet, Digest, PartitionId, RunId, Script, Timestamp, Workflow};
 use rewind_engine::ports::catalog::{NamespaceFilter, NamespacePage};
 use rewind_engine::ports::{
-    CatalogError, CatalogStore, CompiledScript, ControlPlaneChange, DeleteNamespace, DisplayName,
-    DropNamespace, Namespace, NamespaceName, NamespaceWrite, Quotas, RunRef, ScriptTitle, Secret,
-    StoredActionSet, StoredScript, StoredWorkflow, Subscription, TEST_DELETION_TIMEOUT, TEST_GRACE,
-    Tenant, TenantId, TestRecord, ToolDeclarations, WorkflowFilter, namespace_partition,
+    ActionDeclarations, CatalogError, CatalogStore, CompiledScript, ControlPlaneChange,
+    DeleteNamespace, DisplayName, DropNamespace, Namespace, NamespaceName, NamespaceWrite, Quotas,
+    RunRef, ScriptTitle, Secret, StoredActionSet, StoredScript, StoredWorkflow, Subscription,
+    TEST_DELETION_TIMEOUT, TEST_GRACE, Tenant, TenantId, TestRecord, WorkflowFilter,
+    namespace_partition,
 };
 use sqlx::postgres::PgRow;
 use sqlx::{PgConnection, PgPool};
@@ -143,7 +144,7 @@ fn action_set_from_row(
     }
     Ok(StoredActionSet {
         action_set,
-        declarations: ToolDeclarations {
+        declarations: ActionDeclarations {
             typescript: row.text(first + 1)?,
             prompt: row.text(first + 2)?,
         },
@@ -865,7 +866,7 @@ impl CatalogStore for PostgresCatalog {
         &self,
         tenant_id: &TenantId,
         action_set: &ActionSet,
-        declarations: &ToolDeclarations,
+        declarations: &ActionDeclarations,
     ) -> Result<(), CatalogError> {
         let mut tx = self.pool.begin().await.map_err(Error::from)?;
         let inserted = sqlx::query(

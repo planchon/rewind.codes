@@ -41,14 +41,14 @@ pub struct AssistantTurn {
     #[serde(default)]
     pub text: String,
     #[serde(default)]
-    pub calls: Vec<ToolCall>,
+    pub calls: Vec<Call>,
     /// The provider's raw content (`anthropic` content blocks, `openai` output items).
     #[serde(default, skip_serializing_if = "Value::is_null")]
     pub raw: Value,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ToolCall {
+pub struct Call {
     pub id: String,
     pub name: String,
     pub input: Value,

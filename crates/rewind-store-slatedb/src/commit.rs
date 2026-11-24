@@ -834,10 +834,10 @@ impl Apply<'_> {
             CounterDelta::Shape {
                 tenant,
                 namespace,
-                tool,
+                action,
                 shape,
             } => {
-                let at = keys::shape(&tenant, &namespace, &tool);
+                let at = keys::shape(&tenant, &namespace, &action);
                 let merged = match self.get::<record::Shape>(&at).await? {
                     Some(known) => known.shape.merge(shape),
                     None => shape,

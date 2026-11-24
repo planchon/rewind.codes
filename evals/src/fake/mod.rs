@@ -51,7 +51,7 @@ pub enum Reply {
     Json(Value),
     /// A result as `structuredContent` (and as text), for a tool with an output schema.
     Structured(Value),
-    /// `isError: true`: the tool reports a failure. The script gets a `ToolError` with this
+    /// `isError: true`: the tool reports a failure. The script gets an `ActionError` with this
     /// message, and `data` as its `data`.
     Error {
         message: String,
@@ -134,7 +134,7 @@ impl Outbox {
 
 /// The behavior of a fake server.
 pub trait Service: Send + Sync + 'static {
-    /// The server's name: the namespace of its tools in `rewind:tools`.
+    /// The server's name: the namespace of its tools in `rewind:actions`.
     fn name(&self) -> &'static str;
     fn tools(&self) -> Vec<ToolSpec>;
     /// Answers a call. The arguments were checked against the tool's input schema by the

@@ -12,19 +12,19 @@ use std::path::Path;
 use std::time::Duration;
 
 use rewind_core::{
-    Attachments, Builtin, Completion, Digest, Epoch, Event, Interruption, Lifecycle, Payload,
-    RunId, RunMode, RunStarted, SecretRef, Seed, Shape as CoreShape, Timestamp, ToolPolicy,
-    ToolRoute, WorkflowOp,
+    ActionPolicy, ActionRoute, Attachments, Builtin, Completion, Digest, Epoch, Event,
+    Interruption, Lifecycle, Payload, RunId, RunMode, RunStarted, SecretRef, Seed,
+    Shape as CoreShape, Timestamp, WorkflowOp,
 };
 use rewind_format::FormatError;
 use rewind_format::partition::{
-    Admission, Attribute, Callsite, Counters, CredentialsReason, Ending, Entry, FailureCounts,
-    FailureKind, ForkParent, Gauges, InboxItem, LatestRun, Level, Log, Metadata, Mode,
-    Organization, Outbox, ParkKind, PayloadValue, Projection, Quarantine, QuarantineKind,
+    ActionCounts, Admission, Attribute, Callsite, Counters, CredentialsReason, Ending, Entry,
+    FailureCounts, FailureKind, ForkParent, Gauges, InboxItem, LatestRun, Level, Log, Metadata,
+    Mode, Organization, Outbox, ParkKind, PayloadValue, Projection, Quarantine, QuarantineKind,
     QuarantineNote, QuotaAlert, QuotaKind, Record, RunCounts, RunHead, RunWorkflow, ScriptCounts,
     Shape, SignalKey, Sketch, Span, SpanKind, SpanStatus, StartKey, StartedBy, Status, Summary,
-    Task, TaskPhase, TaskState, Threshold, Timer, TimerKind, ToolCounts, TraceContext, Wait,
-    WaitKind, WaitingFor, Watcher, WebhookEvent, WebhookKind, WebhookToken, decode, encode,
+    Task, TaskPhase, TaskState, Threshold, Timer, TimerKind, TraceContext, Wait, WaitKind,
+    WaitingFor, Watcher, WebhookEvent, WebhookKind, WebhookToken, decode, encode,
 };
 use serde_json::json;
 
@@ -165,13 +165,13 @@ fn task() -> Task {
         run: run(1),
         seq: 2,
         action_set: digest("action_set"),
-        tool: "workflows.triage.start".into(),
-        route: ToolRoute::Builtin(Builtin::Workflow {
+        action: "workflows.triage.start".into(),
+        route: ActionRoute::Builtin(Builtin::Workflow {
             workflow: "triage".into(),
             op: WorkflowOp::Start,
         }),
         args: json!({ "input": { "issue": 7 } }).into(),
-        policy: ToolPolicy {
+        policy: ActionPolicy {
             on_interruption: Interruption::AtMostOnce,
             approval: true,
             execution_timeout: Some(Duration::from_secs(30)),
@@ -228,7 +228,7 @@ fn summary() -> Summary {
         started_at: Some(T0),
         ended_at: Some(T0 + 100),
         last_activity_at: T0 + 100,
-        tool_calls: 3,
+        calls: 3,
         errors: 1,
         history_len: 9,
         waits: Vec::new(),
@@ -245,7 +245,7 @@ fn summary() -> Summary {
             reason: "5 failures".into(),
             since: T0 + 90,
         }),
-        tools: BTreeSet::from(["github.close_issue".into()]),
+        actions: BTreeSet::from(["github.close_issue".into()]),
         call_errors: BTreeSet::from([FailureKind::Timeout]),
     }
 }
@@ -277,9 +277,9 @@ fn counters() -> Counters {
                 }],
             },
         )]),
-        tools: BTreeMap::from([(
+        actions: BTreeMap::from([(
             "github.close_issue".into(),
-            ToolCounts {
+            ActionCounts {
                 calls: 2,
                 completed: 1,
                 failed: 1,
@@ -292,7 +292,7 @@ fn counters() -> Counters {
             digest("script"),
             ScriptCounts {
                 runs,
-                tools: BTreeSet::from(["github.close_issue".into()]),
+                actions: BTreeSet::from(["github.close_issue".into()]),
                 first_started_at: Some(T0),
                 last_started_at: Some(T0 + 50),
             },
@@ -325,7 +325,7 @@ fn outbox_otel() -> Outbox {
                 trace_id: [0x0a; 16],
                 span_id: [0xb7; 8],
                 parent: Some([0x01; 8]),
-                name: "tool github.close_issue".into(),
+                name: "action github.close_issue".into(),
                 kind: SpanKind::Client,
                 start: T0,
                 end: T0 + 120,
@@ -337,7 +337,7 @@ fn outbox_otel() -> Outbox {
                     ("rewind.ratio".into(), Attribute::Float(0.5)),
                     ("rewind.infinite".into(), Attribute::Float(f64::INFINITY)),
                     ("rewind.retried".into(), Attribute::Bool(true)),
-                    ("rewind.tool".into(), Attribute::String("github".into())),
+                    ("rewind.action".into(), Attribute::String("github".into())),
                 ]),
             }],
             logs: vec![Log {
@@ -367,7 +367,7 @@ fn outbox_webhooks() -> Outbox {
                 occurred_at: T0 + 5,
                 kind: WebhookKind::CredentialsExpired {
                     seq: 2,
-                    tool: "github.close_issue".into(),
+                    action: "github.close_issue".into(),
                     message: "401".into(),
                     reason: CredentialsReason::Refused,
                     secret: Some(SecretRef::parse("org/github").unwrap()),
@@ -477,19 +477,19 @@ fn every_variant_round_trips() {
         },
     ];
     let routes = [
-        ToolRoute::Mcp {
+        ActionRoute::Mcp {
             server: "github".into(),
         },
-        ToolRoute::Api { api: "dax".into() },
-        ToolRoute::Host { group: None },
-        ToolRoute::Host {
+        ActionRoute::Api { api: "dax".into() },
+        ActionRoute::Host { group: None },
+        ActionRoute::Host {
             group: Some("ui".into()),
         },
-        ToolRoute::Builtin(Builtin::Webhook),
-        ToolRoute::Builtin(Builtin::Http {
+        ActionRoute::Builtin(Builtin::Webhook),
+        ActionRoute::Builtin(Builtin::Http {
             allowed_hosts: vec!["api.example.com".into()],
         }),
-        ToolRoute::Builtin(Builtin::Workflow {
+        ActionRoute::Builtin(Builtin::Workflow {
             workflow: "triage".into(),
             op: WorkflowOp::Signal,
         }),
@@ -546,14 +546,14 @@ fn every_variant_round_trips() {
             waiting_for: vec!["signal \"approval\"".into()],
         },
         WebhookKind::RunQuarantined { reason: "x".into() },
-        WebhookKind::ToolSchemaChanged {
+        WebhookKind::ActionSchemaChanged {
             seq: 1,
-            tool: "t".into(),
+            action: "t".into(),
             message: "m".into(),
         },
         WebhookKind::CredentialsExpired {
             seq: 1,
-            tool: "t".into(),
+            action: "t".into(),
             message: "m".into(),
             reason: CredentialsReason::Missing,
             secret: None,

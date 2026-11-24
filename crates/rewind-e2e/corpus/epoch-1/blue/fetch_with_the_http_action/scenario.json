@@ -1,0 +1,55 @@
+{
+  "description": "With the built-in http action, fetch exists: each request is a journaled call of the http action, sent by the dispatcher, in the args and result format of rewind-mcp's http action (a text body, or bytes in base64 with bodyEncoding), and its result becomes a Response. A status outside 2xx is a response, not a failure.",
+  "actions": {
+    "http": {
+      "$sequence": [
+        {
+          "status": 201,
+          "statusText": "Created",
+          "url": "https://api.example.com/v1/items",
+          "redirected": false,
+          "headers": [["content-type", "application/json"], ["location", "/v1/items/7"]],
+          "body": "{\"id\":7,\"name\":\"widget\"}"
+        },
+        {
+          "status": 404,
+          "statusText": "Not Found",
+          "url": "https://api.example.com/v1/items/404",
+          "redirected": false,
+          "headers": [["content-type", "text/plain"]],
+          "body": "no such item"
+        },
+        {
+          "status": 200,
+          "statusText": "OK",
+          "url": "https://api.example.com/logo.png",
+          "redirected": true,
+          "headers": [["content-type", "image/png"]],
+          "body": "iVBORw==",
+          "bodyEncoding": "base64"
+        },
+        {
+          "status": 204,
+          "statusText": "No Content",
+          "url": "https://api.example.com/v1/items/7/logo",
+          "redirected": false,
+          "headers": [],
+          "body": ""
+        }
+      ]
+    }
+  },
+  "http_hosts": ["api.example.com"],
+  "expect": {
+    "status": "completed",
+    "output": {
+      "created": [201, true, "/v1/items/7", 7],
+      "missing": [404, false, "Not Found", "no such item"],
+      "logo": ["image/png", true, [137, 80, 78, 71]],
+      "uploaded": [204, ""]
+    },
+    "calls": {
+      "http": 4
+    }
+  }
+}

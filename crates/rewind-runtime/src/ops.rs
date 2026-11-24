@@ -12,8 +12,8 @@ use chacha20::cipher::{KeyIvInit, StreamCipher};
 use deno_core::{OpState, extension, op2, v8};
 use deno_error::JsErrorBox;
 use rewind_core::{
-    ActionSet, Annotation, Builtin, Callsite, Command, LogLevel, Payload, RunId, ScriptError, Seed,
-    Seq, Timestamp, ToolRoute, WorkflowOp, parse_duration,
+    ActionRoute, ActionSet, Annotation, Builtin, Callsite, Command, LogLevel, Payload, RunId,
+    ScriptError, Seed, Seq, Timestamp, WorkflowOp, parse_duration,
 };
 use rewind_engine::ports::Emitted;
 use rewind_engine::schema::{Refused, Validator};
@@ -46,7 +46,7 @@ pub(crate) struct ExecState {
     math_random_state: [u32; 4],
     /// The keystream behind `crypto` (ChaCha20, RFC 8439), keyed by the seed.
     crypto: ChaCha20,
-    /// The validators of the tools called so far, compiled from their pinned input schemas.
+    /// The validators of the actions called so far, compiled from their pinned input schemas.
     validators: BTreeMap<String, Validator>,
     /// The validators of the pinned workflows' schemas used so far: by workflow, then
     /// `input`, `output` or `signal:<name>`.
@@ -99,8 +99,8 @@ impl ExecState {
             "runId": self.run_id.to_string(),
             "startedAt": self.started_at.as_millis(),
             "mathRandom": self.math_random_state,
-            "http": self.action_set.tools().iter().any(|tool| {
-                matches!(tool.route, ToolRoute::Builtin(Builtin::Http { .. }))
+            "http": self.action_set.actions().iter().any(|action| {
+                matches!(action.route, ActionRoute::Builtin(Builtin::Http { .. }))
             }),
             "maxElements": max_elements(self.heap_bytes),
         })
@@ -197,24 +197,26 @@ impl ExecState {
         self.emitted.push(Emitted::Annotation(annotation));
     }
 
-    /// Checks a call against the run's action set and the tool's pinned input schema
+    /// Checks a call against the run's action set and the action's pinned input schema
     /// (`archi/04-tools.md`, "Action sets and code generation"). The message is the `TypeError`
     /// the script sees at its call.
-    fn check_call(&mut self, tool: &str, args: &Value) -> Result<(), String> {
-        let Some(pinned) = self.action_set.tool(tool) else {
-            return Err(match tool {
+    fn check_call(&mut self, action: &str, args: &Value) -> Result<(), String> {
+        let Some(pinned) = self.action_set.action(action) else {
+            return Err(match action {
                 "webhook" => {
-                    "webhook() needs the built-in webhook tool, which this run's action set \
+                    "webhook() needs the built-in webhook action, which this run's action set \
                               does not have"
                         .to_owned()
                 }
-                "http" => "fetch() needs the built-in http tool, which this run's action set does \
+                "http" => {
+                    "fetch() needs the built-in http action, which this run's action set does \
                            not have"
-                    .to_owned(),
-                _ => format!("{tool} is not a tool of this run's action set"),
+                        .to_owned()
+                }
+                _ => format!("{action} is not an action of this run's action set"),
             });
         };
-        if let ToolRoute::Builtin(Builtin::Workflow { workflow, op }) = &pinned.route {
+        if let ActionRoute::Builtin(Builtin::Workflow { workflow, op }) = &pinned.route {
             let (workflow, op) = (workflow.clone(), *op);
             return match op {
                 WorkflowOp::Start => self.check_start(&workflow, args),
@@ -223,9 +225,9 @@ impl ExecState {
         }
         let validator = self
             .validators
-            .entry(tool.to_owned())
+            .entry(action.to_owned())
             .or_insert_with(|| Validator::compile(&pinned.input_schema));
-        check_args(validator, tool, args)
+        check_args(validator, action, args)
     }
 
     /// Checks a value against one schema of a pinned workflow: `input`, `output` or
@@ -406,16 +408,16 @@ fn size(bytes: usize) -> String {
     }
 }
 
-/// Checks a tool's args, as the `TypeError` the script sees at its call.
-fn check_args(validator: &Validator, tool: &str, args: &Value) -> Result<(), String> {
+/// Checks an action's args, as the `TypeError` the script sees at its call.
+fn check_args(validator: &Validator, action: &str, args: &Value) -> Result<(), String> {
     validator
         .check("args", args)
         .map_err(|refused| match refused {
             Refused::Unusable(error) => format!(
-                "the pinned input schema of {tool} cannot be used, so the call cannot be checked: \
+                "the pinned input schema of {action} cannot be used, so the call cannot be checked: \
              {error}"
             ),
-            Refused::Invalid(problems) => format!("invalid arguments for {tool}: {problems}"),
+            Refused::Invalid(problems) => format!("invalid arguments for {action}: {problems}"),
         })
 }
 
@@ -464,29 +466,29 @@ fn op_rewind_random_fill(state: &mut OpState, #[buffer] bytes: &mut [u8]) {
         .apply_keystream(bytes);
 }
 
-/// Records a tool call, once its arguments match the tool's pinned input schema. A call that
+/// Records a call, once its arguments match the action's pinned input schema. A call that
 /// does not is refused with a `TypeError`, and nothing is recorded.
 #[op2(fast)]
-fn op_rewind_call_tool(
+fn op_rewind_call_action(
     state: &mut OpState,
-    #[string] tool: &str,
+    #[string] action: &str,
     #[string] args: &str,
     line: u32,
     column: u32,
 ) -> Result<u32, JsErrorBox> {
     let state = state.borrow_mut::<ExecState>();
     // Before parsing: the arguments as values take more memory than as text.
-    if !state.admit(tool.len().saturating_add(args.len())) {
+    if !state.admit(action.len().saturating_add(args.len())) {
         return Err(over_bound());
     }
     let args = parse_json(args, "the arguments")?;
     state
-        .check_call(tool, &args)
+        .check_call(action, &args)
         .map_err(JsErrorBox::type_error)?;
     let seq = state.take_seq()?;
-    state.command(Command::ScheduleToolCall {
+    state.command(Command::ScheduleCall {
         seq,
-        tool: tool.to_owned(),
+        action: action.to_owned(),
         args: Payload::Value(args),
         callsite: callsite(line, column),
     });
@@ -632,7 +634,7 @@ extension!(
         op_rewind_heap_exceeded,
         op_rewind_now,
         op_rewind_random_fill,
-        op_rewind_call_tool,
+        op_rewind_call_action,
         op_rewind_check_workflow_output,
         op_rewind_start_timer,
         op_rewind_cancel_timer,
@@ -660,7 +662,7 @@ pub(crate) fn extensions() -> Vec<deno_core::Extension> {
 
 #[cfg(test)]
 mod tests {
-    use rewind_core::{Tool, ToolRoute};
+    use rewind_core::{Action, ActionRoute};
 
     use super::*;
 
@@ -709,14 +711,14 @@ mod tests {
     }
 
     fn state_with(schema: Value) -> ExecState {
-        let tool = Tool::new(
+        let action = Action::new(
             "github.list_issues",
-            ToolRoute::Host {
+            ActionRoute::Host {
                 group: Some("github".into()),
             },
             schema,
         );
-        let action_set = ActionSet::new([], [tool]).unwrap();
+        let action_set = ActionSet::new([], [action]).unwrap();
         ExecState::new(
             RunId::from_u128(1),
             &Seed::from_bytes([0; 32]),
@@ -738,14 +740,14 @@ mod tests {
             "required": ["repo"],
             "additionalProperties": false,
         }));
-        let tool = "github.list_issues";
+        let action = "github.list_issues";
         assert_eq!(
-            state.check_call(tool, &json!({ "repo": "acme/api" })),
+            state.check_call(action, &json!({ "repo": "acme/api" })),
             Ok(())
         );
         assert_eq!(
             state.check_call(
-                tool,
+                action,
                 &json!({ "repo": 42, "state": "all", "labels": ["x", 1], "a-b": 1.5 })
             ),
             Err(
@@ -756,7 +758,7 @@ mod tests {
             )
         );
         assert_eq!(
-            state.check_call(tool, &json!({})),
+            state.check_call(action, &json!({})),
             Err(
                 "invalid arguments for github.list_issues: args: \"repo\" is a required property"
                     .into()
@@ -764,13 +766,13 @@ mod tests {
         );
         assert_eq!(
             state.check_call("slack.post", &json!({})),
-            Err("slack.post is not a tool of this run's action set".into())
+            Err("slack.post is not an action of this run's action set".into())
         );
         assert!(
             state
                 .check_call("webhook", &json!({ "name": "x" }))
                 .unwrap_err()
-                .starts_with("webhook() needs the built-in webhook tool")
+                .starts_with("webhook() needs the built-in webhook action")
         );
     }
 

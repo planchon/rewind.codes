@@ -89,8 +89,8 @@ pub enum WebhookEventType {
     RunSuspended,
     #[serde(rename = "run.quarantined")]
     RunQuarantined,
-    #[serde(rename = "tool.schema_changed")]
-    ToolSchemaChanged,
+    #[serde(rename = "action.schema_changed")]
+    ActionSchemaChanged,
     #[serde(rename = "credentials.expired")]
     CredentialsExpired,
     #[serde(rename = "quota.alert")]
@@ -105,7 +105,7 @@ impl WebhookEventType {
         WebhookEventType::RunAborted,
         WebhookEventType::RunSuspended,
         WebhookEventType::RunQuarantined,
-        WebhookEventType::ToolSchemaChanged,
+        WebhookEventType::ActionSchemaChanged,
         WebhookEventType::CredentialsExpired,
         WebhookEventType::QuotaAlert,
     ];
@@ -118,7 +118,7 @@ impl WebhookEventType {
             WebhookEventType::RunAborted => "run.aborted",
             WebhookEventType::RunSuspended => "run.suspended",
             WebhookEventType::RunQuarantined => "run.quarantined",
-            WebhookEventType::ToolSchemaChanged => "tool.schema_changed",
+            WebhookEventType::ActionSchemaChanged => "action.schema_changed",
             WebhookEventType::CredentialsExpired => "credentials.expired",
             WebhookEventType::QuotaAlert => "quota.alert",
         }
@@ -160,7 +160,7 @@ pub enum WebhookEvent {
         timestamp: Timestamp,
         data: RunEvent,
     },
-    /// An activation left the run waiting for something other than its tool calls in flight:
+    /// An activation left the run waiting for something other than its calls in flight:
     /// a signal, a timer, or a task that waits for the harness. `data.run.waitingFor` says
     /// what.
     #[serde(rename = "run.suspended")]
@@ -174,11 +174,11 @@ pub enum WebhookEvent {
         timestamp: Timestamp,
         data: RunEvent,
     },
-    /// A call was parked because the server's schema of the tool changed during the run.
-    #[serde(rename = "tool.schema_changed")]
-    ToolSchemaChanged {
+    /// A call was parked because the server's schema of the action changed during the run.
+    #[serde(rename = "action.schema_changed")]
+    ActionSchemaChanged {
         timestamp: Timestamp,
-        data: ToolSchemaChanged,
+        data: ActionSchemaChanged,
     },
     /// A call was parked because the server refused the secret or the signature (401), or
     /// because the secret the run attached no longer exists.
@@ -206,7 +206,7 @@ impl WebhookEvent {
             WebhookEvent::RunAborted { .. } => WebhookEventType::RunAborted,
             WebhookEvent::RunSuspended { .. } => WebhookEventType::RunSuspended,
             WebhookEvent::RunQuarantined { .. } => WebhookEventType::RunQuarantined,
-            WebhookEvent::ToolSchemaChanged { .. } => WebhookEventType::ToolSchemaChanged,
+            WebhookEvent::ActionSchemaChanged { .. } => WebhookEventType::ActionSchemaChanged,
             WebhookEvent::CredentialsExpired { .. } => WebhookEventType::CredentialsExpired,
             WebhookEvent::QuotaAlert { .. } => WebhookEventType::QuotaAlert,
         }
@@ -220,7 +220,7 @@ impl WebhookEvent {
             | WebhookEvent::RunAborted { timestamp, .. }
             | WebhookEvent::RunSuspended { timestamp, .. }
             | WebhookEvent::RunQuarantined { timestamp, .. }
-            | WebhookEvent::ToolSchemaChanged { timestamp, .. }
+            | WebhookEvent::ActionSchemaChanged { timestamp, .. }
             | WebhookEvent::CredentialsExpired { timestamp, .. }
             | WebhookEvent::QuotaAlert { timestamp, .. } => *timestamp,
         }
@@ -234,26 +234,26 @@ pub struct RunEvent {
     pub run: Run,
 }
 
-/// A call parked because the tool no longer matches its pinned schema
+/// A call parked because the action no longer matches its pinned schema
 /// (`archi/04-tools.md`, "When an action set changes during a run"). Approve the task to continue
 /// against the new schema, reject it, fork the run, or cancel it. The pinned schema is in the
 /// action set; `message` says what changed.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct ToolSchemaChanged {
+pub struct ActionSchemaChanged {
     pub run_id: String,
     pub namespace: NamespaceName,
     pub labels: Labels,
     /// For `POST /v1/tasks/{id}/approve` and `/reject`.
     pub task_id: String,
     pub seq: u32,
-    pub tool: String,
-    /// The tool's MCP server.
+    pub action: String,
+    /// The action's MCP server.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub server: Option<String>,
     /// The run's action set, where the pinned schema is.
     pub action_set: String,
-    /// What changed, as the dispatcher saw it: the tool is gone, its input schema refuses the
+    /// What changed, as the dispatcher saw it: the action is gone, its input schema refuses the
     /// call's arguments, or its output schema changed. Written for the harness developer and
     /// the model.
     pub message: String,
@@ -272,8 +272,8 @@ pub struct CredentialsExpired {
     pub labels: Labels,
     pub task_id: String,
     pub seq: u32,
-    pub tool: String,
-    /// The tool's MCP server or API.
+    pub action: String,
+    /// The action's MCP server or API.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub server: Option<String>,
     pub action_set: String,
@@ -448,7 +448,7 @@ mod tests {
             "timestamp": "2026-11-09T10:02:11Z",
             "data": {
                 "runId": "r1", "namespace": "alice", "labels": {}, "taskId": "t1", "seq": 2,
-                "tool": "github.list_issues",
+                "action": "github.list_issues",
                 "server": "github", "actionSet": "ab", "reason": "refused", "secret": "ns/github",
                 "message": "401 Unauthorized"
             }

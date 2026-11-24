@@ -5,13 +5,13 @@
 //! - [`RunState`]: the state of a run, a pure function of its history.
 //! - [`ReplayCursor`]: the determinism check (`archi/03-execution.md`, "Replay").
 //! - [`Script`] and [`ActionSet`]: the immutable, content-addressed inputs of a run. The action set
-//!   is pinned: its servers and APIs with how each authenticates ([`ToolAuth`]), and for each
-//!   tool its route, schemas and policy.
+//!   is pinned: its servers and APIs with how each authenticates ([`ActionAuth`]), and for each
+//!   action its route, schemas and policy.
 //! - [`SecretRef`] and [`Attachments`]: the secrets a run or a workflow version attaches, by
 //!   name, never by value (`archi/04-tools.md`, "Secrets").
 //! - [`JournalDocument`]: a run's journal with its script and action set, replayable on its own.
 //! - [`Cassette`]: the mocks recorded from a run, derived from its history.
-//! - [`Shape`]: the type of a tool's results, as observed in journals.
+//! - [`Shape`]: the type of an action's results, as observed in journals.
 //! - [`RunId`] and [`PartitionId`]: a run id names the partition its run lives in.
 //! - [`Workflow`]: a script with a name and a typed interface, that scripts start and signal;
 //!   [`RunEnd`], how a run's end reaches the runs that watch it; its [`Suite`] of tests.
@@ -47,8 +47,8 @@ mod time;
 mod workflow;
 
 pub use action_set::{
-    ActionSet, ActionSetError, Api, ApiOperation, ApiParameter, Builtin, HttpMethod, Interruption,
-    McpServer, McpTransport, ParameterLocation, RESERVED_WORDS, Tool, ToolPolicy, ToolRoute,
+    Action, ActionPolicy, ActionRoute, ActionSet, ActionSetError, Api, ApiOperation, ApiParameter,
+    Builtin, HttpMethod, Interruption, McpServer, McpTransport, ParameterLocation, RESERVED_WORDS,
 };
 pub use artifacts::Script;
 pub use canonical::{canonical_json, canonicalize};
@@ -56,9 +56,9 @@ pub use cassette::{Cassette, CassetteError, Matching, RecordedCall, RecordedSign
 pub use digest::{Digest, InvalidDigest};
 pub use doc::{MAX_DESCRIPTION_CHARS, MAX_TITLE_CHARS, ScriptDoc, script_doc};
 pub use event::{
-    AbortKind, AbortReason, Annotation, Callsite, CancelReason, Command, Completion, Event,
-    HistoryEntry, Lifecycle, LogLevel, RunMode, RunStarted, ScriptError, ToolFailure,
-    ToolFailureKind, ToolOutcome,
+    AbortKind, AbortReason, ActionFailure, ActionFailureKind, ActionOutcome, Annotation, Callsite,
+    CancelReason, Command, Completion, Event, HistoryEntry, Lifecycle, LogLevel, RunMode,
+    RunStarted, ScriptError,
 };
 pub use handle::{
     InvalidRunHandle, MAX_ORIGIN_LEN, MAX_SUFFIX_LEN, RunHandle, SCRIPT_ORIGIN, SUFFIX_LEN,
@@ -70,22 +70,22 @@ pub use journal::{JournalDocument, JournalError};
 pub use payload::Payload;
 pub use replay::{Next, NonDeterminism, ReplayCursor, Replayed};
 pub use secret::{
-    Attachments, InvalidSecretName, InvalidSecretRef, MAX_SECRET_VALUE_BYTES, RESERVED_HEADERS,
-    SECRET_PLACEHOLDER, SecretEncoding, SecretName, SecretPlacement, SecretRef, SecretScope,
-    ToolAuth,
+    ActionAuth, Attachments, InvalidSecretName, InvalidSecretRef, MAX_SECRET_VALUE_BYTES,
+    RESERVED_HEADERS, SECRET_PLACEHOLDER, SecretEncoding, SecretName, SecretPlacement, SecretRef,
+    SecretScope,
 };
 pub use shape::{Field, Shape};
 pub use state::{AwaitedSignal, RunOutcome, RunState, RunStatus};
 pub use test::{
-    CallOrder, Expectations, ExpectedCall, ExpectedError, InvalidTest, Observed, ObservedCall,
-    PathStep, RecordError, RunPath, SignalWhen, StepKind, Test, TestOrigin, TestSignal, ToolRule,
-    World, contains,
+    ActionRule, CallOrder, Expectations, ExpectedCall, ExpectedError, InvalidTest, Observed,
+    ObservedCall, PathStep, RecordError, RunPath, SignalWhen, StepKind, Test, TestOrigin,
+    TestSignal, World, contains,
 };
 pub use time::{DurationError, Timestamp, parse_duration};
 pub use workflow::{
     ERASED_TEST_REASON, InvalidWorkflow, PinnedWorkflow, RESERVED_SIGNAL_PREFIX, RetiredTest,
-    RunEnd, Suite, SuiteTest, UpdatedTest, WORKFLOWS_NAMESPACE, Workflow, WorkflowOp,
-    WorkflowSchemas, end_signal_name, ended_run, is_reserved_signal, starter_ended,
+    RunEnd, Suite, SuiteTest, UpdatedTest, WORKFLOWS_GROUP, Workflow, WorkflowOp, WorkflowSchemas,
+    end_signal_name, ended_run, is_reserved_signal, starter_ended,
 };
 
 /// The JSON value type carried by payloads.

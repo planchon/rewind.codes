@@ -3,7 +3,7 @@
 //!
 //! ```json
 //! {"servers":[{"concurrency":8,"name":"github","transport":{"type":"http","url":"https://…"}}],
-//!  "tools":[{"name":"github.list_issues","route":{"type":"mcp","server":"github"},
+//!  "actions":[{"name":"github.list_issues","route":{"type":"mcp","server":"github"},
 //!            "description":"List the issues","schemas":{"input":{…},"output":{…}},
 //!            "policy":{"approval":false,"concurrency":16,"execution_timeout_ms":300000,
 //!                      "heartbeat_timeout_ms":60000,"on_interruption":"retry"}}],
@@ -28,10 +28,10 @@
 //! `{"type":"secret","env":"GITHUB_TOKEN"}`. Never a value.
 //!
 //! An action set with APIs has `"apis":[{"base_url":"https://api.example.com","concurrency":8,
-//! "name":"dax","auth":…}]`; one without has no `apis`. An API tool's route is
+//! "name":"dax","auth":…}]`; one without has no `apis`. An API action's route is
 //! `{"type":"api","api":"dax"}`, and it has an `"operation":{"body":true,
 //! "idempotency_key":false,"method":"post","parameters":[{"in":"path","name":"id"}],
-//! "path":"/measures/{id}"}`; no other tool has one.
+//! "path":"/measures/{id}"}`; no other action has one.
 //!
 //! The workflow version document (the `workflows` table) is
 //! `{"description":…,"labels":{"env":"dev"},"name":"triage","schemas":{…},"script":"<sha-256>",
@@ -45,10 +45,10 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use rewind_core::{
-    ActionSet, Api, ApiOperation, ApiParameter, Attachments, Builtin, Digest, HttpMethod,
-    Interruption, McpServer, McpTransport, ParameterLocation, PinnedWorkflow, RetiredTest,
-    SecretEncoding, SecretPlacement, SecretRef, Suite, SuiteTest, Tool, ToolAuth, ToolPolicy,
-    ToolRoute, UpdatedTest, Workflow, WorkflowSchemas,
+    Action, ActionAuth, ActionPolicy, ActionRoute, ActionSet, Api, ApiOperation, ApiParameter,
+    Attachments, Builtin, Digest, HttpMethod, Interruption, McpServer, McpTransport,
+    ParameterLocation, PinnedWorkflow, RetiredTest, SecretEncoding, SecretPlacement, SecretRef,
+    Suite, SuiteTest, UpdatedTest, Workflow, WorkflowSchemas,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -59,7 +59,7 @@ struct ActionSetV1 {
     servers: Vec<ServerV1>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     apis: Vec<ApiV1>,
-    tools: Vec<ToolV1>,
+    actions: Vec<ActionV1>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     workflows: Vec<PinnedWorkflowV1>,
 }
@@ -230,7 +230,7 @@ enum TransportV1 {
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct ToolV1 {
+struct ActionV1 {
     name: String,
     route: RouteV1,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -299,7 +299,7 @@ pub(crate) fn action_set_document(action_set: &ActionSet) -> Value {
     let dto = ActionSetV1 {
         servers: action_set.servers().iter().map(server_dto).collect(),
         apis: action_set.apis().iter().map(api_dto).collect(),
-        tools: action_set.tools().iter().map(tool_dto).collect(),
+        actions: action_set.actions().iter().map(action_dto).collect(),
         workflows: action_set.workflows().iter().map(pinned_dto).collect(),
     };
     let mut document = serde_json::to_value(dto).expect("action set DTOs always serialize");
@@ -343,11 +343,11 @@ pub(crate) fn decode_action_set(document: Value) -> Result<ActionSet, String> {
             })
         })
         .collect::<Result<Vec<Api>, String>>()?;
-    let tools = dto
-        .tools
+    let actions = dto
+        .actions
         .into_iter()
-        .map(tool_from_dto)
-        .collect::<Result<Vec<Tool>, String>>()?;
+        .map(action_from_dto)
+        .collect::<Result<Vec<Action>, String>>()?;
     let workflows = dto
         .workflows
         .into_iter()
@@ -360,7 +360,7 @@ pub(crate) fn decode_action_set(document: Value) -> Result<ActionSet, String> {
             })
         })
         .collect::<Result<Vec<PinnedWorkflow>, String>>()?;
-    ActionSet::from_parts(servers, apis, tools)
+    ActionSet::from_parts(servers, apis, actions)
         .and_then(|action_set| action_set.with_workflows(workflows))
         .map_err(|err| err.to_string())
 }
@@ -534,11 +534,11 @@ fn api_dto(api: &Api) -> ApiV1 {
     }
 }
 
-fn auth_dto(auth: &ToolAuth) -> Option<AuthV1> {
+fn auth_dto(auth: &ActionAuth) -> Option<AuthV1> {
     Some(match auth {
-        ToolAuth::None => return None,
-        ToolAuth::Rewind => AuthV1::Rewind {},
-        ToolAuth::Secret(SecretPlacement::Header {
+        ActionAuth::None => return None,
+        ActionAuth::Rewind => AuthV1::Rewind {},
+        ActionAuth::Secret(SecretPlacement::Header {
             name,
             format,
             encoding,
@@ -551,7 +551,7 @@ fn auth_dto(auth: &ToolAuth) -> Option<AuthV1> {
             },
             env: None,
         },
-        ToolAuth::Secret(SecretPlacement::Env { variable }) => AuthV1::Secret {
+        ActionAuth::Secret(SecretPlacement::Env { variable }) => AuthV1::Secret {
             header: None,
             format: None,
             encoding: None,
@@ -560,16 +560,16 @@ fn auth_dto(auth: &ToolAuth) -> Option<AuthV1> {
     })
 }
 
-fn auth_from_dto(dto: Option<AuthV1>) -> Result<ToolAuth, String> {
+fn auth_from_dto(dto: Option<AuthV1>) -> Result<ActionAuth, String> {
     Ok(match dto {
-        None => ToolAuth::None,
-        Some(AuthV1::Rewind {}) => ToolAuth::Rewind,
+        None => ActionAuth::None,
+        Some(AuthV1::Rewind {}) => ActionAuth::Rewind,
         Some(AuthV1::Secret {
             header: Some(name),
             format,
             encoding,
             env: None,
-        }) => ToolAuth::Secret(SecretPlacement::Header {
+        }) => ActionAuth::Secret(SecretPlacement::Header {
             name,
             format,
             encoding: match encoding {
@@ -582,7 +582,7 @@ fn auth_from_dto(dto: Option<AuthV1>) -> Result<ToolAuth, String> {
             format: None,
             encoding: None,
             env: Some(variable),
-        }) => ToolAuth::Secret(SecretPlacement::Env { variable }),
+        }) => ActionAuth::Secret(SecretPlacement::Env { variable }),
         Some(AuthV1::Secret { .. }) => {
             return Err(
                 "a secret's auth has either a \"header\" (with an optional \"format\" and \
@@ -653,45 +653,45 @@ fn operation_from_dto(dto: OperationV1) -> ApiOperation {
     }
 }
 
-fn tool_dto(tool: &Tool) -> ToolV1 {
-    let route = match &tool.route {
-        ToolRoute::Mcp { server } => RouteV1::Mcp {
+fn action_dto(action: &Action) -> ActionV1 {
+    let route = match &action.route {
+        ActionRoute::Mcp { server } => RouteV1::Mcp {
             server: server.clone(),
         },
-        ToolRoute::Api { api } => RouteV1::Api { api: api.clone() },
-        ToolRoute::Host { group } => RouteV1::Host {
+        ActionRoute::Api { api } => RouteV1::Api { api: api.clone() },
+        ActionRoute::Host { group } => RouteV1::Host {
             group: group.clone(),
         },
-        ToolRoute::Builtin(Builtin::Http { allowed_hosts }) => RouteV1::Builtin {
+        ActionRoute::Builtin(Builtin::Http { allowed_hosts }) => RouteV1::Builtin {
             builtin: BuiltinV1::Http,
             allowed_hosts: Some(allowed_hosts.clone()),
         },
-        ToolRoute::Builtin(Builtin::Webhook) => RouteV1::Builtin {
+        ActionRoute::Builtin(Builtin::Webhook) => RouteV1::Builtin {
             builtin: BuiltinV1::Webhook,
             allowed_hosts: None,
         },
-        ToolRoute::Builtin(Builtin::Workflow { .. }) => {
+        ActionRoute::Builtin(Builtin::Workflow { .. }) => {
             unreachable!(
                 "an action set declares no workflow built-in: they come from its workflows"
             )
         }
     };
-    let policy = &tool.policy;
-    ToolV1 {
-        name: tool.name.clone(),
+    let policy = &action.policy;
+    ActionV1 {
+        name: action.name.clone(),
         route,
-        operation: tool.operation.as_ref().map(operation_dto),
-        description: tool.description.clone(),
+        operation: action.operation.as_ref().map(operation_dto),
+        description: action.description.clone(),
         schemas: SchemasV1 {
-            input: tool.input_schema.clone(),
-            output: tool.output_schema.clone(),
+            input: action.input_schema.clone(),
+            output: action.output_schema.clone(),
         },
         policy: policy_dto(policy),
     }
 }
 
-/// A tool's policy as the action set document and a tool task write it.
-pub(crate) fn policy_dto(policy: &ToolPolicy) -> PolicyV1 {
+/// An action's policy as the action set document and a call's task write it.
+pub(crate) fn policy_dto(policy: &ActionPolicy) -> PolicyV1 {
     PolicyV1 {
         on_interruption: match policy.on_interruption {
             Interruption::Retry => InterruptionV1::Retry,
@@ -704,8 +704,8 @@ pub(crate) fn policy_dto(policy: &ToolPolicy) -> PolicyV1 {
     }
 }
 
-pub(crate) fn policy_from_dto(policy: PolicyV1) -> ToolPolicy {
-    ToolPolicy {
+pub(crate) fn policy_from_dto(policy: PolicyV1) -> ActionPolicy {
+    ActionPolicy {
         on_interruption: match policy.on_interruption {
             InterruptionV1::Retry => Interruption::Retry,
             InterruptionV1::AtMostOnce => Interruption::AtMostOnce,
@@ -717,39 +717,39 @@ pub(crate) fn policy_from_dto(policy: PolicyV1) -> ToolPolicy {
     }
 }
 
-fn tool_from_dto(dto: ToolV1) -> Result<Tool, String> {
+fn action_from_dto(dto: ActionV1) -> Result<Action, String> {
     let route = match dto.route {
-        RouteV1::Mcp { server } => ToolRoute::Mcp { server },
-        RouteV1::Api { api } => ToolRoute::Api { api },
-        RouteV1::Host { group } => ToolRoute::Host { group },
+        RouteV1::Mcp { server } => ActionRoute::Mcp { server },
+        RouteV1::Api { api } => ActionRoute::Api { api },
+        RouteV1::Host { group } => ActionRoute::Host { group },
         RouteV1::Builtin {
             builtin: BuiltinV1::Http,
             allowed_hosts: Some(allowed_hosts),
-        } => ToolRoute::Builtin(Builtin::Http { allowed_hosts }),
+        } => ActionRoute::Builtin(Builtin::Http { allowed_hosts }),
         RouteV1::Builtin {
             builtin: BuiltinV1::Http,
             allowed_hosts: None,
         } => {
             return Err(format!(
-                "tool {:?}: the http built-in needs \"allowed_hosts\"",
+                "action {:?}: the http built-in needs \"allowed_hosts\"",
                 dto.name
             ));
         }
         RouteV1::Builtin {
             builtin: BuiltinV1::Webhook,
             allowed_hosts: None,
-        } => ToolRoute::Builtin(Builtin::Webhook),
+        } => ActionRoute::Builtin(Builtin::Webhook),
         RouteV1::Builtin {
             builtin: BuiltinV1::Webhook,
             allowed_hosts: Some(_),
         } => {
             return Err(format!(
-                "tool {:?}: the webhook built-in takes no \"allowed_hosts\"",
+                "action {:?}: the webhook built-in takes no \"allowed_hosts\"",
                 dto.name
             ));
         }
     };
-    Ok(Tool {
+    Ok(Action {
         name: dto.name,
         route,
         operation: dto.operation.map(operation_from_dto),

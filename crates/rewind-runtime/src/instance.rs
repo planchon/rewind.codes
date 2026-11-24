@@ -31,7 +31,7 @@ impl Instance {
             glue,
             start.compiled.javascript.clone(),
             start.compiled.source_map.clone().into_bytes(),
-            (glue.tools)(&start.action_set),
+            (glue.actions)(&start.action_set),
             (glue.workflows)(&start.action_set),
         ));
         let state = ExecState::new(
@@ -136,16 +136,16 @@ impl Instance {
 /// The JS ↔ Rust encoding of a delivery: internal to the sandbox, shaped for the glue.
 fn delivery_json(delivery: &Delivery) -> String {
     let value = match delivery {
-        Delivery::ToolCallCompleted { seq, result } => json!({
-            "type": "tool_call_completed",
+        Delivery::CallCompleted { seq, result } => json!({
+            "type": "call_completed",
             "seq": seq.0,
             "result": result,
         }),
-        Delivery::ToolCallFailed { seq, error } => json!({
-            "type": "tool_call_failed",
+        Delivery::CallFailed { seq, error } => json!({
+            "type": "call_failed",
             "seq": seq.0,
             "message": error.message,
-            "outcomeUnknown": error.kind == rewind_core::ToolFailureKind::OutcomeUnknown,
+            "outcomeUnknown": error.kind == rewind_core::ActionFailureKind::OutcomeUnknown,
             "data": error.data,
         }),
         Delivery::TimerFired { seq } => json!({ "type": "timer_fired", "seq": seq.0 }),

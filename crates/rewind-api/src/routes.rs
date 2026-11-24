@@ -48,7 +48,7 @@ pub const HOOK: &str = "/hooks/{token}";
 pub const SUBSCRIPTIONS: &str = "/v1/subscriptions";
 pub const SUBSCRIPTION: &str = "/v1/subscriptions/{id}";
 
-pub const TOOL_STATS: &str = "/v1/tools/stats";
+pub const ACTION_STATS: &str = "/v1/actions/stats";
 pub const PAYLOAD: &str = "/v1/payloads/{digest}";
 
 pub const WHOAMI: &str = "/v1/whoami";
@@ -166,7 +166,7 @@ pub const OPERATIONS: [(&str, &str); 114] = [
     ("POST", SUBSCRIPTIONS),
     ("GET", SUBSCRIPTIONS),
     ("DELETE", SUBSCRIPTION),
-    ("GET", TOOL_STATS),
+    ("GET", ACTION_STATS),
     ("GET", PAYLOAD),
     ("GET", WHOAMI),
     ("POST", ORGANIZATIONS),

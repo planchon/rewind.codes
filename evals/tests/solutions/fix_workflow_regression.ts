@@ -1,4 +1,4 @@
-import { shipping } from "rewind:tools";
+import { shipping } from "rewind:actions";
 
 export default async function main(input: { orders: string[] }) {
   const labels = await Promise.all(

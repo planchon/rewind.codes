@@ -1,15 +1,15 @@
-use rewind_core::{ToolFailure, ToolFailureKind, ToolRoute};
+use rewind_core::{ActionFailure, ActionFailureKind, ActionRoute};
 
-use crate::ports::{CallAuth, Dispatched, ToolCall, ToolDispatcher};
+use crate::ports::{ActionDispatcher, Call, CallAuth, Dispatched};
 
 /// Sends each call to the dispatcher of its route, so that a composition root plugs a real
 /// adapter or a mock per route (`archi/04-tools.md`, "Routes"):
 ///
 /// | Route | Dispatcher |
 /// | --- | --- |
-/// | MCP tools | `mcp`: `rewind-mcp`, or mocks |
-/// | API tools | `api`: `rewind-openapi`'s `ApiDispatcher`, or mocks |
-/// | Built-ins (`http`, and `webhook` in mock mode: the engine answers it for live runs) | `builtins`: `rewind-mcp`'s `HttpTool`, or mocks |
+/// | MCP actions | `mcp`: `rewind-mcp`, or mocks |
+/// | API actions | `api`: `rewind-openapi`'s `ApiDispatcher`, or mocks |
+/// | Built-ins (`http`, and `webhook` in mock mode: the engine answers it for live runs) | `builtins`: `rewind-mcp`'s `HttpAction`, or mocks |
 /// | Host tools | `host`: mocks, in mock mode only. Outside it, host tools are handed to the SDK workers' streams and never dispatched |
 ///
 /// [`Unrouted`] stands for a route without a dispatcher. A call's [`CallAuth`] goes only to the
@@ -33,19 +33,19 @@ impl<M, A, B, H> RoutingDispatcher<M, A, B, H> {
     }
 }
 
-impl<M, A, B, H> ToolDispatcher for RoutingDispatcher<M, A, B, H>
+impl<M, A, B, H> ActionDispatcher for RoutingDispatcher<M, A, B, H>
 where
-    M: ToolDispatcher,
-    A: ToolDispatcher,
-    B: ToolDispatcher,
-    H: ToolDispatcher,
+    M: ActionDispatcher,
+    A: ActionDispatcher,
+    B: ActionDispatcher,
+    H: ActionDispatcher,
 {
-    async fn dispatch(&self, call: ToolCall, auth: CallAuth) -> Dispatched {
-        match call.tool.route {
-            ToolRoute::Mcp { .. } => self.mcp.dispatch(call, auth).await,
-            ToolRoute::Api { .. } => self.api.dispatch(call, auth).await,
-            ToolRoute::Builtin(_) => self.builtins.dispatch(call, auth).await,
-            ToolRoute::Host { .. } => self.host.dispatch(call, auth).await,
+    async fn dispatch(&self, call: Call, auth: CallAuth) -> Dispatched {
+        match call.action.route {
+            ActionRoute::Mcp { .. } => self.mcp.dispatch(call, auth).await,
+            ActionRoute::Api { .. } => self.api.dispatch(call, auth).await,
+            ActionRoute::Builtin(_) => self.builtins.dispatch(call, auth).await,
+            ActionRoute::Host { .. } => self.host.dispatch(call, auth).await,
         }
     }
 }
@@ -55,19 +55,19 @@ where
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Unrouted;
 
-impl ToolDispatcher for Unrouted {
-    async fn dispatch(&self, call: ToolCall, _auth: CallAuth) -> Dispatched {
-        let route = match call.tool.route {
-            ToolRoute::Mcp { .. } => "MCP tools",
-            ToolRoute::Api { .. } => "API tools",
-            ToolRoute::Builtin(_) => "built-in tools",
-            ToolRoute::Host { .. } => "host tools",
+impl ActionDispatcher for Unrouted {
+    async fn dispatch(&self, call: Call, _auth: CallAuth) -> Dispatched {
+        let route = match call.action.route {
+            ActionRoute::Mcp { .. } => "MCP actions",
+            ActionRoute::Api { .. } => "API actions",
+            ActionRoute::Builtin(_) => "built-in actions",
+            ActionRoute::Host { .. } => "host tools",
         };
-        Dispatched::Failed(ToolFailure {
-            kind: ToolFailureKind::Unavailable,
+        Dispatched::Failed(ActionFailure {
+            kind: ActionFailureKind::Unavailable,
             message: format!(
                 "{} cannot be called: this server dispatches no {route}",
-                call.tool.name
+                call.action.name
             ),
             data: None,
         })
@@ -78,7 +78,7 @@ impl ToolDispatcher for Unrouted {
 mod tests {
     use std::sync::{Arc, Mutex};
 
-    use rewind_core::{Builtin, McpServer, McpTransport, RunId, Seq, Tool};
+    use rewind_core::{Action, Builtin, McpServer, McpTransport, RunId, Seq};
     use serde_json::json;
 
     use super::*;
@@ -91,8 +91,8 @@ mod tests {
         auth: Arc<Mutex<Vec<CallAuth>>>,
     }
 
-    impl ToolDispatcher for Named {
-        async fn dispatch(&self, _call: ToolCall, auth: CallAuth) -> Dispatched {
+    impl ActionDispatcher for Named {
+        async fn dispatch(&self, _call: Call, auth: CallAuth) -> Dispatched {
             if let Ok(mut seen) = self.auth.lock() {
                 seen.push(auth);
             }
@@ -100,15 +100,15 @@ mod tests {
         }
     }
 
-    fn call(route: ToolRoute, name: &str) -> ToolCall {
+    fn call(route: ActionRoute, name: &str) -> Call {
         let run = RunRef::new(TenantId::local(), RunId::from_u128(1));
-        ToolCall {
+        Call {
             idempotency_key: format!("{}/1", run.id),
             run,
             namespace: NamespaceName::new("alice").unwrap(),
             labels: Default::default(),
             seq: Seq(1),
-            tool: Tool::new(name, route, json!({})),
+            action: Action::new(name, route, json!({})),
             server: None,
             api: None,
             args: json!({}),
@@ -146,7 +146,7 @@ mod tests {
                 url: "https://mcp.example.com".into(),
             },
         );
-        let mcp_route = ToolRoute::Mcp {
+        let mcp_route = ActionRoute::Mcp {
             server: server.name.clone(),
         };
         let auth = CallAuth::Secret {
@@ -156,19 +156,19 @@ mod tests {
         let answered = [
             (call(mcp_route, "github.list_issues"), "mcp"),
             (
-                call(ToolRoute::Api { api: "dax".into() }, "dax.createMeasure"),
+                call(ActionRoute::Api { api: "dax".into() }, "dax.createMeasure"),
                 "api",
             ),
             (
                 call(
-                    ToolRoute::Builtin(Builtin::Http {
+                    ActionRoute::Builtin(Builtin::Http {
                         allowed_hosts: vec!["example.com".into()],
                     }),
                     "http",
                 ),
                 "builtins",
             ),
-            (call(ToolRoute::Host { group: None }, "ask_user"), "host"),
+            (call(ActionRoute::Host { group: None }, "ask_user"), "host"),
         ];
         for (call, expected) in answered {
             let auth = if expected == "mcp" {
@@ -193,14 +193,14 @@ mod tests {
         let router = RoutingDispatcher::new(Unrouted, Unrouted, Unrouted, Unrouted);
         let Dispatched::Failed(failure) = router
             .dispatch(
-                call(ToolRoute::Host { group: None }, "ask_user"),
+                call(ActionRoute::Host { group: None }, "ask_user"),
                 CallAuth::None,
             )
             .await
         else {
             panic!("an unrouted call fails");
         };
-        assert_eq!(failure.kind, ToolFailureKind::Unavailable);
+        assert_eq!(failure.kind, ActionFailureKind::Unavailable);
         assert_eq!(
             failure.message,
             "ask_user cannot be called: this server dispatches no host tools"

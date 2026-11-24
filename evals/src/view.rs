@@ -5,14 +5,14 @@
 //!
 //! The evals cannot depend on `rewind-server`, a composition root: what follows repeats its
 //! rules. Two differences: `attempts` stays empty (the SDK's texts do not show it), and the call
-//! whose `ToolError` failed the run is found by the message the runtime writes, `{tool} failed:
+//! whose `ActionError` failed the run is found by the message the runtime writes, `{action} failed:
 //! {message}`.
 
 use std::collections::BTreeMap;
 
 use rewind_api::common::{
-    AbortReason, Callsite, Labels, LogLevel, PAYLOAD_VALUE_LIMIT, Payload, RunStatus, ToolFailure,
-    timestamp,
+    AbortReason, ActionFailure, Callsite, Labels, LogLevel, PAYLOAD_VALUE_LIMIT, Payload,
+    RunStatus, timestamp,
 };
 use rewind_api::runs::{
     FailedCall, ForkParent, LogLine, Quarantine, QuarantineCause, Run, RunError, RunSummary,
@@ -204,7 +204,7 @@ async fn waiting(
     let mut timers = BTreeMap::new();
     for entry in history {
         match &entry.event {
-            Event::Command(Command::ScheduleToolCall {
+            Event::Command(Command::ScheduleCall {
                 seq,
                 args,
                 callsite,
@@ -219,13 +219,13 @@ async fn waiting(
         }
     }
     let tasks: BTreeMap<Seq, _> = world
-        .tool_tasks(run)
+        .call_tasks(run)
         .await?
         .into_iter()
         .map(|task| (task.task.seq, task))
         .collect();
     let mut waiting = Vec::new();
-    for (seq, tool) in state.pending_tool_calls() {
+    for (seq, action) in state.pending_calls() {
         let (args, callsite) = calls.get(seq).map_or((None, None), |(args, callsite)| {
             (Some(payload(args)), *callsite)
         });
@@ -245,9 +245,9 @@ async fn waiting(
                 }),
             ),
         };
-        waiting.push(Waiting::ToolCall {
+        waiting.push(Waiting::Call {
             seq: seq.0,
-            tool: tool.clone(),
+            action: action.clone(),
             args: args.unwrap_or_else(|| Payload::reference("", 0, "")),
             task_id: format!("{}/{}", run.id, seq.0),
             state: task_state,
@@ -334,7 +334,7 @@ pub fn summary(run: &rewind_engine::ports::RunSummary) -> Result<RunSummary, Edg
         started_at: timestamp(run.started_at.unwrap_or(run.last_activity_at)),
         ended_at: run.ended_at.map(timestamp),
         last_activity_at: timestamp(run.last_activity_at),
-        tool_calls: run.tool_calls,
+        calls: run.calls,
         errors: run.errors,
         history_len: run.history_len,
         error: ending.map(|ending| ending.error.clone()),
@@ -375,7 +375,7 @@ fn wait_kind(waiting: rewind_engine::ports::WaitingFor) -> WaitKind {
 }
 
 /// How the script failed, with where: the first position in `script.ts` of its stack, else of
-/// its message, and the call whose `ToolError` it did not catch.
+/// its message, and the call whose `ActionError` it did not catch.
 fn run_error(error: &rewind_core::ScriptError, history: &[HistoryEntry], source: &str) -> RunError {
     let location = error
         .stack
@@ -394,25 +394,25 @@ fn run_error(error: &rewind_core::ScriptError, history: &[HistoryEntry], source:
     }
 }
 
-/// The call whose `ToolError` the script did not catch, as `ScriptError::failed_call` finds it.
+/// The call whose `ActionError` the script did not catch, as `ScriptError::failed_call` finds it.
 fn failed_call(history: &[HistoryEntry], seq: Seq) -> Option<FailedCall> {
     let failure = history.iter().find_map(|entry| match &entry.event {
-        Event::Completion(Completion::ToolCallFailed { seq: failed, error }) if *failed == seq => {
+        Event::Completion(Completion::CallFailed { seq: failed, error }) if *failed == seq => {
             Some(error)
         }
         _ => None,
     })?;
     history.iter().find_map(|entry| match &entry.event {
-        Event::Command(Command::ScheduleToolCall {
+        Event::Command(Command::ScheduleCall {
             seq: scheduled,
-            tool,
+            action,
             args,
             callsite,
         }) if *scheduled == seq => Some(FailedCall {
             seq: seq.0,
-            tool: tool.clone(),
+            action: action.clone(),
             args: payload(args),
-            error: ToolFailure::from(failure),
+            error: ActionFailure::from(failure),
             callsite: callsite.map(Callsite::from),
         }),
         _ => None,
@@ -527,10 +527,10 @@ pub fn workflow(stored: &StoredWorkflow) -> rewind_api::workflows::Workflow {
         .with_workflows([workflow.pinned()])
         .map(|action_set| rewind_codegen::generate(&action_set, &BTreeMap::new()))
         .ok();
-    let name = format!("{}.{}", rewind_core::WORKFLOWS_NAMESPACE, workflow.name());
+    let name = format!("{}.{}", rewind_core::WORKFLOWS_GROUP, workflow.name());
     let declaration = declarations
         .as_ref()
-        .and_then(|generated| generated.tools.iter().find(|tool| tool.name == name));
+        .and_then(|generated| generated.actions.iter().find(|action| action.name == name));
     rewind_api::workflows::Workflow {
         name: workflow.name().to_owned(),
         version: workflow.version().to_hex(),
@@ -594,17 +594,17 @@ pub fn workflow(stored: &StoredWorkflow) -> rewind_api::workflows::Workflow {
 pub fn payload_of(event: &Event) -> Option<&rewind_core::Payload> {
     match event {
         Event::Lifecycle(Lifecycle::RunStarted(started)) => Some(&started.input),
-        Event::Command(Command::ScheduleToolCall { args, .. }) => Some(args),
+        Event::Command(Command::ScheduleCall { args, .. }) => Some(args),
         Event::Command(Command::CompleteRun { output }) => Some(output),
-        Event::Completion(Completion::ToolCallCompleted { result, .. }) => Some(result),
+        Event::Completion(Completion::CallCompleted { result, .. }) => Some(result),
         Event::Completion(Completion::SignalReceived { payload, .. }) => Some(payload),
         _ => None,
     }
 }
 
-/// The servers of an action set, with their tools counted (`rewind-server`'s `action_sets::servers`).
+/// The servers of an action set, with their actions counted (`rewind-server`'s `action_sets::servers`).
 fn servers(action_set: &rewind_core::ActionSet) -> Vec<rewind_api::action_sets::ServerSummary> {
-    use rewind_core::{McpTransport, ToolRoute};
+    use rewind_core::{ActionRoute, McpTransport};
     action_set
         .servers()
         .iter()
@@ -615,11 +615,11 @@ fn servers(action_set: &rewind_core::ActionSet) -> Vec<rewind_api::action_sets::
                 McpTransport::Stdio { .. } => rewind_api::action_sets::McpTransport::Stdio,
             },
             auth: rewind_api::action_sets::Auth::of_core(&server.auth),
-            tools: u32::try_from(
+            actions: u32::try_from(
                 action_set
-                    .tools()
+                    .actions()
                     .iter()
-                    .filter(|tool| matches!(&tool.route, ToolRoute::Mcp { server: of } if *of == server.name))
+                    .filter(|action| matches!(&action.route, ActionRoute::Mcp { server: of } if *of == server.name))
                     .count(),
             )
             .unwrap_or(u32::MAX),
@@ -631,45 +631,45 @@ fn servers(action_set: &rewind_core::ActionSet) -> Vec<rewind_api::action_sets::
 pub fn action_set(
     stored: &rewind_engine::ports::StoredActionSet,
 ) -> rewind_api::action_sets::ActionSet {
-    use rewind_api::action_sets::{OnInterruption, Route, Tool, ToolPolicy};
-    use rewind_core::{Interruption, ToolRoute};
+    use rewind_api::action_sets::{Action, ActionPolicy, OnInterruption, Route};
+    use rewind_core::{ActionRoute, Interruption};
     let action_set = &stored.action_set;
     rewind_api::action_sets::ActionSet {
         id: action_set.digest().to_hex(),
         servers: servers(action_set),
         // The evals' world has MCP servers only.
         apis: Vec::new(),
-        tools: action_set
-            .tools()
+        actions: action_set
+            .actions()
             .iter()
-            .map(|tool| Tool {
-                name: tool.name.clone(),
-                route: match tool.route {
-                    ToolRoute::Mcp { .. } => Route::Mcp,
-                    ToolRoute::Api { .. } => Route::Api,
-                    ToolRoute::Host { .. } => Route::Host,
-                    ToolRoute::Builtin(_) => Route::Builtin,
+            .map(|action| Action {
+                name: action.name.clone(),
+                route: match action.route {
+                    ActionRoute::Mcp { .. } => Route::Mcp,
+                    ActionRoute::Api { .. } => Route::Api,
+                    ActionRoute::Host { .. } => Route::Host,
+                    ActionRoute::Builtin(_) => Route::Builtin,
                 },
-                server: match &tool.route {
-                    ToolRoute::Mcp { server } => Some(server.clone()),
+                server: match &action.route {
+                    ActionRoute::Mcp { server } => Some(server.clone()),
                     _ => None,
                 },
-                api: match &tool.route {
-                    ToolRoute::Api { api } => Some(api.clone()),
+                api: match &action.route {
+                    ActionRoute::Api { api } => Some(api.clone()),
                     _ => None,
                 },
-                description: tool.description.clone().unwrap_or_default(),
-                input_schema: tool.input_schema.clone(),
-                output_schema: tool.output_schema.clone(),
-                policy: ToolPolicy {
-                    on_interruption: Some(match tool.policy.on_interruption {
+                description: action.description.clone().unwrap_or_default(),
+                input_schema: action.input_schema.clone(),
+                output_schema: action.output_schema.clone(),
+                policy: ActionPolicy {
+                    on_interruption: Some(match action.policy.on_interruption {
                         Interruption::Retry => OnInterruption::Retry,
                         Interruption::AtMostOnce => OnInterruption::AtMostOnce,
                     }),
-                    approval: Some(tool.policy.approval),
-                    timeout: tool.policy.execution_timeout.map(Into::into),
-                    heartbeat_timeout: Some(tool.policy.heartbeat_timeout.into()),
-                    concurrency: Some(tool.policy.concurrency),
+                    approval: Some(action.policy.approval),
+                    timeout: action.policy.execution_timeout.map(Into::into),
+                    heartbeat_timeout: Some(action.policy.heartbeat_timeout.into()),
+                    concurrency: Some(action.policy.concurrency),
                 },
             })
             .collect(),
@@ -704,12 +704,12 @@ mod tests {
             script_location("cannot import \"node:fs\" (script.ts:1:16): scripts can only…"),
             Some((1, 16))
         );
-        assert_eq!(script_location("ToolError: crm.get_order failed"), None);
+        assert_eq!(script_location("ActionError: crm.get_order failed"), None);
     }
 
     #[test]
     fn frames_mark_the_column_between_their_neighbors() {
-        let source = "import { crm } from \"rewind:tools\";\n\nexport default async function main() {\n  const order = await crm.get_order({ id: \"O-504\" });\n  return order;\n}\n";
+        let source = "import { crm } from \"rewind:actions\";\n\nexport default async function main() {\n  const order = await crm.get_order({ id: \"O-504\" });\n  return order;\n}\n";
         assert_eq!(
             code_frame(source, 4, 23).unwrap(),
             "3 | export default async function main() {\n4 |   const order = await crm.get_order({ id: \"O-504\" });\n  |                       ^\n5 |   return order;"

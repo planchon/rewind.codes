@@ -51,7 +51,7 @@ pub enum WebhookEventType {
     RunSuspended,
     /// The run is set aside (`archi/03-execution.md`, "Non-determinism and quarantine").
     RunQuarantined,
-    ToolSchemaChanged,
+    ActionSchemaChanged,
     /// A call parked because its server refused the secret or the signature, or because the
     /// secret the run attached no longer exists.
     CredentialsExpired,
@@ -68,7 +68,7 @@ impl WebhookEventType {
         WebhookEventType::RunAborted,
         WebhookEventType::RunSuspended,
         WebhookEventType::RunQuarantined,
-        WebhookEventType::ToolSchemaChanged,
+        WebhookEventType::ActionSchemaChanged,
         WebhookEventType::CredentialsExpired,
         WebhookEventType::QuotaAlert,
     ];
@@ -82,7 +82,7 @@ impl WebhookEventType {
             WebhookEventType::RunAborted => "run.aborted",
             WebhookEventType::RunSuspended => "run.suspended",
             WebhookEventType::RunQuarantined => "run.quarantined",
-            WebhookEventType::ToolSchemaChanged => "tool.schema_changed",
+            WebhookEventType::ActionSchemaChanged => "action.schema_changed",
             WebhookEventType::CredentialsExpired => "credentials.expired",
             WebhookEventType::QuotaAlert => "quota.alert",
         }
@@ -94,7 +94,7 @@ impl WebhookEventType {
 pub struct WebhookEvent {
     /// Deterministic, so that a receiver can deduplicate a delivery repeated after a crash:
     /// `{run_id}/{index}` for an event projected from the journal entry `index`,
-    /// `{run_id}/{seq}/{attempt}` for an event about a tool task, the alert's
+    /// `{run_id}/{seq}/{attempt}` for an event about a call's task, the alert's
     /// [`QuotaAlertKey::event_id`] for a quota alert.
     pub id: String,
     pub tenant: TenantId,
@@ -121,30 +121,30 @@ pub enum WebhookEventKind {
         error: String,
     },
     RunSuspended {
-        /// What the run waits for, such as `signal "approval"` or `tool github.close_issue`.
+        /// What the run waits for, such as `signal "approval"` or `action github.close_issue`.
         waiting_for: Vec<String>,
     },
     RunQuarantined {
         reason: String,
     },
-    ToolSchemaChanged {
+    ActionSchemaChanged {
         seq: Seq,
-        tool: String,
+        action: String,
         message: String,
     },
     CredentialsExpired {
         seq: Seq,
-        tool: String,
+        action: String,
         message: String,
         reason: CredentialsExpiredReason,
-        /// The secret the run attached for the tool's server, as attached (`org/<name>` or
+        /// The secret the run attached for the action's server, as attached (`org/<name>` or
         /// `ns/<name>`); `None` for a signed call.
         secret: Option<SecretRef>,
     },
     QuotaAlert(QuotaAlert),
 }
 
-/// Why a call waits in `credentials.expired` (`archi/04-tools.md`, "Tool task lifecycle"). The
+/// Why a call waits in `credentials.expired` (`archi/04-tools.md`, "Call lifecycle"). The
 /// harness does the same in both cases: put the secret again, or approve the call.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum CredentialsExpiredReason {
@@ -174,7 +174,7 @@ impl WebhookEventKind {
             },
             WebhookEventKind::RunSuspended { .. } => WebhookEventType::RunSuspended,
             WebhookEventKind::RunQuarantined { .. } => WebhookEventType::RunQuarantined,
-            WebhookEventKind::ToolSchemaChanged { .. } => WebhookEventType::ToolSchemaChanged,
+            WebhookEventKind::ActionSchemaChanged { .. } => WebhookEventType::ActionSchemaChanged,
             WebhookEventKind::CredentialsExpired { .. } => WebhookEventType::CredentialsExpired,
             WebhookEventKind::QuotaAlert(_) => WebhookEventType::QuotaAlert,
         }

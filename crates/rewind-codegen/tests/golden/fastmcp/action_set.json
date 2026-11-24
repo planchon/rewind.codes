@@ -1,7 +1,7 @@
 {
   "description": "Schemas as Pydantic writes them (FastMCP servers): titles everywhere, optional fields as anyOf with null, $defs, a tool without arguments, an output schema wrapping a list in `result`.",
   "servers": ["notes"],
-  "tools": [
+  "actions": [
     {
       "name": "notes.search_notes",
       "route": "mcp",

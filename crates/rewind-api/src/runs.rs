@@ -11,8 +11,8 @@ use serde_json::Value;
 use utoipa::{IntoParams, ToSchema};
 
 use crate::common::{
-    AbortReason, Callsite, Duration, Labels, LogLevel, Payload, RunMode, RunStatus, Timestamp,
-    ToolFailure,
+    AbortReason, ActionFailure, Callsite, Duration, Labels, LogLevel, Payload, RunMode, RunStatus,
+    Timestamp,
 };
 use crate::namespaces::NamespaceName;
 pub use crate::query::WaitKind;
@@ -28,7 +28,7 @@ use crate::workflows::{RunWorkflow, StartedBy};
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[schema(example = json!({
-    "script": "import { github } from \"rewind:tools\";\nexport default async function main(input: { repo: string }) {\n  return (await github.list_issues({ repo: input.repo })).length;\n}\n",
+    "script": "import { github } from \"rewind:actions\";\nexport default async function main(input: { repo: string }) {\n  return (await github.list_issues({ repo: input.repo })).length;\n}\n",
     "actionSet": "9f2c4e1a07b3d5f8a1c2e3b4d5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4",
     "input": { "repo": "acme/api" },
     "wait": "30s",
@@ -40,7 +40,7 @@ pub struct StartRun {
     /// Without it, `workflow` names what the run executes.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub script: String,
-    /// The action set the script imports from `rewind:tools`. Without one, `rewind:tools` is empty.
+    /// The action set the script imports from `rewind:actions`. Without one, `rewind:actions` is empty.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub action_set: Option<String>,
     /// Instead of `script` and `actionSet`: a run of this workflow, `triage` for its latest version
@@ -170,9 +170,9 @@ pub struct Run {
     /// The last log lines of the script (`console.*`), oldest first, at most 20.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub logs: Vec<LogLine>,
-    /// How many times each tool call was sent, by seq, for the calls sent more than once: a
+    /// How many times each call was sent, by seq, for the calls sent more than once: a
     /// call retried after a transient failure, or sent again after its worker or dispatcher
-    /// died. Attempts live in the tool tasks, not in the journal: the read model keeps them.
+    /// died. Attempts live in the call tasks, not in the journal: the read model keeps them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attempts: Vec<CallAttempts>,
     /// Number of journal entries.
@@ -220,7 +220,7 @@ pub struct ForkParent {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RunError {
-    /// `ToolError`, `TypeError`, `DeadlockError`, `CancelledError`…
+    /// `ActionError`, `TypeError`, `DeadlockError`, `CancelledError`…
     pub name: String,
     pub message: String,
     /// Source-mapped to `script.ts`, without the runtime's frames.
@@ -232,7 +232,7 @@ pub struct RunError {
     /// A few lines of the source around `location`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub frame: Option<String>,
-    /// The tool call whose failure the script did not catch, if that is how it failed.
+    /// The call whose failure the script did not catch, if that is how it failed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failed_call: Option<FailedCall>,
 }
@@ -241,14 +241,14 @@ pub struct RunError {
 #[serde(rename_all = "camelCase")]
 pub struct FailedCall {
     pub seq: u32,
-    pub tool: String,
+    pub action: String,
     pub args: Payload,
-    pub error: ToolFailure,
+    pub error: ActionFailure,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub callsite: Option<Callsite>,
 }
 
-/// How many times a tool call was sent.
+/// How many times a call was sent.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CallAttempts {
@@ -261,11 +261,11 @@ pub struct CallAttempts {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Waiting {
-    /// A tool call in flight, and the state of its task.
+    /// A call in flight, and the state of its task.
     #[serde(rename_all = "camelCase")]
-    ToolCall {
+    Call {
         seq: u32,
-        tool: String,
+        action: String,
         /// The call's arguments: what the harness approves or rejects.
         args: Payload,
         /// For `POST /v1/tasks/{id}/approve` and `/reject`.
@@ -343,7 +343,7 @@ pub struct RunFilter {
     /// `started` (the default): the most recently started first; `oldest`: the first started
     /// first; `activity`: the most recent activity first; `wakes`: the soonest to wake by itself
     /// first, the runs that do not wake by themselves last; `duration`: the longest from start to
-    /// end first, the runs that have not ended last; `calls`: the most tool calls first. Ties go
+    /// end first, the runs that have not ended last; `calls`: the most calls first. Ties go
     /// to the most recently started (`wakes`: the first started).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[param(inline)]
@@ -354,13 +354,13 @@ pub struct RunFilter {
     /// Only runs carrying this label, as `key:value`. Repeat to require several.
     #[serde(default, rename = "label", skip_serializing_if = "Vec::is_empty")]
     pub labels: Vec<String>,
-    /// Only runs that called this tool.
+    /// Only runs that called this action.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tool: Option<String>,
+    pub action: Option<String>,
     /// Only runs of this script (digest).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub script: Option<String>,
-    /// Only runs whose tool calls failed with this kind (`error`, `timeout`…), or that failed
+    /// Only runs whose calls failed with this kind (`error`, `timeout`…), or that failed
     /// with this error name (`TypeError`, `DeadlockError`…).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
@@ -426,7 +426,7 @@ pub enum RunSort {
     /// The longest first, from start to end; the runs that have not ended last, the most
     /// recently started first.
     Duration,
-    /// The most tool calls first.
+    /// The most calls first.
     Calls,
 }
 
@@ -466,8 +466,8 @@ pub struct RunSummary {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ended_at: Option<Timestamp>,
     pub last_activity_at: Timestamp,
-    pub tool_calls: u64,
-    /// Tool calls that failed.
+    pub calls: u64,
+    /// Calls that failed.
     pub errors: u64,
     pub history_len: u64,
     /// With `failed` or `cancelled`: the error's name. With `aborted`: the abort's kind.
@@ -506,7 +506,7 @@ pub struct RunWait {
     /// The timer's or the call's seq.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub seq: Option<u32>,
-    /// The signal's name, or the call's tool.
+    /// The signal's name, or the call's action.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     /// When the wait began.
@@ -522,7 +522,7 @@ pub struct RunWait {
 /// (`archi/05-testing-and-observability.md`, "Statistics").
 ///
 /// The statistics routes (`GET /v1/runs/stats`, `GET /v1/runs/failures`, `GET /v1/scripts`,
-/// `GET /v1/tools/stats`) take a scope and a window only. The scope is the caller's tenant, or one
+/// `GET /v1/actions/stats`) take a scope and a window only. The scope is the caller's tenant, or one
 /// namespace: a token's, the `Rewind-Namespace` header's, or the one `q` names with a single
 /// `namespace:` term. The window is made of whole hours in UTC: its bounds are rounded out to the
 /// hour. A grant or a token limited to labels reads none of them (`forbidden`): counters do not
@@ -636,7 +636,7 @@ pub struct Facets {
     pub workflows: Vec<FacetValue>,
     /// The most frequent label keys, each with its most frequent values.
     pub labels: Vec<LabelFacet>,
-    pub tools: Vec<FacetValue>,
+    pub actions: Vec<FacetValue>,
     /// Errors the runs ended with (names and abort kinds), and kinds their calls failed with.
     pub errors: Vec<FacetValue>,
     /// Script digests.
@@ -775,7 +775,7 @@ pub struct CancelRun {
 }
 
 /// `POST /v1/runs/{id}/fork` (`retry_run`): a new run with a corrected script. While its
-/// commands match the parent's, the parent's recorded results are reused and no tool is called
+/// commands match the parent's, the parent's recorded results are reused and no action is called
 /// again; it continues live at the first difference, at `at`, or at the end of the parent's
 /// history (`archi/03-execution.md`, "Forks"). Takes `Idempotency-Key` as `POST /v1/runs`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
@@ -847,7 +847,7 @@ pub struct TraceQuery {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TraceFormat {
-    /// A compact text trace for a model: one line per tool call, timer and signal, with its
+    /// A compact text trace for a model: one line per call, timer and signal, with its
     /// line in `script.ts`; payloads truncated (`archi/05-testing-and-observability.md`).
     #[default]
     Llm,
@@ -886,7 +886,7 @@ pub enum JournalExport {
     /// The journal document: replayable with `rewind replay`, without a server.
     #[default]
     Journal,
-    /// A cassette of the run's tool calls and signals, for `rewind test` and `POST /v1/test`.
+    /// A cassette of the run's calls and signals, for `rewind test` and `POST /v1/test`.
     Cassette,
 }
 
@@ -961,9 +961,9 @@ mod tests {
                 "callsite": { "line": 10, "column": 26 }
             })
         );
-        let call = Waiting::ToolCall {
+        let call = Waiting::Call {
             seq: 3,
-            tool: "ask_user".into(),
+            action: "ask_user".into(),
             args: Payload::of(
                 json!({ "question": "ok?" }),
                 crate::common::PAYLOAD_VALUE_LIMIT,

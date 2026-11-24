@@ -50,7 +50,7 @@ pub enum AttributeValue {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SpanKind {
     Internal,
-    /// A call to the outside: a tool call.
+    /// A call to the outside: a call.
     Client,
 }
 
@@ -62,7 +62,7 @@ pub enum SpanStatus {
 }
 
 /// A span derived from committed entries (`archi/05-testing-and-observability.md`, "Span
-/// model"): the run, its tool calls, timers and signal waits. Attributes carry payload digests,
+/// model"): the run, its calls, timers and signal waits. Attributes carry payload digests,
 /// sizes and previews, never values.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Span {

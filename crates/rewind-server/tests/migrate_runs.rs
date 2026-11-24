@@ -221,7 +221,7 @@ async fn check(url: &str, client: &Client, histories: &Histories) {
     let mut worker = TaskWorker::open(
         client,
         &TaskStreamQuery {
-            tools: vec!["ask_human".into(), "slow".into()],
+            actions: vec!["ask_human".into(), "slow".into()],
             slots: Some(10),
             ..TaskStreamQuery::default()
         },
@@ -230,14 +230,14 @@ async fn check(url: &str, client: &Client, histories: &Histories) {
     let mut handed = BTreeMap::new();
     while handed.len() < 2 {
         let task = worker.task().await;
-        handed.insert(task.tool.clone(), task);
+        handed.insert(task.action.clone(), task);
     }
-    for (tool, task) in &handed {
+    for (action, task) in &handed {
         client
             .complete_task(
                 &task.token,
                 &CompleteTask {
-                    result: json!({ "from": tool }),
+                    result: json!({ "from": action }),
                 },
             )
             .await

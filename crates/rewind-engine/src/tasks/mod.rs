@@ -1,7 +1,7 @@
-//! Tool tasks (`archi/04-tools.md`, "Tool task lifecycle", "Policies", "Authenticating calls",
+//! Call tasks (`archi/04-tools.md`, "Call lifecycle", "Policies", "Authenticating calls",
 //! "When an action set changes during a run").
 //!
-//! Each `schedule_tool_call` an activation commits becomes a tool task in the run's partition.
+//! Each `schedule_call` an activation commits becomes a call's task in the run's partition.
 //! Its attempts, backoff, approval, deferral and park live in the task; the journal only gets
 //! the final outcome, as a completion in the run's inbox. The owner of the partition keeps the
 //! lifecycle (`partition::tasks`), the call executor of the node sends the calls ([`calls`]).
@@ -28,9 +28,9 @@
 //!   tenant's signing key. It is handed to the dispatcher only ([`CallAuth`]), and its texts are
 //!   taken out of the answer ([`redacted`]): never in the journal.
 //! - **Parked tasks.** A schema change, a 401 or a missing secret parks the task and sends
-//!   `tool.schema_changed` or `credentials.expired` (reason `refused` or `missing`) to the
+//!   `action.schema_changed` or `credentials.expired` (reason `refused` or `missing`) to the
 //!   tenant's subscriptions. Approved after a schema change, the call goes on against the new
-//!   schema; the secret put again makes it ready again; rejected, it fails with a `ToolError`.
+//!   schema; the secret put again makes it ready again; rejected, it fails with an `ActionError`.
 //!
 //! [`CallAuth`]: crate::ports::CallAuth
 
@@ -38,11 +38,11 @@ pub(crate) mod calls;
 
 use std::time::Duration;
 
-use rewind_core::{Digest, JsonValue, RunId, SecretEncoding, SecretPlacement, Seq, ToolFailure};
+use rewind_core::{ActionFailure, Digest, JsonValue, RunId, SecretEncoding, SecretPlacement, Seq};
 
 use crate::ports::{CallAuth, Dispatched};
 
-/// `"{run_id}/{seq}"`, the key every attempt of a tool call carries.
+/// `"{run_id}/{seq}"`, the key every attempt of a call carries.
 pub fn idempotency_key(run_id: RunId, seq: Seq) -> String {
     format!("{run_id}/{}", seq.0)
 }
@@ -135,7 +135,7 @@ pub(crate) fn redacted(dispatched: Dispatched, texts: &[String]) -> Dispatched {
     if texts.is_empty() {
         return dispatched;
     }
-    let failure = |mut failure: ToolFailure| {
+    let failure = |mut failure: ActionFailure| {
         failure.message = redacted_text(failure.message, texts);
         failure.data = failure.data.map(|data| redacted_json(data, texts));
         failure

@@ -40,7 +40,7 @@
   "secrets": {
     "crm": "ns/crm"
   },
-  "tools": {
+  "actions": {
     "crm.lookup": {
       "name": "Ada"
     },

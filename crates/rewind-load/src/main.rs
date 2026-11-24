@@ -7,7 +7,7 @@
 //!
 //! `run` drives a deployment through its HTTP API: it registers an action set whose MCP server is
 //! its own fake one (served by this process, which the deployment must reach) and whose host
-//! tool it answers itself, starts many runs at once, signals them, waits for every one to end,
+//! action it answers itself, starts many runs at once, signals them, waits for every one to end,
 //! then checks the invariants and prints throughput, latencies and errors. It exits with 0 when
 //! every run completed as expected, no invariant broke and the thresholds given were met, 1
 //! otherwise, and 3 when the load could not be set up.

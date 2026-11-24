@@ -76,7 +76,7 @@ fn create(run: &RunRef) -> Change {
         started_at: None,
         ended_at: None,
         last_activity_at: T0,
-        tool_calls: 0,
+        calls: 0,
         errors: 0,
         history_len: 0,
         waits: Vec::new(),

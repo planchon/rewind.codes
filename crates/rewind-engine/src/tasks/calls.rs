@@ -1,8 +1,8 @@
 //! The call executor of a node (`archi/07-code-architecture.md`, "Inside a node";
-//! `archi/04-tools.md`, "Tool task lifecycle", "Authenticating calls").
+//! `archi/04-tools.md`, "Call lifecycle", "Authenticating calls").
 //!
 //! An owner hands it a task once the task's batch is durable and the task holds its slots. The
-//! executor prepares the call (its tool, its args, its idempotency key, its trace context, how it
+//! executor prepares the call (its action, its args, its idempotency key, its trace context, how it
 //! proves who calls) and sends it, or prepares what the engine serves itself, and reports the
 //! outcome to the owner, which commits it:
 //!
@@ -23,8 +23,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use rewind_core::{
-    Builtin, Interruption, JsonValue, Payload, RunEnd, RunId, RunMode, RunStarted, SecretScope,
-    Seq, ToolAuth, ToolFailure, ToolFailureKind, ToolOutcome, ToolRoute, WorkflowOp,
+    ActionAuth, ActionFailure, ActionFailureKind, ActionOutcome, ActionRoute, Builtin,
+    Interruption, JsonValue, Payload, RunEnd, RunId, RunMode, RunStarted, SecretScope, Seq,
+    WorkflowOp,
 };
 use serde_json::json;
 
@@ -36,10 +37,10 @@ use crate::partition::OwnerMsg;
 use crate::plane::{LogOf, NodeConfig, Plane};
 use crate::ports::link::{HostTask, StartAtOwner};
 use crate::ports::{
-    BlobOwner, CallAuth, CallClaims, CatalogStore, Clock, Dispatched, Entropy, ParkKind,
-    ParkReason, PartitionLog, RunArchive, RunHead, RunMetadata, RunRef, RunWorkflow,
-    ScriptExecutor, SecretId, SecretReader, SecretStore, StartedBy, TaskRecord, TaskRef, TaskToken,
-    ToolCall, ToolDispatcher,
+    ActionDispatcher, BlobOwner, Call, CallAuth, CallClaims, CatalogStore, Clock, Dispatched,
+    Entropy, ParkKind, ParkReason, PartitionLog, RunArchive, RunHead, RunMetadata, RunRef,
+    RunWorkflow, ScriptExecutor, SecretId, SecretReader, SecretStore, StartedBy, TaskRecord,
+    TaskRef, TaskToken,
 };
 use crate::tasks::idempotency_key;
 use crate::tasks::{redacted, secret_texts};
@@ -79,7 +80,7 @@ pub(crate) struct CallWork<P: Plane> {
 pub(crate) struct CallDone {
     pub(crate) task: TaskRef,
     pub(crate) attempt: u32,
-    pub(crate) tool: String,
+    pub(crate) action: String,
     pub(crate) outcome: CallOutcome,
 }
 
@@ -191,14 +192,14 @@ impl<P: Plane> Calls<P> {
 async fn call<P: Plane>(plane: &P, config: &NodeConfig, work: CallWork<P>) -> CallDone {
     let task = work.task.task.task.clone();
     let attempt = work.task.task.attempt;
-    let tool = work.task.task.tool.clone();
+    let action = work.task.task.action.clone();
     let span = tracing::info_span!(
         "tool_attempt",
         task = %task,
         attempt,
         traceparent = tracing::field::Empty,
         histogram.rewind.tool_attempt.duration = tracing::field::Empty,
-        rewind.tool = tool.as_str(),
+        rewind.action = action.as_str(),
         rewind.outcome = tracing::field::Empty,
     );
     let outcome =
@@ -214,7 +215,7 @@ async fn call<P: Plane>(plane: &P, config: &NodeConfig, work: CallWork<P>) -> Ca
     CallDone {
         task,
         attempt,
-        tool,
+        action,
         outcome,
     }
 }
@@ -242,10 +243,10 @@ async fn attempt_of<P: Plane>(plane: &P, config: &NodeConfig, work: CallWork<P>)
             return CallOutcome::NotSent(format!("the action set could not be read: {error}"));
         }
     };
-    let Some(tool) = action_set.tool(&record.tool).cloned() else {
+    let Some(action) = action_set.action(&record.action).cloned() else {
         return failed(format!(
             "run {} called {}, which its action set does not have",
-            run.id, record.tool
+            run.id, record.action
         ));
     };
     let source = Carried {
@@ -262,7 +263,7 @@ async fn attempt_of<P: Plane>(plane: &P, config: &NodeConfig, work: CallWork<P>)
         &*log,
         &head,
         record.task.seq,
-        &record.tool,
+        &record.action,
         &record.args,
     )
     .await
@@ -270,7 +271,7 @@ async fn attempt_of<P: Plane>(plane: &P, config: &NodeConfig, work: CallWork<P>)
         Ok(key) => key,
         Err(error) => return CallOutcome::NotSent(error),
     };
-    let trace_context = Some(crate::telemetry::tool_call_trace_context(
+    let trace_context = Some(crate::telemetry::call_trace_context(
         head.run.id,
         &head.metadata,
         record.task.seq,
@@ -284,7 +285,7 @@ async fn attempt_of<P: Plane>(plane: &P, config: &NodeConfig, work: CallWork<P>)
             token,
             task: record.task.clone(),
             namespace: head.namespace.clone(),
-            tool: record.tool.clone(),
+            action: record.action.clone(),
             args,
             idempotency_key: key,
             attempt: record.attempt,
@@ -293,10 +294,10 @@ async fn attempt_of<P: Plane>(plane: &P, config: &NodeConfig, work: CallWork<P>)
             trace_context,
         }));
     }
-    let (server, api) = match &tool.route {
-        ToolRoute::Mcp { server } => (action_set.server(server).cloned(), None),
-        ToolRoute::Api { api } => (None, action_set.api(api).cloned()),
-        ToolRoute::Builtin(_) | ToolRoute::Host { .. } => (None, None),
+    let (server, api) = match &action.route {
+        ActionRoute::Mcp { server } => (action_set.server(server).cloned(), None),
+        ActionRoute::Api { api } => (None, action_set.api(api).cloned()),
+        ActionRoute::Builtin(_) | ActionRoute::Host { .. } => (None, None),
     };
     let auth = server
         .as_ref()
@@ -304,12 +305,12 @@ async fn attempt_of<P: Plane>(plane: &P, config: &NodeConfig, work: CallWork<P>)
         .or_else(|| api.as_ref().map(|api| api.auth.clone()))
         .unwrap_or_default();
     let live = mode == Some(RunMode::Live);
-    let call = ToolCall {
+    let call = Call {
         run: run.clone(),
         namespace: head.namespace.clone(),
         labels: head.metadata.labels.clone(),
         seq: record.task.seq,
-        tool,
+        action,
         server,
         api,
         args,
@@ -319,11 +320,11 @@ async fn attempt_of<P: Plane>(plane: &P, config: &NodeConfig, work: CallWork<P>)
         token,
         trace_context,
     };
-    match &call.tool.route {
-        ToolRoute::Builtin(Builtin::Webhook) if live => {
+    match &call.action.route {
+        ActionRoute::Builtin(Builtin::Webhook) if live => {
             return webhook(config, &call);
         }
-        ToolRoute::Builtin(Builtin::Workflow { workflow, op }) if live => {
+        ActionRoute::Builtin(Builtin::Workflow { workflow, op }) if live => {
             let workflow = workflow.clone();
             return match op {
                 WorkflowOp::Start => {
@@ -342,7 +343,7 @@ async fn attempt_of<P: Plane>(plane: &P, config: &NodeConfig, work: CallWork<P>)
                 WorkflowOp::Signal => signal_child(plane, &*log, &call, &head, &workflow).await,
             };
         }
-        ToolRoute::Builtin(Builtin::Workflow {
+        ActionRoute::Builtin(Builtin::Workflow {
             op: WorkflowOp::Start,
             ..
         }) => {
@@ -351,7 +352,7 @@ async fn attempt_of<P: Plane>(plane: &P, config: &NodeConfig, work: CallWork<P>)
         }
         _ => {}
     }
-    let auth = if auth == ToolAuth::None || !live {
+    let auth = if auth == ActionAuth::None || !live {
         CallAuth::None
     } else {
         match live_auth(plane, config, &head, &call, &auth).await {
@@ -368,16 +369,16 @@ async fn attempt_of<P: Plane>(plane: &P, config: &NodeConfig, work: CallWork<P>)
 }
 
 fn failed(message: String) -> CallOutcome {
-    CallOutcome::Dispatched(Dispatched::Failed(ToolFailure {
-        kind: ToolFailureKind::Error,
+    CallOutcome::Dispatched(Dispatched::Failed(ActionFailure {
+        kind: ActionFailureKind::Error,
         message,
         data: None,
     }))
 }
 
 fn unavailable(message: String) -> CallOutcome {
-    CallOutcome::Dispatched(Dispatched::Failed(ToolFailure {
-        kind: ToolFailureKind::Unavailable,
+    CallOutcome::Dispatched(Dispatched::Failed(ActionFailure {
+        kind: ActionFailureKind::Unavailable,
         message,
         data: None,
     }))
@@ -412,7 +413,7 @@ pub(crate) async fn call_key<P: Plane>(
     log: &LogOf<P>,
     head: &RunHead,
     seq: Seq,
-    tool: &str,
+    action: &str,
     args: &Payload,
 ) -> Result<String, String> {
     let mut owner = head.run.id;
@@ -442,7 +443,7 @@ pub(crate) async fn call_key<P: Plane>(
                 .await
                 .map_err(|error| read(error.to_string()))?
         };
-        if !left_without_outcome(&history, seq, tool, args) {
+        if !left_without_outcome(&history, seq, action, args) {
             break;
         }
         owner = link.run;
@@ -458,15 +459,15 @@ async fn live_auth<P: Plane>(
     plane: &P,
     config: &NodeConfig,
     head: &RunHead,
-    call: &ToolCall,
-    auth: &ToolAuth,
+    call: &Call,
+    auth: &ActionAuth,
 ) -> Result<Result<CallAuth, CallOutcome>, String> {
     let tenant = &call.run.tenant;
-    let server = call.tool.route.server().unwrap_or(&call.tool.name);
+    let server = call.action.route.server().unwrap_or(&call.action.name);
     let now = plane.clock().now();
     match auth {
-        ToolAuth::None => Ok(Ok(CallAuth::None)),
-        ToolAuth::Secret(placement) => {
+        ActionAuth::None => Ok(Ok(CallAuth::None)),
+        ActionAuth::Secret(placement) => {
             let Some(attached) = head.metadata.secrets.get(server) else {
                 return Ok(Err(unavailable(format!(
                     "{server} needs a secret, and the run attached none for it: fork the run \
@@ -507,7 +508,7 @@ async fn live_auth<P: Plane>(
                 }
             })
         }
-        ToolAuth::Rewind => {
+        ActionAuth::Rewind => {
             let Some(public_url) = &config.public_url else {
                 return Ok(Err(unavailable(format!(
                     "{server} checks Rewind's signature, and this server has no public URL \
@@ -524,7 +525,7 @@ async fn live_auth<P: Plane>(
                 subject: head.namespace.clone(),
                 labels: head.metadata.labels.clone(),
                 run: call.run.id,
-                tool: call.tool.name.clone(),
+                action: call.action.name.clone(),
                 idempotency_key: call.idempotency_key.clone(),
                 seq: call.seq,
                 attempt: call.attempt,
@@ -535,7 +536,7 @@ async fn live_auth<P: Plane>(
 }
 
 /// `webhook(name)`: checked here, bound by the owner.
-fn webhook(config: &NodeConfig, call: &ToolCall) -> CallOutcome {
+fn webhook(config: &NodeConfig, call: &Call) -> CallOutcome {
     if config.public_url.is_none() {
         return unavailable("this server has no public URL, so it cannot receive webhooks".into());
     }
@@ -559,8 +560,8 @@ fn mock_start<P: Plane>(
     answered: Dispatched,
 ) -> CallOutcome {
     let end = match answered {
-        Dispatched::Result(output) => RunEnd::from_mock(ToolOutcome::Result(output)),
-        Dispatched::Failed(failure) => RunEnd::from_mock(ToolOutcome::Failure(failure)),
+        Dispatched::Result(output) => RunEnd::from_mock(ActionOutcome::Result(output)),
+        Dispatched::Failed(failure) => RunEnd::from_mock(ActionOutcome::Failure(failure)),
         transient @ Dispatched::Transient(_) => {
             return CallOutcome::MockStart {
                 dispatched: transient,
@@ -586,7 +587,7 @@ async fn start_child<P: Plane>(
     config: &NodeConfig,
     log: &LogOf<P>,
     partition: rewind_core::PartitionId,
-    call: &ToolCall,
+    call: &Call,
     head: &RunHead,
     action_set: &rewind_core::ActionSet,
     name: &str,
@@ -745,7 +746,7 @@ async fn start_child<P: Plane>(
 async fn signal_child<P: Plane>(
     plane: &P,
     log: &LogOf<P>,
-    call: &ToolCall,
+    call: &Call,
     head: &RunHead,
     name: &str,
 ) -> CallOutcome {
@@ -798,32 +799,32 @@ async fn signal_child<P: Plane>(
 /// The failure of a task that must not be called again after an interruption: always under
 /// `at_most_once`, past the maximum of attempts under `retry`.
 pub(crate) fn interrupted(
-    tool: &str,
+    action: &str,
     policy: Interruption,
     attempt: u32,
     max_attempts: u32,
-) -> Option<ToolFailure> {
+) -> Option<ActionFailure> {
     let message = match policy {
         Interruption::AtMostOnce => format!(
-            "the call to {tool} was interrupted and may or may not have taken effect; the tool \
+            "the call to {action} was interrupted and may or may not have taken effect; the action \
              is at_most_once, so it is not called again"
         ),
         Interruption::Retry if attempt > max_attempts => format!(
-            "the call to {tool} was interrupted after {} attempts and may or may not have taken \
+            "the call to {action} was interrupted after {} attempts and may or may not have taken \
              effect",
             attempt - 1
         ),
         Interruption::Retry => return None,
     };
-    Some(ToolFailure {
-        kind: ToolFailureKind::OutcomeUnknown,
+    Some(ActionFailure {
+        kind: ActionFailureKind::OutcomeUnknown,
         message,
         data: None,
     })
 }
 
 /// The wait a server asked for before a retry (`Retry-After`), if any.
-pub(crate) fn asked_wait(failure: &ToolFailure) -> Duration {
+pub(crate) fn asked_wait(failure: &ActionFailure) -> Duration {
     failure
         .data
         .as_ref()

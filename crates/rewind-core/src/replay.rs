@@ -199,17 +199,17 @@ mod tests {
         }))
     }
 
-    fn call(seq: u32, tool: &str, args: Value) -> Command {
-        Command::ScheduleToolCall {
+    fn call(seq: u32, action: &str, args: Value) -> Command {
+        Command::ScheduleCall {
             seq: Seq(seq),
-            tool: tool.into(),
+            action: action.into(),
             args: args.into(),
             callsite: None,
         }
     }
 
     fn done(seq: u32, result: Value) -> Event {
-        Event::Completion(Completion::ToolCallCompleted {
+        Event::Completion(Completion::CallCompleted {
             seq: Seq(seq),
             result: result.into(),
         })
@@ -270,7 +270,7 @@ mod tests {
         let completion = delivered(cursor.on_idle().unwrap());
         assert_eq!(
             completion,
-            &Completion::ToolCallCompleted {
+            &Completion::CallCompleted {
                 seq: Seq(1),
                 result: json!([1, 2, 3]).into()
             }
@@ -302,7 +302,7 @@ mod tests {
 
         let seqs: Vec<Seq> = (0..2)
             .map(|_| match delivered(cursor.on_idle().unwrap()) {
-                Completion::ToolCallCompleted { seq, .. } => *seq,
+                Completion::CallCompleted { seq, .. } => *seq,
                 other => panic!("unexpected {other:?}"),
             })
             .collect();
@@ -317,9 +317,9 @@ mod tests {
         let args = json!({ "number": 4 });
         let h = history(vec![
             started(),
-            Event::Command(Command::ScheduleToolCall {
+            Event::Command(Command::ScheduleCall {
                 seq: Seq(1),
-                tool: "github.close_issue".into(),
+                action: "github.close_issue".into(),
                 args: crate::Payload::Digest(crate::Payload::digest_of(&args)),
                 callsite: None,
             }),
@@ -349,8 +349,8 @@ mod tests {
         ));
         assert_eq!(
             err.to_string(),
-            "history entry 1 is tool call #1 github.close_issue({\"number\":4}), \
-             but the script emitted tool call #1 github.close_issue({\"number\":5})"
+            "history entry 1 is call #1 github.close_issue({\"number\":4}), \
+             but the script emitted call #1 github.close_issue({\"number\":5})"
         );
     }
 
@@ -375,7 +375,7 @@ mod tests {
         let err = cursor.on_command(&call(2, "b", json!({}))).unwrap_err();
         assert_eq!(
             err.to_string(),
-            "the script emitted tool call #2 b({}), which the history does not contain (at entry 3)"
+            "the script emitted call #2 b({}), which the history does not contain (at entry 3)"
         );
     }
 
@@ -401,7 +401,7 @@ mod tests {
     #[test]
     fn skips_annotations_and_ignores_callsites() {
         let mut recorded = call(1, "a", json!({}));
-        if let Command::ScheduleToolCall { callsite, .. } = &mut recorded {
+        if let Command::ScheduleCall { callsite, .. } = &mut recorded {
             *callsite = Some(Callsite { line: 3, column: 9 });
         }
         let h = history(vec![

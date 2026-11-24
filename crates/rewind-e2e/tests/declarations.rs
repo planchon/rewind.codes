@@ -1,5 +1,5 @@
 //! The contract between codegen, the checker and the runtime (`archi/04-tools.md`, "Action sets
-//! and code generation" and "Type-checking"): the `rewind-tools.d.ts` that `rewind-codegen` writes
+//! and code generation" and "Type-checking"): the `rewind-actions.d.ts` that `rewind-codegen` writes
 //! for a pinned action set makes `rewind-check` accept what the runtime runs and refuse what it
 //! refuses.
 
@@ -10,7 +10,7 @@ use std::path::Path;
 use std::sync::LazyLock;
 
 use rewind_check::TsgoChecker;
-use rewind_core::{ActionSet, Builtin, McpServer, McpTransport, Script, Tool, ToolRoute};
+use rewind_core::{Action, ActionRoute, ActionSet, Builtin, McpServer, McpTransport, Script};
 use rewind_engine::ports::{Diagnostic, DiagnosticSource, ScriptExecutor};
 use rewind_runtime::{SandboxLimits, V8Executor};
 use serde_json::json;
@@ -24,16 +24,16 @@ static EXECUTOR: LazyLock<V8Executor> = LazyLock::new(|| {
     V8Executor::new(SandboxLimits::default()).expect("TZ=UTC (see .cargo/config.toml)")
 });
 
-/// An action set with an MCP server (tools with and without an output schema, with and without
+/// An action set with an MCP server (actions with and without an output schema, with and without
 /// required arguments), a host tool, and the built-ins as they are pinned.
-fn action_set(http_tool: bool) -> ActionSet {
+fn action_set(http_action: bool) -> ActionSet {
     let server = McpServer::new(
         "crm",
         McpTransport::Http {
             url: "https://mcp.example.com/crm".into(),
         },
     );
-    let crm = || ToolRoute::Mcp {
+    let crm = || ActionRoute::Mcp {
         server: "crm".into(),
     };
     let by_id = json!({
@@ -42,9 +42,9 @@ fn action_set(http_tool: bool) -> ActionSet {
         "required": ["id"],
         "additionalProperties": false,
     });
-    let mut lookup = Tool::new("crm.lookup", crm(), by_id.clone());
+    let mut lookup = Action::new("crm.lookup", crm(), by_id.clone());
     lookup.description = Some("Find a customer by id.".into());
-    let export = Tool::new(
+    let export = Action::new(
         "crm.export",
         crm(),
         json!({
@@ -53,31 +53,31 @@ fn action_set(http_tool: bool) -> ActionSet {
             "additionalProperties": false,
         }),
     );
-    let mut score = Tool::new("crm.score", crm(), by_id);
+    let mut score = Action::new("crm.score", crm(), by_id);
     score.output_schema = Some(json!({
         "type": "object",
         "properties": { "score": { "type": "number" } },
         "required": ["score"],
     }));
-    let ask_user = Tool::new(
+    let ask_user = Action::new(
         "ask_user",
-        ToolRoute::Host { group: None },
+        ActionRoute::Host { group: None },
         json!({
             "type": "object",
             "properties": { "question": { "type": "string" } },
             "required": ["question"],
         }),
     );
-    let webhook = Tool::new(
+    let webhook = Action::new(
         "webhook",
-        ToolRoute::Builtin(Builtin::Webhook),
+        ActionRoute::Builtin(Builtin::Webhook),
         rewind_runtime::builtins::webhook_input_schema(),
     );
-    let mut tools = vec![lookup, export, score, ask_user, webhook];
-    if http_tool {
-        tools.push(rewind_mcp::http_tool(vec!["api.example.com".into()]));
+    let mut actions = vec![lookup, export, score, ask_user, webhook];
+    if http_action {
+        actions.push(rewind_mcp::http_action(vec!["api.example.com".into()]));
     }
-    ActionSet::new([server], tools).unwrap()
+    ActionSet::new([server], actions).unwrap()
 }
 
 /// What the checker says of a script, against the declarations codegen writes for the action set.
@@ -111,12 +111,12 @@ fn summary(diagnostics: &[Diagnostic]) -> Vec<(String, String)> {
         .collect()
 }
 
-const GOOD: &str = r#"import { crm, ask_user } from "rewind:tools";
-import type { ToolContent } from "rewind:tools";
+const GOOD: &str = r#"import { crm, ask_user } from "rewind:actions";
+import type { ActionContent } from "rewind:actions";
 import { webhook } from "rewind";
 
 export default async function main() {
-  const customer: ToolContent = await crm.lookup({ id: "c-1" });
+  const customer: ActionContent = await crm.lookup({ id: "c-1" });
   const name = customer.json<{ name: string }>().name;
   const csv: string = (await crm.export()).text();
   const { score } = await crm.score({ id: "c-1" });
@@ -134,6 +134,54 @@ async fn a_good_script_checks_and_starts() {
     assert_eq!(compile(GOOD, &action_set), Ok(()));
 }
 
+/// Code written before actions were named (`archi/08-decisions.md`, R1): it imports
+/// `rewind:tools`, catches a `ToolError` and reads its `tool`.
+const OLD_NAMES: &str = r#"import { crm, ask_user } from "rewind:tools";
+import type { ToolContent } from "rewind:tools";
+import { ToolError, sleep } from "rewind";
+
+export default async function main() {
+  try {
+    const customer: ToolContent = await crm.lookup({ id: "c-1" });
+    await sleep("1s");
+    return customer.json<{ name: string }>().name;
+  } catch (error) {
+    if (error instanceof ToolError) return `${error.tool} failed: ${error.message}`;
+    return await ask_user({ question: "what now?" });
+  }
+}
+"#;
+
+#[tokio::test]
+async fn code_written_with_the_old_names_checks_and_starts() {
+    let action_set = action_set(false);
+    let script = OLD_NAMES;
+    assert_eq!(summary(&check(script, &action_set).await), []);
+    assert_eq!(compile(script, &action_set), Ok(()));
+    // The old names reach the same exports: a wrong argument is refused through either.
+    let wrong = script.replace(r#"crm.lookup({ id: "c-1" })"#, "crm.lookup({ id: 42 })");
+    assert_eq!(
+        summary(&check(&wrong, &action_set).await),
+        [(
+            "TS2322".to_owned(),
+            "Type 'number' is not assignable to type 'string'.".to_owned()
+        )]
+    );
+    let missing = script.replace("{ crm, ask_user }", "{ crm, jira }");
+    assert!(compile(&missing, &action_set).is_err());
+    assert!(!check(&missing, &action_set).await.is_empty());
+}
+
+#[tokio::test]
+async fn the_old_names_are_declared_nowhere() {
+    let declarations = rewind_codegen::generate(&action_set(true), &BTreeMap::new());
+    for text in [&declarations.typescript, &declarations.prompt] {
+        assert!(!text.contains("rewind:tools"), "{text}");
+        assert!(!text.contains("ToolError"), "{text}");
+        assert!(!text.contains("ToolContent"), "{text}");
+    }
+}
+
 #[tokio::test]
 async fn args_of_the_wrong_type_are_refused() {
     let script = GOOD.replace(r#"crm.lookup({ id: "c-1" })"#, "crm.lookup({ id: 42 })");
@@ -147,7 +195,7 @@ async fn args_of_the_wrong_type_are_refused() {
 }
 
 #[tokio::test]
-async fn fetch_needs_the_http_tool() {
+async fn fetch_needs_the_http_action() {
     let diagnostics = check(GOOD, &action_set(false)).await;
     assert_eq!(
         summary(&diagnostics),
@@ -160,25 +208,25 @@ async fn fetch_needs_the_http_tool() {
 }
 
 #[tokio::test]
-async fn built_ins_are_not_in_rewind_tools_for_either() {
-    let script = "import { http, webhook } from \"rewind:tools\";\n\nexport default async function main() {\n  return [http, webhook];\n}\n";
+async fn built_ins_are_not_in_rewind_actions_for_either() {
+    let script = "import { http, webhook } from \"rewind:actions\";\n\nexport default async function main() {\n  return [http, webhook];\n}\n";
     let action_set = action_set(true);
     assert_eq!(
         summary(&check(script, &action_set).await),
         [
             (
                 "TS2305".into(),
-                "Module '\"rewind:tools\"' has no exported member 'http'.".into()
+                "Module '\"rewind:actions\"' has no exported member 'http'.".into()
             ),
             (
                 "TS2305".into(),
-                "Module '\"rewind:tools\"' has no exported member 'webhook'.".into()
+                "Module '\"rewind:actions\"' has no exported member 'webhook'.".into()
             ),
         ]
     );
     let refused = compile(script, &action_set).unwrap_err();
     assert!(
-        refused.starts_with("\"rewind:tools\" has no export named \"http\""),
+        refused.starts_with("\"rewind:actions\" has no export named \"http\""),
         "{refused}"
     );
 }
@@ -186,8 +234,8 @@ async fn built_ins_are_not_in_rewind_tools_for_either() {
 #[tokio::test]
 async fn types_are_imported_as_types_for_both() {
     let script = GOOD.replace(
-        "import { crm, ask_user } from \"rewind:tools\";\nimport type { ToolContent } from \"rewind:tools\";",
-        "import { crm, ask_user, ToolContent } from \"rewind:tools\";",
+        "import { crm, ask_user } from \"rewind:actions\";\nimport type { ActionContent } from \"rewind:actions\";",
+        "import { crm, ask_user, ActionContent } from \"rewind:actions\";",
     );
     let action_set = action_set(true);
     let diagnostics = summary(&check(&script, &action_set).await);
@@ -196,24 +244,24 @@ async fn types_are_imported_as_types_for_both() {
     assert!(
         diagnostics[0]
             .1
-            .starts_with("'ToolContent' is a type and must be imported using a type-only import"),
+            .starts_with("'ActionContent' is a type and must be imported using a type-only import"),
         "{diagnostics:?}"
     );
     let refused = compile(&script, &action_set).unwrap_err();
     assert!(
-        refused.starts_with("\"rewind:tools\" has no export named \"ToolContent\""),
+        refused.starts_with("\"rewind:actions\" has no export named \"ActionContent\""),
         "{refused}"
     );
 }
 
-/// Every golden `rewind-tools.d.ts` of `rewind-codegen` is valid under the checker's options: a
+/// Every golden `rewind-actions.d.ts` of `rewind-codegen` is valid under the checker's options: a
 /// check with them reports nothing, and does not fail on the declarations.
 #[tokio::test]
 async fn the_golden_declarations_of_codegen_check() {
     let golden = Path::new(env!("CARGO_MANIFEST_DIR")).join("../rewind-codegen/tests/golden");
     let mut checked = 0;
     for entry in std::fs::read_dir(&golden).unwrap() {
-        let path = entry.unwrap().path().join("rewind-tools.d.ts");
+        let path = entry.unwrap().path().join("rewind-actions.d.ts");
         let Ok(declarations) = std::fs::read_to_string(&path) else {
             continue;
         };
@@ -241,21 +289,21 @@ async fn the_golden_declarations_of_codegen_check() {
 }
 
 /// An action set in which `name` is a server, a host-tool group or a host tool without a group,
-/// each tool taking `{ q: string }` and returning `{ id: string }`; and a script that calls it.
+/// each action taking `{ q: string }` and returning `{ id: string }`; and a script that calls it.
 fn named(name: &str) -> Vec<(ActionSet, String)> {
     let input = json!({
         "type": "object",
         "properties": { "q": { "type": "string" } },
         "required": ["q"],
     });
-    let tool = |tool: String, route: ToolRoute| {
-        let mut tool = Tool::new(tool, route, input.clone());
-        tool.output_schema = Some(json!({
+    let action = |action: String, route: ActionRoute| {
+        let mut action = Action::new(action, route, input.clone());
+        action.output_schema = Some(json!({
             "type": "object",
             "properties": { "id": { "type": "string" } },
             "required": ["id"],
         }));
-        tool
+        action
     };
     let server = McpServer::new(
         name,
@@ -265,30 +313,34 @@ fn named(name: &str) -> Vec<(ActionSet, String)> {
     );
     let call = |imported: &str, called: &str| {
         format!(
-            "import {{ {imported} as tools }} from \"rewind:tools\";\n\n\
+            "import {{ {imported} as actions }} from \"rewind:actions\";\n\n\
              export default async function main() {{\n  \
              const found: {{ id: string }} = await {called}({{ q: \"x\" }});\n  \
              return found.id;\n}}\n"
         )
     };
-    let mcp = ToolRoute::Mcp {
+    let mcp = ActionRoute::Mcp {
         server: name.to_owned(),
     };
-    let group = ToolRoute::Host {
+    let group = ActionRoute::Host {
         group: Some(name.to_owned()),
     };
     vec![
         (
-            ActionSet::new([server], [tool(format!("{name}.find"), mcp)]).unwrap(),
-            call(name, "tools.find"),
+            ActionSet::new([server], [action(format!("{name}.find"), mcp)]).unwrap(),
+            call(name, "actions.find"),
         ),
         (
-            ActionSet::new([], [tool(format!("{name}.ask"), group)]).unwrap(),
-            call(name, "tools.ask"),
+            ActionSet::new([], [action(format!("{name}.ask"), group)]).unwrap(),
+            call(name, "actions.ask"),
         ),
         (
-            ActionSet::new([], [tool(name.to_owned(), ToolRoute::Host { group: None })]).unwrap(),
-            call(name, "tools"),
+            ActionSet::new(
+                [],
+                [action(name.to_owned(), ActionRoute::Host { group: None })],
+            )
+            .unwrap(),
+            call(name, "actions"),
         ),
     ]
 }
@@ -312,7 +364,7 @@ async fn names_that_are_not_reserved_words_check_and_start() {
         "NaN",
         "require",
         "constructor",
-        "ToolContent",
+        "ActionContent",
         "Promise",
     ] {
         for (action_set, script) in named(name) {
@@ -356,7 +408,7 @@ fn triage() -> rewind_core::Workflow {
     .unwrap()
 }
 
-const TRIAGE: &str = r#"import { crm } from "rewind:tools";
+const TRIAGE: &str = r#"import { crm } from "rewind:actions";
 import { signal } from "rewind";
 
 export default async function main(input: { repo: string }) {

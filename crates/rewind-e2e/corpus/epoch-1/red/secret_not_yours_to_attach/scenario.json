@@ -29,7 +29,7 @@
   "secrets": {
     "crm": "org/crm"
   },
-  "tools": {
+  "actions": {
     "crm.lookup": {
       "name": "Ada"
     }

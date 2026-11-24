@@ -1,7 +1,7 @@
 // The globals of the Rewind sandbox beyond ECMAScript (archi/01-product.md, "What exists in the
 // sandbox"). The type-checker gives this file to tsgo next to the script, with the ECMAScript
 // lib of tsconfig.json and no DOM: what type-checks is what exists. `Temporal` comes from that
-// lib (esnext.temporal); `fetch` from fetch.d.ts, only when the action set enables the `http` tool.
+// lib (esnext.temporal); `fetch` from fetch.d.ts, only when the action set enables the `http` action.
 //
 // Adding or changing a global here changes what scripts can observe: it goes with a new
 // determinism epoch, and with globals.json.

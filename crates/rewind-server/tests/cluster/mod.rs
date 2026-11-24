@@ -315,7 +315,7 @@ impl World {
     }
 }
 
-/// A start of `source` in `namespace`, with no tool.
+/// A start of `source` in `namespace`, with no action.
 pub fn start(source: &str, namespace: &NamespaceName, input: JsonValue) -> StartRun {
     let mut request = StartRun::new(Script::new(source), ActionSet::empty(), input);
     request.namespace = namespace.clone();

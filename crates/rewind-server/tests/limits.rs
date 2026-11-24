@@ -245,7 +245,7 @@ async fn payloads_are_bounded_to_8_mib() {
         .unwrap();
     let mut waiting = start(
         r#"import { signal } from "rewind";
-import { store } from "rewind:tools";
+import { store } from "rewind:actions";
 export default async function main() {
   const got = await store.put({ small: true });
   const signalled = await signal("go");
@@ -298,9 +298,9 @@ export default async function main() {
         Some(json!({ "got": 1, "signalled": "small" }))
     );
 
-    // What the script emits above the limit ends the run: a tool call's arguments, its output.
+    // What the script emits above the limit ends the run: a call's arguments, its output.
     let mut args = start(
-        r#"import { store } from "rewind:tools";
+        r#"import { store } from "rewind:actions";
 export default async function main() {
   await store.put({ blob: "x".repeat(8 * 1024 * 1024) });
 }"#,
@@ -317,7 +317,7 @@ export default async function main() {
         .await
         .unwrap();
     let args = ended(&harness, &args.id, Duration::from_secs(60)).await;
-    assert_limit(&args, "the payload of schedule_tool_call is");
+    assert_limit(&args, "the payload of schedule_call is");
     assert_eq!(
         events(&harness, &args.id).await,
         ["run_started", "run_aborted"]

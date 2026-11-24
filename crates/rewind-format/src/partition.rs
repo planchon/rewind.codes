@@ -3,9 +3,9 @@
 //!
 //! A partition holds one record per kind of thing it keeps about its runs: [`RunHead`], an
 //! [`Entry`] of an attempt's history (its event in the stored format of events), an
-//! [`InboxItem`], a [`SignalKey`], a tool [`Task`], a [`Timer`], a [`PayloadValue`], a
+//! [`InboxItem`], a [`SignalKey`], an action [`Task`], a [`Timer`], a [`PayloadValue`], a
 //! [`Watcher`], a [`WebhookToken`], a run's [`Summary`] in the index, a [`StartKey`], the hourly
-//! [`Counters`] of a namespace, the observed [`Shape`] of a tool's results, the [`Gauges`] of a
+//! [`Counters`] of a namespace, the observed [`Shape`] of an action's results, the [`Gauges`] of a
 //! namespace, an [`Outbox`] entry, and the state of an [`Organization`] homed there.
 //!
 //! [`encode`] writes a record `{"v":1,…}`, its fields in their declared order, optional fields
@@ -21,13 +21,13 @@ use serde_json::{Map, Value};
 use crate::{FormatError, VERSION};
 
 pub use crate::v1::partition::{
-    Admission, Attribute, Callsite, Counters, CredentialsReason, Ending, Entry, FailureCounts,
-    FailureKind, ForkParent, Gauges, InboxItem, LatestRun, Level, Log, Metadata, Mode,
-    Organization, Outbox, ParkKind, PayloadValue, Projection, Quarantine, QuarantineKind,
+    ActionCounts, Admission, Attribute, Callsite, Counters, CredentialsReason, Ending, Entry,
+    FailureCounts, FailureKind, ForkParent, Gauges, InboxItem, LatestRun, Level, Log, Metadata,
+    Mode, Organization, Outbox, ParkKind, PayloadValue, Projection, Quarantine, QuarantineKind,
     QuarantineNote, QuotaAlert, QuotaKind, RunCounts, RunHead, RunWorkflow, ScriptCounts, Shape,
     SignalKey, Sketch, Span, SpanKind, SpanStatus, StartKey, StartedBy, Status, Summary, Task,
-    TaskPhase, TaskState, Threshold, Timer, TimerKind, ToolCounts, TraceContext, Wait, WaitKind,
-    WaitingFor, Watcher, WebhookEvent, WebhookKind, WebhookToken,
+    TaskPhase, TaskState, Threshold, Timer, TimerKind, TraceContext, Wait, WaitKind, WaitingFor,
+    Watcher, WebhookEvent, WebhookKind, WebhookToken,
 };
 
 /// A partition record: what [`encode`] writes and [`decode`] reads.
@@ -56,7 +56,7 @@ records! {
     Entry => "history entry",
     InboxItem => "inbox item",
     SignalKey => "signal key",
-    Task => "tool task",
+    Task => "call task",
     Timer => "timer",
     PayloadValue => "payload",
     Watcher => "watcher",

@@ -11,21 +11,21 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use rewind_core::{Cassette, Digest, Seed, ToolFailure, ToolOutcome};
+use rewind_core::{ActionFailure, ActionOutcome, Cassette, Digest, Seed};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use utoipa::ToSchema;
 
-use crate::common::{AbortReason, RunStatus, ScriptError, Timestamp, ToolFailureKind, timestamp};
+use crate::common::{AbortReason, ActionFailureKind, RunStatus, ScriptError, Timestamp, timestamp};
 
-/// A test: what the run is given (its input, the tools' answers, signals), and what must hold
+/// A test: what the run is given (its input, the actions' answers, signals), and what must hold
 /// at the end. It never names its script.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[schema(example = json!({
     "name": "closes the stale issues once approved",
     "input": { "repo": "acme/api" },
-    "world": { "tools": {
+    "world": { "actions": {
         "github.list_issues": [{ "args": { "state": "open" }, "returns": [{ "number": 4, "updated_at": "2025-10-01T00:00:00Z" }] }],
         "github.close_issue": { "returns": {} }
     } },
@@ -33,7 +33,7 @@ use crate::common::{AbortReason, RunStatus, ScriptError, Timestamp, ToolFailureK
     "expect": {
         "status": "completed",
         "output": { "closed": 1 },
-        "calls": [{ "tool": "github.close_issue", "times": 1 }]
+        "calls": [{ "action": "github.close_issue", "times": 1 }]
     }
 }))]
 pub struct Test {
@@ -69,12 +69,12 @@ fn empty_object() -> Value {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct World {
-    /// By tool, one answer for every call, or rules tried in order. A start of a workflow
+    /// By action, one answer for every call, or rules tried in order. A start of a workflow
     /// (`workflows.<name>.start`) is answered with the child's output, or its failure.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub tools: BTreeMap<String, ToolRules>,
+    pub actions: BTreeMap<String, ActionRules>,
     /// TypeScript mock handlers, run in a separate isolate: a module default-exporting its
-    /// handlers by tool name or by namespace.
+    /// handlers by action name or by namespace.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mocks: Option<String>,
     /// Calls and signals recorded from a run: a cassette document.
@@ -85,23 +85,23 @@ pub struct World {
 
 impl World {
     pub fn is_empty(&self) -> bool {
-        self.tools.is_empty() && self.mocks.is_none() && self.cassette.is_none()
+        self.actions.is_empty() && self.mocks.is_none() && self.cassette.is_none()
     }
 }
 
 /// One rule, or several tried in order.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(untagged)]
-pub enum ToolRules {
-    Many(Vec<ToolRule>),
-    One(Box<ToolRule>),
+pub enum ActionRules {
+    Many(Vec<ActionRule>),
+    One(Box<ActionRule>),
 }
 
-impl ToolRules {
-    fn into_vec(self) -> Vec<ToolRule> {
+impl ActionRules {
+    fn into_vec(self) -> Vec<ActionRule> {
         match self {
-            ToolRules::Many(rules) => rules,
-            ToolRules::One(rule) => vec![*rule],
+            ActionRules::Many(rules) => rules,
+            ActionRules::One(rule) => vec![*rule],
         }
     }
 }
@@ -110,7 +110,7 @@ impl ToolRules {
 /// `error`, for `times` calls at most.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ToolRule {
+pub struct ActionRule {
     /// The call's args contain these (objects compared key by key); any call when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(value_type = Option<Object>)]
@@ -122,7 +122,7 @@ pub struct ToolRule {
         skip_serializing_if = "Option::is_none"
     )]
     pub returns: Option<Value>,
-    /// The call fails with a `ToolError`.
+    /// The call fails with an `ActionError`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<RuleError>,
     /// How many calls it answers; any number when absent.
@@ -137,7 +137,7 @@ pub struct RuleError {
     pub message: String,
     /// `error` when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub kind: Option<ToolFailureKind>,
+    pub kind: Option<ActionFailureKind>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub data: Option<Value>,
 }
@@ -172,7 +172,7 @@ pub struct Expectations {
     /// The run failed with an error of this name, whose message contains `message`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<ExpectedError>,
-    /// Calls that must happen: those to `tool` whose args contain `args`, exactly `times` of
+    /// Calls that must happen: those to `action` whose args contain `args`, exactly `times` of
     /// them, at least one when `times` is absent; `times: 0` forbids them. Calls the world
     /// answers that are not listed are allowed.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -193,7 +193,7 @@ pub struct ExpectedError {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ExpectedCall {
-    pub tool: String,
+    pub action: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(value_type = Option<Object>)]
     pub args: Option<Value>,
@@ -243,7 +243,7 @@ pub struct TestFrom {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TestProblem {
-    /// It names tools, answers or args the action set no longer has. Not run.
+    /// It names actions, answers or args the action set no longer has. Not run.
     Stale,
     /// The workflow's input or signal schemas refuse it. Not run.
     Incompatible,
@@ -274,7 +274,7 @@ pub struct TestResult {
     pub error: Option<ScriptError>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub abort: Option<AbortReason>,
-    /// How many times each tool was called.
+    /// How many times each action was called.
     #[serde(default)]
     pub calls: BTreeMap<String, u64>,
     /// The LLM trace of the run; empty for a test that was not run.
@@ -315,19 +315,19 @@ impl Test {
             .seed
             .map(|seed| parse_seed(&seed).map_err(|error| format!("test {name:?}: {error}")))
             .transpose()?;
-        let mut tools = BTreeMap::new();
-        for (tool, rules) in self.world.tools {
+        let mut actions = BTreeMap::new();
+        for (action, rules) in self.world.actions {
             let rules = rules
                 .into_vec()
                 .into_iter()
                 .enumerate()
                 .map(|(position, rule)| {
                     rule.into_core().map_err(|error| {
-                        format!("test {name:?}: rule {} of {tool}: {error}", position + 1)
+                        format!("test {name:?}: rule {} of {action}: {error}", position + 1)
                     })
                 })
                 .collect::<Result<Vec<_>, _>>()?;
-            tools.insert(tool, rules);
+            actions.insert(action, rules);
         }
         let cassette = self
             .world
@@ -384,7 +384,7 @@ impl Test {
             start,
             seed,
             world: rewind_core::World {
-                tools,
+                actions,
                 mocks: self.world.mocks,
                 cassette,
             },
@@ -407,14 +407,14 @@ impl Test {
             start: test.start.map(timestamp),
             seed: test.seed.map(|seed| hex(seed.as_bytes())),
             world: World {
-                tools: test
+                actions: test
                     .world
-                    .tools
+                    .actions
                     .iter()
-                    .map(|(tool, rules)| {
+                    .map(|(action, rules)| {
                         (
-                            tool.clone(),
-                            ToolRules::Many(rules.iter().map(ToolRule::from_core).collect()),
+                            action.clone(),
+                            ActionRules::Many(rules.iter().map(ActionRule::from_core).collect()),
                         )
                     })
                     .collect(),
@@ -445,35 +445,35 @@ impl Test {
     }
 }
 
-impl ToolRule {
-    fn into_core(self) -> Result<rewind_core::ToolRule, String> {
+impl ActionRule {
+    fn into_core(self) -> Result<rewind_core::ActionRule, String> {
         let answer = match (self.returns, self.error) {
-            (Some(result), None) => ToolOutcome::Result(result),
-            (None, Some(error)) => ToolOutcome::Failure(ToolFailure {
+            (Some(result), None) => ActionOutcome::Result(result),
+            (None, Some(error)) => ActionOutcome::Failure(ActionFailure {
                 kind: error
                     .kind
-                    .map_or(rewind_core::ToolFailureKind::Error, Into::into),
+                    .map_or(rewind_core::ActionFailureKind::Error, Into::into),
                 message: error.message,
                 data: error.data,
             }),
             (Some(_), Some(_)) => return Err("give `returns` or `error`, not both".into()),
             (None, None) => return Err("give `returns` or `error`".into()),
         };
-        Ok(rewind_core::ToolRule {
+        Ok(rewind_core::ActionRule {
             args: self.args,
             answer,
             times: self.times,
         })
     }
 
-    fn from_core(rule: &rewind_core::ToolRule) -> Self {
+    fn from_core(rule: &rewind_core::ActionRule) -> Self {
         let (returns, error) = match &rule.answer {
-            ToolOutcome::Result(result) => (Some(result.clone()), None),
-            ToolOutcome::Failure(failure) => (
+            ActionOutcome::Result(result) => (Some(result.clone()), None),
+            ActionOutcome::Failure(failure) => (
                 None,
                 Some(RuleError {
                     message: failure.message.clone(),
-                    kind: (failure.kind != rewind_core::ToolFailureKind::Error)
+                    kind: (failure.kind != rewind_core::ActionFailureKind::Error)
                         .then(|| failure.kind.into()),
                     data: failure.data.clone(),
                 }),
@@ -501,7 +501,7 @@ impl Expectations {
                 .calls
                 .into_iter()
                 .map(|call| rewind_core::ExpectedCall {
-                    tool: call.tool,
+                    action: call.action,
                     args: call.args,
                     times: call.times,
                 })
@@ -525,7 +525,7 @@ impl Expectations {
                 .calls
                 .iter()
                 .map(|call| ExpectedCall {
-                    tool: call.tool.clone(),
+                    action: call.action.clone(),
                     args: call.args.clone(),
                     times: call.times,
                 })
@@ -568,7 +568,7 @@ mod tests {
             "9f2c4e1a07b3d5f8a1c2e3b4d5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4",
             { "from": "9f2c4e1a07b3d5f8a1c2e3b4d5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4",
               "expect": { "status": "failed" } },
-            { "name": "t", "world": { "tools": { "a.b": { "returns": null } } } },
+            { "name": "t", "world": { "actions": { "a.b": { "returns": null } } } },
         ]))
         .unwrap();
         assert!(matches!(inputs[0], TestInput::Digest(_)));
@@ -581,8 +581,8 @@ mod tests {
             .into_core(|_| Err("no cassette".into()))
             .unwrap();
         assert_eq!(
-            core.world.tools["a.b"][0].answer,
-            ToolOutcome::Result(Value::Null)
+            core.world.actions["a.b"][0].answer,
+            ActionOutcome::Result(Value::Null)
         );
         assert!(
             serde_json::from_value::<Test>(json!({ "name": "t", "x": 1 })).is_err(),
@@ -597,12 +597,12 @@ mod tests {
             "input": { "repo": "acme/api" },
             "start": "2026-01-01T00:00:00Z",
             "seed": "07".repeat(32),
-            "world": { "tools": { "a.b": [
+            "world": { "actions": { "a.b": [
                 { "args": { "n": 1 }, "returns": 1, "times": 2 },
                 { "error": { "message": "down", "kind": "unavailable" } }
             ] } },
             "signals": [{ "name": "approval", "payload": true, "when": "2h" }],
-            "expect": { "status": "completed", "calls": [{ "tool": "a.b", "times": 0 }], "order": "listed" }
+            "expect": { "status": "completed", "calls": [{ "action": "a.b", "times": 0 }], "order": "listed" }
         }))
         .unwrap();
         let core = test
@@ -629,13 +629,13 @@ mod tests {
     }
 
     impl World {
-        /// The same world, each tool's rules in an array.
+        /// The same world, each action's rules in an array.
         fn normalized(self) -> Self {
             Self {
-                tools: self
-                    .tools
+                actions: self
+                    .actions
                     .into_iter()
-                    .map(|(tool, rules)| (tool, ToolRules::Many(rules.into_vec())))
+                    .map(|(action, rules)| (action, ActionRules::Many(rules.into_vec())))
                     .collect(),
                 ..self
             }

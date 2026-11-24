@@ -8,10 +8,10 @@ use std::ops::Bound as StdBound;
 use std::time::Duration;
 
 use rewind_core::{
-    ActionSet, Annotation, Callsite, CancelReason, Command, Completion, Digest, Epoch, Event,
-    HistoryEntry, Lifecycle, LogLevel, PartitionId, Payload, RunId, RunMode, RunStarted, RunStatus,
-    Script, SecretRef, Seed, Seq, Shape, Timestamp, ToolFailure, ToolFailureKind, ToolPolicy,
-    ToolRoute,
+    ActionFailure, ActionFailureKind, ActionPolicy, ActionRoute, ActionSet, Annotation, Callsite,
+    CancelReason, Command, Completion, Digest, Epoch, Event, HistoryEntry, Lifecycle, LogLevel,
+    PartitionId, Payload, RunId, RunMode, RunStarted, RunStatus, Script, SecretRef, Seed, Seq,
+    Shape, Timestamp,
 };
 use rewind_engine::metrics::RunMeasurement;
 use rewind_engine::ports::link::{
@@ -22,16 +22,16 @@ use rewind_engine::ports::link::{
 };
 use rewind_engine::ports::partition::Activation;
 use rewind_engine::ports::{
-    Attempt, AttributeValue, CompiledScript, CounterDelta, Counters, Created,
-    CredentialsExpiredReason, Day, DayUsage, DueTimer, Ending, Enqueued, FailureCounts, ForkParent,
-    Found, Gauges, Hour, InboxItem, IndexedSummary, LatestRun, LogRecord, Month, NamespaceName,
-    NodeId, OutboxEntry, OutboxId, Page, ParkKind, ParkReason, PartitionEpoch, PayloadRecord,
-    Predicate, Projection, Quarantine, QuarantineKind, QuarantineNote, QuotaAlert, QuotaAlertKey,
-    QuotaExceeded, QuotaKind, QuotaScope, Range, RunCounts, RunHead, RunMetadata, RunOrder,
-    RunQuery, RunRef, RunSummary, RunWorkflow, Scope, ScriptCounts, SealedAttempt, SearchCursor,
-    Sketch, Span, SpanId, SpanKind, SpanStatus, StartedBy, StoredActionSet, StoredScript,
-    TaskPhase, TaskRecord, TaskRef, TaskState, TaskToken, TenantId, Term, TextMatch, Threshold,
-    TimerChange, TimerKind, ToolCounts, ToolDeclarations, ToolTask, TraceContext, TraceId, Trigger,
+    ActionCounts, ActionDeclarations, Attempt, AttributeValue, CallTask, CompiledScript,
+    CounterDelta, Counters, Created, CredentialsExpiredReason, Day, DayUsage, DueTimer, Ending,
+    Enqueued, FailureCounts, ForkParent, Found, Gauges, Hour, InboxItem, IndexedSummary, LatestRun,
+    LogRecord, Month, NamespaceName, NodeId, OutboxEntry, OutboxId, Page, ParkKind, ParkReason,
+    PartitionEpoch, PayloadRecord, Predicate, Projection, Quarantine, QuarantineKind,
+    QuarantineNote, QuotaAlert, QuotaAlertKey, QuotaExceeded, QuotaKind, QuotaScope, Range,
+    RunCounts, RunHead, RunMetadata, RunOrder, RunQuery, RunRef, RunSummary, RunWorkflow, Scope,
+    ScriptCounts, SealedAttempt, SearchCursor, Sketch, Span, SpanId, SpanKind, SpanStatus,
+    StartedBy, StoredActionSet, StoredScript, TaskPhase, TaskRecord, TaskRef, TaskState, TaskToken,
+    TenantId, Term, TextMatch, Threshold, TimerChange, TimerKind, TraceContext, TraceId, Trigger,
     Usage, Wait, WaitKind, WaitingFor, WebhookEvent, WebhookEventKind, Window,
 };
 use serde::Serialize;
@@ -227,7 +227,7 @@ fn summary(n: u128) -> RunSummary {
         started_at: Some(T),
         ended_at: Some(at(7)),
         last_activity_at: at(7),
-        tool_calls: 3,
+        calls: 3,
         errors: 1,
         history_len: 6,
         waits: waits(),
@@ -250,8 +250,11 @@ fn summary(n: u128) -> RunSummary {
 fn indexed(n: u128) -> IndexedSummary {
     IndexedSummary {
         summary: summary(n),
-        tools: BTreeSet::from(["srv.a".to_owned(), "ask".to_owned()]),
-        call_errors: BTreeSet::from([ToolFailureKind::Timeout, ToolFailureKind::OutcomeUnknown]),
+        actions: BTreeSet::from(["srv.a".to_owned(), "ask".to_owned()]),
+        call_errors: BTreeSet::from([
+            ActionFailureKind::Timeout,
+            ActionFailureKind::OutcomeUnknown,
+        ]),
     }
 }
 
@@ -259,9 +262,9 @@ fn indexed(n: u128) -> IndexedSummary {
 fn history() -> Vec<HistoryEntry> {
     let events = [
         Event::Lifecycle(Lifecycle::RunStarted(started())),
-        Event::Command(Command::ScheduleToolCall {
+        Event::Command(Command::ScheduleCall {
             seq: Seq(1),
-            tool: "srv.a".into(),
+            action: "srv.a".into(),
             args: Payload::Value(json!({ "x": 1 })),
             callsite: Some(callsite()),
         }),
@@ -270,15 +273,15 @@ fn history() -> Vec<HistoryEntry> {
             message: "slow".into(),
             callsite: None,
         }),
-        Event::Completion(Completion::ToolCallFailed {
+        Event::Completion(Completion::CallFailed {
             seq: Seq(1),
-            error: ToolFailure {
-                kind: ToolFailureKind::Unavailable,
+            error: ActionFailure {
+                kind: ActionFailureKind::Unavailable,
                 message: "rate limited".into(),
                 data: Some(json!({ "retry_after": 2 })),
             },
         }),
-        Event::Completion(Completion::ToolCallCompleted {
+        Event::Completion(Completion::CallCompleted {
             seq: Seq(2),
             result: Payload::Digest(digest("large")),
         }),
@@ -369,20 +372,20 @@ fn tasks() -> Vec<TaskRecord> {
         .enumerate()
         .map(|(seq, state)| {
             let route = if seq % 2 == 0 {
-                ToolRoute::Mcp {
+                ActionRoute::Mcp {
                     server: "srv".into(),
                 }
             } else {
-                ToolRoute::Host {
+                ActionRoute::Host {
                     group: Some("crm".into()),
                 }
             };
             TaskRecord {
-                task: ToolTask {
+                task: CallTask {
                     task: task_ref(1, seq as u32),
                     action_set: digest("action_set"),
-                    tool: "srv.a".into(),
-                    policy: ToolPolicy::default_for(&route),
+                    action: "srv.a".into(),
+                    policy: ActionPolicy::default_for(&route),
                     route,
                     args: Payload::Value(json!({ "seq": seq })),
                     state,
@@ -472,13 +475,13 @@ fn counters() -> Counters {
                 }],
             },
         )]),
-        tools: BTreeMap::from([(
+        actions: BTreeMap::from([(
             "srv.a".to_owned(),
-            ToolCounts {
+            ActionCounts {
                 calls: 3,
                 completed: 1,
                 failed: 2,
-                errors: BTreeMap::from([(ToolFailureKind::Timeout, 2)]),
+                errors: BTreeMap::from([(ActionFailureKind::Timeout, 2)]),
                 retries: 1,
                 latency: sketch(),
             },
@@ -487,7 +490,7 @@ fn counters() -> Counters {
             digest("script"),
             ScriptCounts {
                 runs: run_counts(),
-                tools: BTreeSet::from(["srv.a".to_owned()]),
+                actions: BTreeSet::from(["srv.a".to_owned()]),
                 first_started_at: Some(T),
                 last_started_at: Some(at(9)),
             },
@@ -533,7 +536,7 @@ fn projections() -> Vec<Projection> {
                 trace_id: TraceId([1; 16]),
                 span_id: SpanId([2; 8]),
                 parent: Some(SpanId([3; 8])),
-                name: "tool srv.a".into(),
+                name: "action srv.a".into(),
                 kind: SpanKind::Client,
                 start: T,
                 end: at(30),
@@ -560,7 +563,7 @@ fn projections() -> Vec<Projection> {
             occurred_at: at(32),
             kind: WebhookEventKind::CredentialsExpired {
                 seq: Seq(2),
-                tool: "srv.a".into(),
+                action: "srv.a".into(),
                 message: "401".into(),
                 reason: CredentialsExpiredReason::Refused,
                 secret: Some(SecretRef::parse("ns/github").unwrap()),
@@ -591,7 +594,7 @@ fn activation() -> Activation {
             CounterDelta::Shape {
                 tenant: acme(),
                 namespace: user(),
-                tool: "srv.a".into(),
+                action: "srv.a".into(),
                 shape: Shape::Union(vec![Shape::Null, Shape::Array(Box::new(Shape::Number))]),
             },
         ],
@@ -617,7 +620,7 @@ fn host_task() -> HostTask {
         token: TaskToken(format!("rewind_tk_{}_00ff", run_id(1))),
         task: task_ref(1, 2),
         namespace: user(),
-        tool: "ask".into(),
+        action: "ask".into(),
         args: json!({ "question": "?" }),
         idempotency_key: "key-1".into(),
         attempt: 2,
@@ -677,10 +680,10 @@ fn every_predicate() -> Vec<Predicate> {
         },
         Predicate::Script(vec!["ab".into()]),
         Predicate::ActionSet(vec!["cd".into()]),
-        Predicate::Tool(vec![TextMatch::Prefix("srv.".into())]),
+        Predicate::Action(vec![TextMatch::Prefix("srv.".into())]),
         Predicate::Error {
             names: BTreeSet::from(["TypeError".to_owned()]),
-            kinds: BTreeSet::from([ToolFailureKind::Error]),
+            kinds: BTreeSet::from([ActionFailureKind::Error]),
         },
         Predicate::Waiting(BTreeSet::from([WaitingFor::Approval, WaitingFor::Deferred])),
         Predicate::Signal(vec![TextMatch::Exact("go".into())]),
@@ -841,7 +844,7 @@ fn every_partition_request() -> Vec<PartitionRequest> {
         PartitionRequest::Shapes {
             tenant: acme(),
             namespace: Some(user()),
-            tools: vec!["srv.a".into()],
+            actions: vec!["srv.a".into()],
         },
     ]
 }
@@ -1029,7 +1032,7 @@ fn every_request_and_notice_of_the_organizations_round_trips() {
             namespace: Some(user()),
             labels: labels(),
             action_set: Some(digest("action_set")),
-            tools: BTreeSet::from(["ask".to_owned()]),
+            actions: BTreeSet::from(["ask".to_owned()]),
             slots: 4,
         }),
         OrgRequest::Detach {
@@ -1125,8 +1128,8 @@ fn activation_request(purpose: Purpose) -> ActivationRequest {
         },
         action_set: StoredActionSet {
             action_set: action_set(),
-            declarations: ToolDeclarations {
-                typescript: "declare module \"rewind:tools\" {}".into(),
+            declarations: ActionDeclarations {
+                typescript: "declare module \"rewind:actions\" {}".into(),
                 prompt: "ask(question) → unknown".into(),
             },
         },
@@ -1160,14 +1163,14 @@ fn activations_round_trip() {
                 RunMeasurement::Ended {
                     outcome: "completed".into(),
                 },
-                RunMeasurement::ToolCall {
-                    tool: "srv.a".into(),
+                RunMeasurement::Call {
+                    action: "srv.a".into(),
                     outcome: "failed".into(),
                     error_kind: Some("timeout".into()),
                     seconds: 1.5,
                 },
-                RunMeasurement::ToolCall {
-                    tool: "ask".into(),
+                RunMeasurement::Call {
+                    action: "ask".into(),
                     outcome: "no_outcome".into(),
                     error_kind: None,
                     seconds: 0.0,

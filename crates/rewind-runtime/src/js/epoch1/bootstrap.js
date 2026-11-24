@@ -7,7 +7,7 @@
 // source of non-determinism deterministic, installs the web-standard globals of deno_web,
 // and leaves the hooks Rust drives the script with in `globalThis.__rewindHooks`. Every instance
 // starts from that snapshot. Rust takes the hooks, then calls init(config) with what belongs to
-// the run (its id, its start, its seed, whether the action set has the http tool); init removes the
+// the run (its id, its start, its seed, whether the action set has the http action); init removes the
 // ambient capabilities, `Deno`, `__bootstrap` and the hooks from the global object before any
 // module is loaded. The `rewind` modules get their hooks through a global that
 // `rewind:internal` deletes before any user code runs.
@@ -75,7 +75,7 @@
 
   const {
     op_drain_pending_rejections,
-    op_rewind_call_tool,
+    op_rewind_call_action,
     op_rewind_check_workflow_output,
     op_rewind_heap_exceeded,
     op_rewind_cancel_timer,
@@ -579,16 +579,25 @@
     });
   }
 
-  class ToolError extends Error {
-    constructor(tool, failure) {
-      super(`${tool} failed: ${failure.message}`);
-      this.name = "ToolError";
-      this.tool = tool;
+  class ActionError extends Error {
+    constructor(action, failure) {
+      super(`${action} failed: ${failure.message}`);
+      this.name = "ActionError";
+      this.action = action;
       this.outcomeUnknown = failure.outcomeUnknown;
       this.data = failure.data ?? undefined;
       ownStack(this);
     }
   }
+
+  // Code written before actions were named catches a `ToolError`, the same class, and reads its
+  // `tool`, the same value as `action` (archi/08-decisions.md, R1). Neither is declared.
+  ObjectDefineProperty(ActionError.prototype, "tool", {
+    get() {
+      return this.action;
+    },
+    configurable: true,
+  });
 
   class CancelledError extends Error {
     constructor(message) {
@@ -618,7 +627,7 @@
   class DeadlockError extends Error {
     constructor() {
       super(
-        "main has not settled, and nothing can wake the script: no tool call, timer or signal wait is pending",
+        "main has not settled, and nothing can wake the script: no call, timer or signal wait is pending",
       );
       this.name = "DeadlockError";
       ownStack(this);
@@ -627,7 +636,7 @@
 
   // ---------------------------------------------------------------------------------------
   // How a script ends (archi/03-execution.md): the outcome is evaluated each time the script
-  // goes idle, and the terminal command waits until no tool call is in flight.
+  // goes idle, and the terminal command waits until no call is in flight.
 
   let main;
   let mainState = "running"; // "returned" | "threw"
@@ -639,9 +648,9 @@
   let failure;
   let cancellation; // the message of the cancellation, once one was requested
   let ended = false; // the terminal command was emitted
-  let toolsInFlight = 0;
+  let callsInFlight = 0;
 
-  // seq -> { kind: "tool" | "sleep" | "timeout" | "callback", ... }
+  // seq -> { kind: "call" | "sleep" | "timeout" | "callback", ... }
   const pending = new SafeMap();
 
   function take(seq) {
@@ -685,13 +694,13 @@
     throw new TypeError(`invalid duration: ${String(duration)}`);
   }
 
-  // What an MCP tool pinned without an output schema returns, `{ content, structuredContent? }`,
-  // reaches the script with two helpers (archi/04-tools.md, "Toolsets and code generation"), as
-  // `rewind-tools.d.ts` declares them in `ToolContent`: `text()` joins the text blocks with
-  // newlines; `json()` is `structuredContent` when the tool sent it, else `text()` parsed as
+  // What an MCP action pinned without an output schema returns, `{ content, structuredContent? }`,
+  // reaches the script with two helpers (archi/04-tools.md, "Action sets and code generation"),
+  // as `rewind-actions.d.ts` declares them in `ActionContent`: `text()` joins the text blocks with
+  // newlines; `json()` is `structuredContent` when the action sent it, else `text()` parsed as
   // JSON. They live on a frozen prototype, not enumerable: the value's own keys stay the
   // result's, what JSON.stringify and the journal see.
-  const ToolContentPrototype = ObjectFreeze(
+  const ActionContentPrototype = ObjectFreeze(
     ObjectCreate(ObjectPrototype, {
       text: {
         value: function text() {
@@ -710,49 +719,49 @@
       json: {
         value: function json() {
           if (this.structuredContent !== undefined) return this.structuredContent;
-          return JSONParse(ReflectApply(ToolContentPrototype.text, this, []));
+          return JSONParse(ReflectApply(ActionContentPrototype.text, this, []));
         },
       },
     }),
   );
 
-  function toolContent(result) {
+  function actionContent(result) {
     if (result !== null && typeof result === "object" && !ArrayIsArray(result)) {
-      ObjectSetPrototypeOf(result, ToolContentPrototype);
+      ObjectSetPrototypeOf(result, ActionContentPrototype);
     }
     return result;
   }
 
-  function callToolContent(tool, args) {
-    return callTool(tool, args, true);
+  function callActionContent(action, args) {
+    return callAction(action, args, true);
   }
 
-  // A tool call: the op checks the arguments against the tool's pinned input schema and
+  // A call: the op checks the arguments against the action's pinned input schema and
   // records the command. A call without arguments sends `{}`. A call refused before it is
   // recorded rejects with an error whose stack starts at the script's call. `content`: the
-  // result is MCP content, which gets the helpers of `ToolContent`.
-  function callTool(tool, args, content = false) {
+  // result is MCP content, which gets the helpers of `ActionContent`.
+  function callAction(action, args, content = false) {
     let json;
     try {
       json = JSONStringify(args === undefined ? {} : args);
     } catch (error) {
       return PromiseReject(
-        atCallSite(`the arguments of ${tool} are not serializable to JSON: ${error.message}`),
+        atCallSite(`the arguments of ${action} are not serializable to JSON: ${error.message}`),
       );
     }
     if (json === undefined) {
-      return PromiseReject(atCallSite(`the arguments of ${tool} are not serializable to JSON`));
+      return PromiseReject(atCallSite(`the arguments of ${action} are not serializable to JSON`));
     }
     const [line, column] = callsite();
     let seq;
     try {
-      seq = op_rewind_call_tool(tool, wellFormed(json), line, column);
+      seq = op_rewind_call_action(action, wellFormed(json), line, column);
     } catch (error) {
       return PromiseReject(atCallSite(error));
     }
-    toolsInFlight++;
+    callsInFlight++;
     return new Promise((resolve, reject) => {
-      pending.set(seq, { kind: "tool", tool, content, resolve, reject });
+      pending.set(seq, { kind: "call", action, content, resolve, reject });
     });
   }
 
@@ -764,9 +773,9 @@
     });
   }
 
-  // `webhook(name)`: a call of the built-in `webhook` tool, which returns `{ url }`.
+  // `webhook(name)`: a call of the built-in `webhook` action, which returns `{ url }`.
   function webhook(name) {
-    return callTool("webhook", { name: String(name) });
+    return callAction("webhook", { name: String(name) });
   }
 
   // setTimeout and setInterval on top of durable timers. An interval keeps its first seq as
@@ -864,7 +873,7 @@
 
   // ---------------------------------------------------------------------------------------
   // Workflows across runs (archi/03-execution.md): `workflows.<name>.start` and
-  // `workflows.<name>.signal` are tool calls. The end of a run this run started, or watches,
+  // `workflows.<name>.signal` are calls. The end of a run this run started, or watches,
   // comes back as the signal `rewind:ended:<run id>`, which the glue takes itself: it never
   // reaches a mailbox the script reads. An end may arrive before the start's result: it is kept.
 
@@ -891,7 +900,7 @@
           }
         }
         const detached = args.detached === true;
-        return PromisePrototypeThen(callTool(`workflows.${name}.start`, args), (result) => {
+        return PromisePrototypeThen(callAction(`workflows.${name}.start`, args), (result) => {
           const runId = String(result.runId);
           if (!detached && !ends.has(runId)) attached.add(runId);
           return workflowRun(name, runId, true);
@@ -914,7 +923,7 @@
           payload: payload === undefined ? null : payload,
         };
         return PromisePrototypeThen(
-          callTool(`workflows.${name}.signal`, args),
+          callAction(`workflows.${name}.signal`, args),
           () => undefined,
         );
       },
@@ -1038,9 +1047,9 @@
     for (const [seq, entry] of pending) {
       pending.delete(seq);
       switch (entry.kind) {
-        case "tool":
+        case "call":
           // Cancellation does not wait for the calls in flight: their results are dropped.
-          toolsInFlight--;
+          callsInFlight--;
           entry.reject(error());
           break;
         case "sleep":
@@ -1058,7 +1067,7 @@
 
   function hasPendingTimers() {
     for (const [, entry] of pending) {
-      if (entry.kind !== "tool") return true;
+      if (entry.kind !== "call") return true;
     }
     return false;
   }
@@ -1071,9 +1080,9 @@
   }
 
   // ---------------------------------------------------------------------------------------
-  // fetch: a call of the built-in `http` tool, present only when the action set enables it
-  // (archi/04-tools.md, "The http tool and egress"). The request and the response cross the
-  // boundary as JSON, in the format of the tool `rewind-mcp` implements (archi/08-decisions.md):
+  // fetch: a call of the built-in `http` action, present only when the action set enables it
+  // (archi/04-tools.md, "The `http` action and egress"). The request and the response cross the
+  // boundary as JSON, in the format of the action `rewind-mcp` implements (archi/08-decisions.md):
   //
   //   args   { url, method, headers: [[name, value], …], body?, bodyEncoding?: "base64" }
   //   result { status, statusText, url, redirected, headers: [[name, value], …], body,
@@ -1239,7 +1248,7 @@
     #used = false;
     constructor(result) {
       const notAResponse = () =>
-        new TypeError("the http tool returned something that is not a response");
+        new TypeError("the http action returned something that is not a response");
       if (result === null || typeof result !== "object" || !NumberIsInteger(result.status)) {
         throw notAResponse();
       }
@@ -1332,7 +1341,7 @@
     } catch (error) {
       return PromiseReject(atCallSite(error));
     }
-    return PromisePrototypeThen(callTool("http", request), (result) => new Response(result));
+    return PromisePrototypeThen(callAction("http", request), (result) => new Response(result));
   }
 
   // ---------------------------------------------------------------------------------------
@@ -1390,13 +1399,14 @@
     });
 
     globalThis.__rewindHandoff = ObjectFreeze({
-      callTool,
-      callToolContent,
+      callAction,
+      callActionContent,
       sleep,
       signal,
       webhook,
       run,
-      ToolError,
+      ActionError,
+      ToolError: ActionError,
       CancelledError,
       WorkflowError,
       workflow,
@@ -1465,20 +1475,20 @@
     if (ended) return;
     const completion = JSONParse(completionJson);
     switch (completion.type) {
-      case "tool_call_completed": {
+      case "call_completed": {
         const entry = take(completion.seq);
         if (entry === undefined) break;
-        toolsInFlight--;
+        callsInFlight--;
         if (failure === undefined) {
-          entry.resolve(entry.content ? toolContent(completion.result) : completion.result);
+          entry.resolve(entry.content ? actionContent(completion.result) : completion.result);
         }
         break;
       }
-      case "tool_call_failed": {
+      case "call_failed": {
         const entry = take(completion.seq);
         if (entry === undefined) break;
-        toolsInFlight--;
-        if (failure === undefined) entry.reject(new ToolError(entry.tool, completion));
+        callsInFlight--;
+        if (failure === undefined) entry.reject(new ActionError(entry.action, completion));
         break;
       }
       case "timer_fired":
@@ -1494,7 +1504,7 @@
         } else {
           // Already failing: stop waiting for the calls in flight.
           pending.clear();
-          toolsInFlight = 0;
+          callsInFlight = 0;
         }
         break;
       default:
@@ -1511,12 +1521,12 @@
     if (rejections !== undefined && rejections.length > 0) fail(rejections[1]);
 
     if (failure !== undefined) {
-      if (toolsInFlight === 0) end();
+      if (callsInFlight === 0) end();
     } else if (mainState === "returned") {
       // The runs it started attached end first, unless the run is being cancelled: its end
       // cancels them.
-      if (toolsInFlight === 0 && (attached.size === 0 || cancellation !== undefined)) end();
-    } else if (toolsInFlight === 0 && !hasPendingTimers() && !hasSignalWaiters()) {
+      if (callsInFlight === 0 && (attached.size === 0 || cancellation !== undefined)) end();
+    } else if (callsInFlight === 0 && !hasPendingTimers() && !hasSignalWaiters()) {
       // Nothing can wake the script any more. After a cancellation, that is how it ends.
       fail(cancellation === undefined ? new DeadlockError() : new CancelledError(cancellation));
       end();

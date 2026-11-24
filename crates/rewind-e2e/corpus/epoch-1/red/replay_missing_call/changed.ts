@@ -1,4 +1,4 @@
-import { audit } from "rewind:tools";
+import { audit } from "rewind:actions";
 import { signal } from "rewind";
 
 export default async function main() {

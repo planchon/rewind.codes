@@ -1,4 +1,4 @@
-import { chat, tracker } from "rewind:tools";
+import { chat, tracker } from "rewind:actions";
 
 export default async function main(input: { repo: string }) {
   const issues: { number: number; title: string }[] = [];

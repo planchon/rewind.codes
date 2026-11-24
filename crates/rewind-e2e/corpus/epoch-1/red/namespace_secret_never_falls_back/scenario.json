@@ -30,7 +30,7 @@
     "crm": "ns/crm"
   },
   "attach": "organization",
-  "tools": {
+  "actions": {
     "crm.lookup": {
       "name": "Ada"
     }

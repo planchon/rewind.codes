@@ -294,7 +294,7 @@ pub(crate) async fn prepare<P: Plane>(
     let tasks = log
         .tasks(&run)
         .await
-        .map_err(|error| failed("the tool tasks", error.to_string()))?;
+        .map_err(|error| failed("the call tasks", error.to_string()))?;
     let history = if with_history {
         Some(
             log.history(&run, head.attempt, 0)
@@ -347,7 +347,7 @@ pub(crate) async fn prepare<P: Plane>(
 fn trigger_digest(trigger: &Trigger) -> Option<Digest> {
     let payload = match trigger {
         Trigger::RunStarted(started) => &started.input,
-        Trigger::Completion(rewind_core::Completion::ToolCallCompleted { result, .. }) => result,
+        Trigger::Completion(rewind_core::Completion::CallCompleted { result, .. }) => result,
         Trigger::Completion(rewind_core::Completion::SignalReceived { payload, .. }) => payload,
         Trigger::Completion(_) => return None,
     };

@@ -42,6 +42,7 @@ use crate::http;
 use crate::idle::Idle;
 use crate::link::{ClusterSecret, HttpLink, SharedMembership};
 use crate::oauth::OAuthServer;
+use crate::wiring::actions::Actions;
 use crate::wiring::checker;
 use crate::wiring::clock::ServerClock;
 use crate::wiring::control::{ControlPlane, ServerMembership};
@@ -49,7 +50,6 @@ use crate::wiring::executor::Executor;
 use crate::wiring::identity::Identity;
 use crate::wiring::link::ServerLink;
 use crate::wiring::telemetry::{self, Exporter};
-use crate::wiring::tools::Tools;
 use crate::wiring::webhooks::{DELIVERY_TIMEOUT, HttpWebhooks, ServerRender, WebhookEgress};
 use crate::wiring::{bucket, jobs};
 
@@ -156,7 +156,7 @@ impl Running {
         for task in self.tasks {
             task.abort();
         }
-        self.app.tools.close();
+        self.app.actions.close();
         self.app.plane.spans.shutdown().await;
         self.app.store.close().await;
         if let Some(socket) = &self.socket {
@@ -359,7 +359,7 @@ async fn start_wired(
         idle: idle.clone(),
     };
     let epochs = executor.epochs().iter().copied().collect();
-    let tools = Tools::new(config.tool_egress.clone()).map_err(StartupError::Setup)?;
+    let actions = Actions::new(config.action_egress.clone()).map_err(StartupError::Setup)?;
     let exporter = Exporter::new(
         config.otlp.as_ref(),
         &telemetry::service(config.node.as_str()),
@@ -385,7 +385,7 @@ async fn start_wired(
         archive: opened.archive,
         blobs: opened.blobs,
         executor,
-        dispatcher: tools.dispatcher(),
+        dispatcher: actions.dispatcher(),
         secrets: store.clone(),
         spans: exporter,
         webhooks,
@@ -507,7 +507,7 @@ async fn start_wired(
         map,
         control: control.clone(),
         checker: checker::checker(config.tsgo_cache.clone()),
-        tools,
+        actions,
         settings,
         idle,
         sign_in,

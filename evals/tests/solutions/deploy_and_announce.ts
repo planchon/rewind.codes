@@ -1,4 +1,4 @@
-import { chat, ops } from "rewind:tools";
+import { chat, ops } from "rewind:actions";
 import { sleep } from "rewind";
 
 type Deployment = { deployment_id: string; status: string };

@@ -12,8 +12,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use rewind_core::{
-    ActionSet, Epoch, Interruption, McpServer, McpTransport, PartitionId, RunStatus, Tool,
-    ToolFailureKind, ToolPolicy, ToolRoute,
+    Action, ActionFailureKind, ActionPolicy, ActionRoute, ActionSet, Epoch, Interruption,
+    McpServer, McpTransport, PartitionId, RunStatus,
 };
 use rewind_engine::edge::EdgeError;
 use rewind_engine::plane::HostTools;
@@ -188,7 +188,7 @@ async fn a_partition_moves_to_a_node_that_joins_and_its_runs_go_on() {
     }
 }
 
-/// An action set whose tool `srv.a` is an MCP server's, whose calls need a slot of the
+/// An action set whose action `srv.a` is an MCP server's, whose calls need a slot of the
 /// organization.
 fn mcp_request(name: &str) -> rewind_engine::StartRun {
     let server = McpServer::new(
@@ -197,15 +197,15 @@ fn mcp_request(name: &str) -> rewind_engine::StartRun {
             url: "https://mcp.example.com/srv".to_owned(),
         },
     );
-    let tool = Tool::new(
+    let action = Action::new(
         "srv.a",
-        ToolRoute::Mcp {
+        ActionRoute::Mcp {
             server: "srv".into(),
         },
         json!({}),
     );
     let mut request = request(name, json!({}));
-    request.action_set = ActionSet::new(vec![server], vec![tool]).unwrap();
+    request.action_set = ActionSet::new(vec![server], vec![action]).unwrap();
     request
 }
 
@@ -421,16 +421,16 @@ async fn a_node_that_does_not_run_the_run_s_epoch_sends_its_activations_to_one_t
 
 fn host_call(policy: Interruption) -> rewind_engine::StartRun {
     let mut request = request("host", json!({}));
-    let mut tools: Vec<Tool> = request.action_set.tools().to_vec();
-    for tool in &mut tools {
-        if tool.name == "a" {
-            let mut with = ToolPolicy::default_for(&tool.route);
+    let mut actions: Vec<Action> = request.action_set.actions().to_vec();
+    for action in &mut actions {
+        if action.name == "a" {
+            let mut with = ActionPolicy::default_for(&action.route);
             with.on_interruption = policy;
             with.heartbeat_timeout = Duration::from_secs(60);
-            tool.policy = with;
+            action.policy = with;
         }
     }
-    request.action_set = ActionSet::new(Vec::new(), tools).unwrap();
+    request.action_set = ActionSet::new(Vec::new(), actions).unwrap();
     request
 }
 
@@ -441,8 +441,8 @@ fn host() -> FakeExecutor {
             run.call("a", json!({ "ask": "user" }));
         },
         |run, delivery| match delivery {
-            Delivery::ToolCallCompleted { result, .. } => run.complete(result.clone()),
-            Delivery::ToolCallFailed { error, .. } => {
+            Delivery::CallCompleted { result, .. } => run.complete(result.clone()),
+            Delivery::CallFailed { error, .. } => {
                 run.complete(json!({ "kind": error.kind.as_str() }));
             }
             other => panic!("unexpected {other:?}"),
@@ -468,7 +468,7 @@ fn attach(stream: &str, worker: &str, at: &NodeId) -> StreamAttach {
         namespace: None,
         labels: BTreeMap::new(),
         action_set: None,
-        tools: BTreeSet::new(),
+        actions: BTreeSet::new(),
         slots: 4,
     }
 }
@@ -565,7 +565,7 @@ async fn a_stream_that_does_not_come_back_has_its_tasks_handed_again_or_failed()
     };
     assert_eq!(
         output.value().unwrap()["kind"],
-        json!(ToolFailureKind::OutcomeUnknown.as_str())
+        json!(ActionFailureKind::OutcomeUnknown.as_str())
     );
     let _ = TaskState::Approval;
     let _ = RunRef::new(TenantId::local(), retried.id);

@@ -17,8 +17,8 @@ use rewind_engine::attachments::AttachRights;
 use rewind_engine::edge::EdgeError;
 use rewind_engine::ports::link::Refusal;
 use rewind_engine::ports::{
-    CatalogStore, Created, Delivery, Diagnostic, DiagnosticSource, Enqueued, NamespaceName,
-    RunMetadata, RunRef, Severity, StartedBy, StoredWorkflow, TenantId, ToolDeclarations,
+    ActionDeclarations, CatalogStore, Created, Delivery, Diagnostic, DiagnosticSource, Enqueued,
+    NamespaceName, RunMetadata, RunRef, Severity, StartedBy, StoredWorkflow, TenantId,
     WorkflowDeclarations,
 };
 use rewind_engine::suites::SuiteChanges;
@@ -120,7 +120,7 @@ fn parent(executor: FakeExecutor) -> FakeExecutor {
             run.call("workflows.triage.start", args);
         },
         |run, delivery| match delivery {
-            Delivery::ToolCallCompleted { seq: Seq(1), result } => {
+            Delivery::CallCompleted { seq: Seq(1), result } => {
                 if run.input["fail_after_start"] == json!(true) {
                     run.fail("Error", "the parent gave up");
                     return;
@@ -130,7 +130,7 @@ fn parent(executor: FakeExecutor) -> FakeExecutor {
                     json!({ "run": run_id(result), "name": "approval", "payload": { "close": true } }),
                 );
             }
-            Delivery::ToolCallCompleted { seq: Seq(2), .. } => {}
+            Delivery::CallCompleted { seq: Seq(2), .. } => {}
             Delivery::SignalReceived { name, payload } if ended_run(name).is_some() => {
                 run.complete(payload.clone());
             }
@@ -154,8 +154,8 @@ fn others(executor: FakeExecutor) -> FakeExecutor {
                 );
             },
             |run, delivery| match delivery {
-                Delivery::ToolCallCompleted { .. } => run.complete(json!("sent")),
-                Delivery::ToolCallFailed { error, .. } => run.fail("ToolError", &error.message),
+                Delivery::CallCompleted { .. } => run.complete(json!("sent")),
+                Delivery::CallFailed { error, .. } => run.fail("ActionError", &error.message),
                 other => panic!("signaller got {other:?}"),
             },
         )
@@ -169,8 +169,8 @@ fn others(executor: FakeExecutor) -> FakeExecutor {
                 run.call("workflows.triage.start", args);
             },
             |run, delivery| match delivery {
-                Delivery::ToolCallCompleted { .. } => {}
-                Delivery::ToolCallFailed { error, .. } => run.fail("ToolError", &error.message),
+                Delivery::CallCompleted { .. } => {}
+                Delivery::CallFailed { error, .. } => run.fail("ActionError", &error.message),
                 Delivery::SignalReceived { name, payload } if ended_run(name).is_some() => {
                     run.complete(payload.clone());
                 }
@@ -192,7 +192,7 @@ async fn registered_with(dispatcher: RecordingDispatcher) -> (World, StoredWorkf
         .put_action_set(
             &TenantId::local(),
             &child_action_set(),
-            &ToolDeclarations::default(),
+            &ActionDeclarations::default(),
         )
         .await
         .unwrap();
@@ -267,7 +267,7 @@ async fn child_of(world: &mut World, parent: &RunRef) -> RunRef {
     let id = history
         .iter()
         .find_map(|entry| match &entry.event {
-            Event::Completion(Completion::ToolCallCompleted {
+            Event::Completion(Completion::CallCompleted {
                 seq: Seq(1),
                 result,
             }) => result.value().map(run_id),
@@ -692,7 +692,7 @@ async fn a_run_reaches_the_runs_of_its_own_end_user_only() {
 
 #[tokio::test]
 async fn in_mock_mode_the_mocks_answer_a_start_with_the_child_s_end() {
-    let dispatcher = RecordingDispatcher::new(|call| match call.tool.name.as_str() {
+    let dispatcher = RecordingDispatcher::new(|call| match call.action.name.as_str() {
         "workflows.triage.start" => Ok(json!({ "closed": 7 })),
         other => panic!("unexpected call of {other}"),
     });
@@ -721,8 +721,8 @@ async fn in_mock_mode_the_mocks_answer_a_start_with_the_child_s_end() {
         world.events(&parent).await,
         [
             "run_started",
-            "schedule_tool_call",
-            "tool_call_completed",
+            "schedule_call",
+            "call_completed",
             "signal_received",
             "complete_run"
         ],

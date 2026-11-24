@@ -4,9 +4,9 @@
 //!
 //! | Rule | Flags |
 //! | --- | --- |
-//! | `floating-promise` | A promise used as a statement, neither awaited, returned, assigned nor `void`ed: a call to a tool (through an import of `rewind:tools`, or `fetch` with the `http` tool), to `sleep`, `signal` or `webhook`, to a function of the script declared `async` or returning `Promise<…>`, to `Promise.all` and the like, or an async function called at once; also through `.then`, `.catch`, `.finally`, `,`, `?:`, `&&`, `\|\|` and `??` |
+//! | `floating-promise` | A promise used as a statement, neither awaited, returned, assigned nor `void`ed: a call to an action (through an import of `rewind:actions`, or `fetch` with the `http` action), to `sleep`, `signal` or `webhook`, to a function of the script declared `async` or returning `Promise<…>`, to `Promise.all` and the like, or an async function called at once; also through `.then`, `.catch`, `.finally`, `,`, `?:`, `&&`, `\|\|` and `??` |
 //! | `ignored-async-callback` | An async callback given to `forEach`, which ignores what it returns, or to `filter`, `some`, `every`, `find`, `findIndex`, `findLast`, `findLastIndex`, which read a promise as `true` |
-//! | `absent-global` | A reference to a global the sandbox does not have but models reach for (`fetch` without the `http` tool, `require`, `process`, `Buffer`), with what to use instead |
+//! | `absent-global` | A reference to a global the sandbox does not have but models reach for (`fetch` without the `http` action, `require`, `process`, `Buffer`), with what to use instead |
 
 use std::collections::HashSet;
 
@@ -58,14 +58,14 @@ pub(crate) struct Finding {
 
 /// Runs the rules on a script. A script that does not parse gets no finding: tsgo reports
 /// its syntax errors.
-pub(crate) fn check(source: &str, http_tool: bool) -> Vec<Finding> {
+pub(crate) fn check(source: &str, http_action: bool) -> Vec<Finding> {
     let Some(parsed) = parse(source) else {
         return Vec::new();
     };
     let mut scope = Scope {
         unresolved: parsed.unresolved_context(),
-        http_tool,
-        tools: HashSet::new(),
+        http_action,
+        actions: HashSet::new(),
         rewind: HashSet::new(),
         rewind_namespaces: HashSet::new(),
         async_functions: HashSet::new(),
@@ -144,9 +144,10 @@ fn parse(source: &str) -> Option<ParsedSource> {
 struct Scope {
     /// The context of names that refer to no declaration of the script: globals.
     unresolved: SyntaxContext,
-    http_tool: bool,
-    /// Bindings imported from `rewind:tools`: every call through them is a tool call.
-    tools: HashSet<Id>,
+    http_action: bool,
+    /// Bindings imported from `rewind:actions`, or from `rewind:tools`, its old name: every call
+    /// through them is a call.
+    actions: HashSet<Id>,
     /// Bindings of the functions of `rewind` that return a promise.
     rewind: HashSet<Id>,
     /// `import * as rewind from "rewind"`.
@@ -159,11 +160,13 @@ impl Scope {
     fn import(&mut self, module: &str, specifiers: &[ImportSpecifier]) {
         for specifier in specifiers {
             match (module, specifier) {
-                ("rewind:tools", ImportSpecifier::Named(named)) if !named.is_type_only => {
-                    self.tools.insert(named.local.to_id());
+                ("rewind:actions" | "rewind:tools", ImportSpecifier::Named(named))
+                    if !named.is_type_only =>
+                {
+                    self.actions.insert(named.local.to_id());
                 }
-                ("rewind:tools", ImportSpecifier::Namespace(namespace)) => {
-                    self.tools.insert(namespace.local.to_id());
+                ("rewind:actions" | "rewind:tools", ImportSpecifier::Namespace(namespace)) => {
+                    self.actions.insert(namespace.local.to_id());
                 }
                 ("rewind", ImportSpecifier::Named(named)) if !named.is_type_only => {
                     let imported = match &named.imported {
@@ -189,7 +192,7 @@ impl Scope {
 
     /// The hint for a global the sandbox does not have.
     fn absent(&self, name: &str) -> Option<&'static String> {
-        if name == "fetch" && self.http_tool {
+        if name == "fetch" && self.http_action {
             return None;
         }
         absent_globals().get(name)
@@ -205,10 +208,10 @@ impl Scope {
             }
             Expr::Ident(ident) => {
                 let id = ident.to_id();
-                return if self.tools.contains(&id)
-                    || self.http_tool && self.is_global(ident, "fetch")
+                return if self.actions.contains(&id)
+                    || self.http_action && self.is_global(ident, "fetch")
                 {
-                    Some(Origin::Tool)
+                    Some(Origin::Action)
                 } else if self.rewind.contains(&id) {
                     Some(Origin::Rewind)
                 } else if self.async_functions.contains(&id) {
@@ -220,8 +223,8 @@ impl Scope {
             _ => {}
         }
         let member = as_member(callee)?;
-        if root(callee).is_some_and(|root| self.tools.contains(&root.to_id())) {
-            return Some(Origin::Tool);
+        if root(callee).is_some_and(|root| self.actions.contains(&root.to_id())) {
+            return Some(Origin::Action);
         }
         let property = property(member)?;
         let Expr::Ident(object) = unwrap(&member.obj) else {
@@ -231,8 +234,8 @@ impl Scope {
             Some(Origin::Rewind)
         } else if self.is_global(object, "Promise") && COMBINATORS.contains(&property) {
             Some(Origin::Combinator)
-        } else if self.http_tool && self.is_global(object, "globalThis") && property == "fetch" {
-            Some(Origin::Tool)
+        } else if self.http_action && self.is_global(object, "globalThis") && property == "fetch" {
+            Some(Origin::Action)
         } else {
             None
         }
@@ -263,7 +266,7 @@ impl Scope {
 /// What a floating call calls.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Origin {
-    Tool,
+    Action,
     Rewind,
     Script,
     Combinator,
@@ -376,7 +379,7 @@ fn property(member: &MemberExpr) -> Option<&str> {
     }
 }
 
-/// The name a chain of member accesses starts from: `tools` in `tools.github.list_issues`.
+/// The name a chain of member accesses starts from: `actions` in `actions.github.list_issues`.
 fn root(expr: &Expr) -> Option<&Ident> {
     match unwrap(expr) {
         Expr::Ident(ident) => Some(ident),
@@ -454,8 +457,8 @@ impl Rules<'_> {
                     .as_deref()
                     .map_or_else(|| "This call".to_owned(), |name| format!("`{name}(…)`"));
                 let message = match kind {
-                    Origin::Tool => format!(
-                        "{call} calls a tool, and its promise is neither awaited, returned nor \
+                    Origin::Action => format!(
+                        "{call} calls an action, and its promise is neither awaited, returned nor \
                          assigned: the script goes on without waiting for the call, and loses \
                          its result and its errors."
                     ),
@@ -603,16 +606,17 @@ mod tests {
     use super::*;
 
     /// `(rule, flagged text)` of each finding.
-    fn findings(source: &str, http_tool: bool) -> Vec<(&'static str, String)> {
-        check(source, http_tool)
+    fn findings(source: &str, http_action: bool) -> Vec<(&'static str, String)> {
+        check(source, http_action)
             .into_iter()
             .map(|finding| (finding.rule, source[finding.start..finding.end].to_owned()))
             .collect()
     }
 
+    /// `actions` is imported by the old name of `rewind:actions`, as code already written does.
     fn floating(body: &str) -> Vec<String> {
         let source = format!(
-            "import {{ github, ask_user }} from \"rewind:tools\";\nimport * as tools from \"rewind:tools\";\nimport {{ sleep, signal as wait, run }} from \"rewind\";\nimport * as rewind from \"rewind\";\nexport default async function main() {{\n{body}\n}}\n"
+            "import {{ github, ask_user }} from \"rewind:actions\";\nimport * as actions from \"rewind:tools\";\nimport {{ sleep, signal as wait, run }} from \"rewind\";\nimport * as rewind from \"rewind\";\nexport default async function main() {{\n{body}\n}}\n"
         );
         findings(&source, false)
             .into_iter()
@@ -630,8 +634,8 @@ mod tests {
             ),
             ("ask_user({ question: \"?\" });", &["ask_user"]),
             (
-                "tools.github.list_issues({});",
-                &["tools.github.list_issues"],
+                "actions.github.list_issues({});",
+                &["actions.github.list_issues"],
             ),
             ("sleep(\"1h\");", &["sleep"]),
             ("wait(\"approval\");", &["wait"]),
@@ -699,13 +703,13 @@ mod tests {
     }
 
     #[test]
-    fn shadowed_imports_are_not_tools() {
-        let source = "import { github } from \"rewind:tools\";\nimport { sleep } from \"rewind\";\nexport default async function main(sleep: (n: number) => void) {\n  const github = { list_issues() {} };\n  github.list_issues();\n  sleep(1);\n}\n";
+    fn shadowed_imports_are_not_actions() {
+        let source = "import { github } from \"rewind:actions\";\nimport { sleep } from \"rewind\";\nexport default async function main(sleep: (n: number) => void) {\n  const github = { list_issues() {} };\n  github.list_issues();\n  sleep(1);\n}\n";
         assert_eq!(findings(source, false), []);
     }
 
     #[test]
-    fn fetch_floats_only_with_the_http_tool() {
+    fn fetch_floats_only_with_the_http_action() {
         let source = "export default async function main() {\n  fetch(\"https://example.com\");\n  globalThis.fetch(\"https://example.com\");\n}\n";
         assert_eq!(
             findings(source, true),
@@ -726,7 +730,7 @@ mod tests {
 
     #[test]
     fn async_callbacks_given_to_for_each_and_predicates_are_found() {
-        let source = "import { github } from \"rewind:tools\";\nasync function close(n: number) { await github.close_issue({ n }); }\nexport default async function main(input: { numbers: number[] }) {\n  input.numbers.forEach(async (n) => { await close(n); });\n  input.numbers.forEach(close);\n  new Map<string, number>()?.forEach(async function (n) { await close(n); });\n  const open = input.numbers.filter(async (n) => (await github.get({ n })).open);\n  input.numbers.forEach((n) => console.log(n));\n  const all = await Promise.all(input.numbers.map(async (n) => close(n)));\n  input.numbers.reduce(async (total, n) => (await total) + n, Promise.resolve(0));\n}\n";
+        let source = "import { github } from \"rewind:actions\";\nasync function close(n: number) { await github.close_issue({ n }); }\nexport default async function main(input: { numbers: number[] }) {\n  input.numbers.forEach(async (n) => { await close(n); });\n  input.numbers.forEach(close);\n  new Map<string, number>()?.forEach(async function (n) { await close(n); });\n  const open = input.numbers.filter(async (n) => (await github.get({ n })).open);\n  input.numbers.forEach((n) => console.log(n));\n  const all = await Promise.all(input.numbers.map(async (n) => close(n)));\n  input.numbers.reduce(async (total, n) => (await total) + n, Promise.resolve(0));\n}\n";
         let found = findings(source, false);
         assert_eq!(
             found,

@@ -11,8 +11,8 @@ use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 
 use crate::common::{
-    AbortReason, Callsite, LogLevel, Payload, RunMode, RunStatus, ScriptError, Timestamp,
-    ToolFailure, timestamp,
+    AbortReason, ActionFailure, Callsite, LogLevel, Payload, RunMode, RunStatus, ScriptError,
+    Timestamp, timestamp,
 };
 use crate::namespaces::NamespaceName;
 use crate::runs::RunSummary;
@@ -63,9 +63,9 @@ pub enum Event {
         reason: AbortReason,
     },
     #[serde(rename_all = "camelCase")]
-    ScheduleToolCall {
+    ScheduleCall {
         seq: u32,
-        tool: String,
+        action: String,
         args: Payload,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         callsite: Option<Callsite>,
@@ -87,13 +87,13 @@ pub enum Event {
     FailRun {
         error: ScriptError,
     },
-    ToolCallCompleted {
+    CallCompleted {
         seq: u32,
         result: Payload,
     },
-    ToolCallFailed {
+    CallFailed {
         seq: u32,
-        error: ToolFailure,
+        error: ActionFailure,
     },
     TimerFired {
         seq: u32,
@@ -135,18 +135,18 @@ pub enum CancelReason {
 }
 
 impl Event {
-    /// The event's name in the journal, such as `schedule_tool_call`.
+    /// The event's name in the journal, such as `schedule_call`.
     pub fn name(&self) -> &'static str {
         match self {
             Event::RunStarted { .. } => "run_started",
             Event::RunAborted { .. } => "run_aborted",
-            Event::ScheduleToolCall { .. } => "schedule_tool_call",
+            Event::ScheduleCall { .. } => "schedule_call",
             Event::StartTimer { .. } => "start_timer",
             Event::CancelTimer { .. } => "cancel_timer",
             Event::CompleteRun { .. } => "complete_run",
             Event::FailRun { .. } => "fail_run",
-            Event::ToolCallCompleted { .. } => "tool_call_completed",
-            Event::ToolCallFailed { .. } => "tool_call_failed",
+            Event::CallCompleted { .. } => "call_completed",
+            Event::CallFailed { .. } => "call_failed",
             Event::TimerFired { .. } => "timer_fired",
             Event::SignalReceived { .. } => "signal_received",
             Event::CancelRequested { .. } => "cancel_requested",
@@ -176,14 +176,14 @@ impl Event {
                 reason: reason.into(),
             },
             rewind_core::Event::Command(command) => match command {
-                Command::ScheduleToolCall {
+                Command::ScheduleCall {
                     seq,
-                    tool,
+                    action,
                     args,
                     callsite: at,
-                } => Event::ScheduleToolCall {
+                } => Event::ScheduleCall {
                     seq: seq.0,
-                    tool: tool.clone(),
+                    action: action.clone(),
                     args: payload(args),
                     callsite: callsite(at),
                 },
@@ -207,11 +207,11 @@ impl Event {
                 },
             },
             rewind_core::Event::Completion(completion) => match completion {
-                Completion::ToolCallCompleted { seq, result } => Event::ToolCallCompleted {
+                Completion::CallCompleted { seq, result } => Event::CallCompleted {
                     seq: seq.0,
                     result: payload(result),
                 },
-                Completion::ToolCallFailed { seq, error } => Event::ToolCallFailed {
+                Completion::CallFailed { seq, error } => Event::CallFailed {
                     seq: seq.0,
                     error: error.into(),
                 },
@@ -530,7 +530,7 @@ mod tests {
             "labels": {},
             "startedAt": "2026-11-09T10:00:00Z",
             "lastActivityAt": "2026-11-09T10:00:01Z",
-            "toolCalls": 0,
+            "calls": 0,
             "errors": 0,
             "historyLen": 1
         }))

@@ -54,7 +54,7 @@
     "ns/crm": "crm-token",
     "org/crm": "org-token"
   },
-  "tools": {
+  "actions": {
     "crm.lookup": {
       "name": "Ada"
     }

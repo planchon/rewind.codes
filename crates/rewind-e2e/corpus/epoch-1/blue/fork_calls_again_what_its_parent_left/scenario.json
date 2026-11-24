@@ -1,6 +1,6 @@
 {
-  "description": "A run cancelled while a call was in flight leaves it without an outcome. Under the retry policy, its fork calls it again (with the parent's idempotency key, so that the tool can recognize a duplicate) and goes on with the answer.",
-  "tools": {
+  "description": "A run cancelled while a call was in flight leaves it without an outcome. Under the retry policy, its fork calls it again (with the parent's idempotency key, so that the action can recognize a duplicate) and goes on with the answer.",
+  "actions": {
     "payments.charge": {
       "$sequence": [
         {

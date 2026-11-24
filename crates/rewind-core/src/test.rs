@@ -4,9 +4,9 @@
 //! ```text
 //! Test                    never names its script: the script under test is a parameter
 //! ├── name, input, start?, seed?
-//! ├── world               tools { <tool>: [ToolRule] }, mocks?, cassette?
+//! ├── world               actions { <action>: [ActionRule] }, mocks?, cassette?
 //! ├── signals             [{ name, payload, when }]
-//! ├── expect              status?, output?, error?, calls [{ tool, args?, times? }], order
+//! ├── expect              status?, output?, error?, calls [{ action, args?, times? }], order
 //! └── origin?             run, version, namespace: a test recorded from a run
 //! ```
 //!
@@ -25,7 +25,7 @@ use crate::canonical::canonical_json;
 use crate::cassette::{Cassette, CassetteError, Matching};
 use crate::digest::Digest;
 use crate::event::{
-    AbortReason, Annotation, Command, Event, HistoryEntry, ScriptError, ToolOutcome,
+    AbortReason, ActionOutcome, Annotation, Command, Event, HistoryEntry, ScriptError,
 };
 use crate::history::{HistoryError, validate_history};
 use crate::ids::{RunId, Seed};
@@ -57,8 +57,8 @@ pub struct Test {
 /// answer: the rules, then the mock handlers, then the cassette.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct World {
-    /// By tool, the rules tried in order.
-    pub tools: BTreeMap<String, Vec<ToolRule>>,
+    /// By action, the rules tried in order.
+    pub actions: BTreeMap<String, Vec<ActionRule>>,
     /// TypeScript mock handlers, run in a separate isolate.
     pub mocks: Option<String>,
     /// Calls and signals recorded from a run.
@@ -67,23 +67,23 @@ pub struct World {
 
 impl World {
     pub fn is_empty(&self) -> bool {
-        self.tools.is_empty() && self.mocks.is_none() && self.cassette.is_none()
+        self.actions.is_empty() && self.mocks.is_none() && self.cassette.is_none()
     }
 }
 
-/// One answer of a tool, to the calls whose args contain `args`, `times` times at most.
+/// One answer of an action, to the calls whose args contain `args`, `times` times at most.
 #[derive(Clone, Debug, PartialEq)]
-pub struct ToolRule {
+pub struct ActionRule {
     /// The call's args contain them ([`contains`]); any call when `None`.
     pub args: Option<Value>,
-    pub answer: ToolOutcome,
+    pub answer: ActionOutcome,
     /// How many calls the rule answers; any number when `None`.
     pub times: Option<u32>,
 }
 
-impl ToolRule {
+impl ActionRule {
     /// A rule answering every call with `answer`.
-    pub fn always(answer: ToolOutcome) -> Self {
+    pub fn always(answer: ActionOutcome) -> Self {
         Self {
             args: None,
             answer,
@@ -146,10 +146,10 @@ pub struct ExpectedError {
     pub message: Option<String>,
 }
 
-/// Calls a run must make: those to `tool` whose args contain `args`.
+/// Calls a run must make: those to `action` whose args contain `args`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ExpectedCall {
-    pub tool: String,
+    pub action: String,
     pub args: Option<Value>,
     /// Exactly this many; at least one when `None`. `Some(0)`: never.
     pub times: Option<u32>,
@@ -157,7 +157,7 @@ pub struct ExpectedCall {
 
 impl ExpectedCall {
     fn matches(&self, call: &ObservedCall) -> bool {
-        call.tool == self.tool
+        call.action == self.action
             && self
                 .args
                 .as_ref()
@@ -169,10 +169,10 @@ impl ExpectedCall {
         match &self.args {
             Some(args) => format!(
                 "{} with args containing {}",
-                self.tool,
+                self.action,
                 canonical_json(args)
             ),
-            None => self.tool.clone(),
+            None => self.action.clone(),
         }
     }
 }
@@ -213,17 +213,17 @@ pub enum InvalidTest {
     EmptyName,
     #[error("invalid test name {0:?}: expected a name without control characters")]
     Name(String),
-    #[error("the world of test {test:?} names a tool with an empty name")]
-    EmptyToolName { test: String },
-    #[error("the world of test {test:?} gives {tool} no rule: give one, or leave the tool out")]
-    NoRule { test: String, tool: String },
+    #[error("the world of test {test:?} names an action with an empty name")]
+    EmptyActionName { test: String },
+    #[error("the world of test {test:?} gives {action} no rule: give one, or leave the action out")]
+    NoRule { test: String, action: String },
     #[error(
-        "rule {rule} of {tool} in test {test:?} answers 0 calls: give `times` of 1 or more, or \
+        "rule {rule} of {action} in test {test:?} answers 0 calls: give `times` of 1 or more, or \
          leave the rule out"
     )]
     RuleTimes {
         test: String,
-        tool: String,
+        action: String,
         rule: usize,
     },
     #[error("test {test:?} sends a signal with an empty name")]
@@ -232,8 +232,8 @@ pub enum InvalidTest {
         "test {test:?} sends the signal {name:?}: names starting with \"rewind:\" are reserved"
     )]
     ReservedSignal { test: String, name: String },
-    #[error("test {test:?} expects a call to a tool with an empty name")]
-    EmptyExpectedTool { test: String },
+    #[error("test {test:?} expects a call to an action with an empty name")]
+    EmptyExpectedAction { test: String },
 }
 
 impl Test {
@@ -260,20 +260,20 @@ impl Test {
         if self.name.chars().any(char::is_control) {
             return Err(InvalidTest::Name(self.name.clone()));
         }
-        for (tool, rules) in &self.world.tools {
-            if tool.is_empty() {
-                return Err(InvalidTest::EmptyToolName { test: test() });
+        for (action, rules) in &self.world.actions {
+            if action.is_empty() {
+                return Err(InvalidTest::EmptyActionName { test: test() });
             }
             if rules.is_empty() {
                 return Err(InvalidTest::NoRule {
                     test: test(),
-                    tool: tool.clone(),
+                    action: action.clone(),
                 });
             }
             if let Some(rule) = rules.iter().position(|rule| rule.times == Some(0)) {
                 return Err(InvalidTest::RuleTimes {
                     test: test(),
-                    tool: tool.clone(),
+                    action: action.clone(),
                     rule: rule + 1,
                 });
             }
@@ -289,24 +289,24 @@ impl Test {
                 });
             }
         }
-        if self.expect.calls.iter().any(|call| call.tool.is_empty()) {
-            return Err(InvalidTest::EmptyExpectedTool { test: test() });
+        if self.expect.calls.iter().any(|call| call.action.is_empty()) {
+            return Err(InvalidTest::EmptyExpectedAction { test: test() });
         }
         Ok(())
     }
 
-    /// The tools the test names: those its rules answer and those it expects.
-    pub fn tools(&self) -> impl Iterator<Item = &str> {
+    /// The actions the test names: those its rules answer and those it expects.
+    pub fn actions(&self) -> impl Iterator<Item = &str> {
         self.world
-            .tools
+            .actions
             .keys()
             .map(String::as_str)
-            .chain(self.expect.calls.iter().map(|call| call.tool.as_str()))
+            .chain(self.expect.calls.iter().map(|call| call.action.as_str()))
     }
 
     /// The test recorded from a run that ended by itself, completed or failed: its input, start
     /// and seed, its calls as a cassette matched by args with its signal timeline, and as
-    /// expectation its status, its output or its error, and how many times it called each tool
+    /// expectation its status, its output or its error, and how many times it called each action
     /// (`archi/05-testing-and-observability.md`, "Tests recorded from runs"). Every payload of
     /// the history must be loaded.
     pub fn record(history: &[HistoryEntry], origin: TestOrigin) -> Result<Self, RecordError> {
@@ -332,14 +332,14 @@ impl Test {
         }
         let mut counts: BTreeMap<String, u32> = BTreeMap::new();
         for entry in history {
-            if let Event::Command(Command::ScheduleToolCall { tool, .. }) = &entry.event {
-                *counts.entry(tool.clone()).or_default() += 1;
+            if let Event::Command(Command::ScheduleCall { action, .. }) = &entry.event {
+                *counts.entry(action.clone()).or_default() += 1;
             }
         }
         expect.calls = counts
             .into_iter()
-            .map(|(tool, times)| ExpectedCall {
-                tool,
+            .map(|(action, times)| ExpectedCall {
+                action,
                 args: None,
                 times: Some(times),
             })
@@ -351,7 +351,7 @@ impl Test {
             start: Some(history[0].recorded_at),
             seed: Some(started.seed),
             world: World {
-                tools: BTreeMap::new(),
+                actions: BTreeMap::new(),
                 mocks: None,
                 cassette: Some(cassette),
             },
@@ -393,7 +393,7 @@ pub enum RecordError {
 /// A call a run made, as a test sees it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ObservedCall {
-    pub tool: String,
+    pub action: String,
     pub args: Value,
 }
 
@@ -539,7 +539,7 @@ pub fn contains(actual: &Value, expected: &Value) -> bool {
 // -------------------------------------------------------------------------------------------
 // Paths
 
-/// The path a run took: the tools it called in `seq` order and the signals it waited for, with
+/// The path a run took: the actions it called in `seq` order and the signals it waited for, with
 /// consecutive repeats collapsed, then how it ended. Runs of a workflow that took the same path
 /// are recorded as one test (`archi/05-testing-and-observability.md`, "Tests recorded from
 /// runs").
@@ -560,8 +560,8 @@ pub struct PathStep {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum StepKind {
-    /// A call of the tool `name`.
-    Tool,
+    /// A call of the action `name`.
+    Action,
     /// A wait on the signal `name` whose mailbox was empty.
     Signal,
 }
@@ -573,7 +573,7 @@ impl RunPath {
         let mut steps: Vec<PathStep> = Vec::new();
         for entry in history {
             let (kind, name) = match &entry.event {
-                Event::Command(Command::ScheduleToolCall { tool, .. }) => (StepKind::Tool, tool),
+                Event::Command(Command::ScheduleCall { action, .. }) => (StepKind::Action, action),
                 Event::Annotation(Annotation::SignalAwaited { name, .. })
                     if !is_reserved_signal(name) =>
                 {
@@ -603,7 +603,7 @@ impl RunPath {
             .iter()
             .map(|step| {
                 json!({
-                    "kind": match step.kind { StepKind::Tool => "tool", StepKind::Signal => "signal" },
+                    "kind": match step.kind { StepKind::Action => "action", StepKind::Signal => "signal" },
                     "name": step.name,
                     "repeated": step.repeated,
                 })
@@ -641,7 +641,9 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::event::{Completion, Lifecycle, RunMode, RunStarted, ToolFailure, ToolFailureKind};
+    use crate::event::{
+        ActionFailure, ActionFailureKind, Completion, Lifecycle, RunMode, RunStarted,
+    };
     use crate::ids::{Epoch, Seq};
 
     /// Entry `index` is recorded at `100 + index × 1000`.
@@ -674,12 +676,12 @@ mod tests {
         }))
     }
 
-    fn call(index: u64, seq: u32, tool: &str, args: Value) -> HistoryEntry {
+    fn call(index: u64, seq: u32, action: &str, args: Value) -> HistoryEntry {
         entry(
             index,
-            Event::Command(Command::ScheduleToolCall {
+            Event::Command(Command::ScheduleCall {
                 seq: Seq(seq),
-                tool: tool.into(),
+                action: action.into(),
                 args: Payload::Value(args),
                 callsite: None,
             }),
@@ -689,7 +691,7 @@ mod tests {
     fn done(index: u64, seq: u32, result: Value) -> HistoryEntry {
         entry(
             index,
-            Event::Completion(Completion::ToolCallCompleted {
+            Event::Completion(Completion::CallCompleted {
                 seq: Seq(seq),
                 result: Payload::Value(result),
             }),
@@ -754,12 +756,10 @@ mod tests {
         history
             .iter()
             .filter_map(|entry| match &entry.event {
-                Event::Command(Command::ScheduleToolCall { tool, args, .. }) => {
-                    Some(ObservedCall {
-                        tool: tool.clone(),
-                        args: args.value().cloned().unwrap_or_default(),
-                    })
-                }
+                Event::Command(Command::ScheduleCall { action, args, .. }) => Some(ObservedCall {
+                    action: action.clone(),
+                    args: args.value().cloned().unwrap_or_default(),
+                }),
                 _ => None,
             })
             .collect()
@@ -782,12 +782,12 @@ mod tests {
             test.expect.calls,
             vec![
                 ExpectedCall {
-                    tool: "github.close_issue".into(),
+                    action: "github.close_issue".into(),
                     args: None,
                     times: Some(2),
                 },
                 ExpectedCall {
-                    tool: "github.list_issues".into(),
+                    action: "github.list_issues".into(),
                     args: None,
                     times: Some(1),
                 },
@@ -884,15 +884,15 @@ mod tests {
 
     fn calls(list: &[(&str, Value)]) -> Vec<ObservedCall> {
         list.iter()
-            .map(|(tool, args)| ObservedCall {
-                tool: (*tool).into(),
+            .map(|(action, args)| ObservedCall {
+                action: (*action).into(),
                 args: args.clone(),
             })
             .collect()
     }
 
     #[test]
-    fn calls_are_checked_by_tool_args_and_count() {
+    fn calls_are_checked_by_action_args_and_count() {
         let made = calls(&[
             (
                 "slack.post_message",
@@ -905,8 +905,8 @@ mod tests {
             calls,
             ..Expectations::default()
         };
-        let call = |tool: &str, args: Option<Value>, times: Option<u32>| ExpectedCall {
-            tool: tool.into(),
+        let call = |action: &str, args: Option<Value>, times: Option<u32>| ExpectedCall {
+            action: action.into(),
             args,
             times,
         };
@@ -945,8 +945,8 @@ mod tests {
             ("slack.post_message", json!({})),
             ("github.close_issue", json!({ "number": 4 })),
         ]);
-        let call = |tool: &str| ExpectedCall {
-            tool: tool.into(),
+        let call = |action: &str| ExpectedCall {
+            action: action.into(),
             args: None,
             times: None,
         };
@@ -995,7 +995,7 @@ mod tests {
             ]
         );
         let error = ScriptError {
-            name: "ToolError".into(),
+            name: "ActionError".into(),
             message: "rate limited".into(),
             stack: None,
         };
@@ -1012,7 +1012,7 @@ mod tests {
         };
         assert_eq!(
             expect.check(&failed),
-            vec!["the run is failed (ToolError: rate limited), expected completed"]
+            vec!["the run is failed (ActionError: rate limited), expected completed"]
         );
     }
 
@@ -1035,11 +1035,11 @@ mod tests {
     fn invalid_tests_are_refused_with_a_reason() {
         let mut test = Test::new("closes once approved");
         test.check().unwrap();
-        test.world.tools.insert(
+        test.world.actions.insert(
             "github.close_issue".into(),
-            vec![ToolRule {
+            vec![ActionRule {
                 args: None,
-                answer: ToolOutcome::Result(json!({})),
+                answer: ActionOutcome::Result(json!({})),
                 times: Some(0),
             }],
         );
@@ -1048,7 +1048,7 @@ mod tests {
             "rule 1 of github.close_issue in test \"closes once approved\" answers 0 calls: give \
              `times` of 1 or more, or leave the rule out"
         );
-        test.world.tools.clear();
+        test.world.actions.clear();
         test.signals.push(TestSignal {
             name: "rewind:ended:x".into(),
             payload: Value::Null,
@@ -1059,12 +1059,12 @@ mod tests {
             Err(InvalidTest::ReservedSignal { .. })
         ));
         assert_eq!(Test::new(" ").check(), Err(InvalidTest::EmptyName));
-        let failure = ToolOutcome::Failure(ToolFailure {
-            kind: ToolFailureKind::Error,
+        let failure = ActionOutcome::Failure(ActionFailure {
+            kind: ActionFailureKind::Error,
             message: "nope".into(),
             data: None,
         });
-        let rule = ToolRule {
+        let rule = ActionRule {
             args: Some(json!({ "number": 4 })),
             answer: failure,
             times: None,

@@ -1,4 +1,4 @@
-//! The tokens of tool tasks and webhooks (`archi/08-decisions.md`, "Taken while writing the
+//! The tokens of call tasks and webhooks (`archi/08-decisions.md`, "Taken while writing the
 //! object-storage spec": a task's token and a webhook token name their run).
 //!
 //! A token is `rewind_tk_{run}_{secret}` (a task's hand-out) or `rewind_wh_{run}_{secret}` (a

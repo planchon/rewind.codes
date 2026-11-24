@@ -1,4 +1,4 @@
-import { shop } from "rewind:tools";
+import { shop } from "rewind:actions";
 
 export default async function main() {
   const low: { sku: string; reorder_quantity: number; supplier: string }[] = [];

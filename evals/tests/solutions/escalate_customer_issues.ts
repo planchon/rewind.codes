@@ -1,4 +1,4 @@
-import { chat, crm, tracker } from "rewind:tools";
+import { chat, crm, tracker } from "rewind:actions";
 
 type Customer = { name: string; tier: string };
 

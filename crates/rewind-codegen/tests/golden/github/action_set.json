@@ -1,7 +1,7 @@
 {
   "description": "An MCP server in the style of GitHub's: named types in $defs shared by several tools, enums, defaults and formats, an output schema, a tool without one, and a tool name that is not an identifier.",
   "servers": ["github"],
-  "tools": [
+  "actions": [
     {
       "name": "github.list_issues",
       "route": "mcp",

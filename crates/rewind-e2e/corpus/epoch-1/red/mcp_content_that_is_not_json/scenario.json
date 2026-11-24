@@ -1,7 +1,7 @@
 {
   "description": "json() on MCP content without structuredContent parses its text: text that is not JSON throws a SyntaxError where json() is called, which fails the run when uncaught.",
   "mcp_servers": ["crm"],
-  "tools": {
+  "actions": {
     "crm.export": {
       "content": [{ "type": "text", "text": "id,name\nc-1,Ada" }]
     }

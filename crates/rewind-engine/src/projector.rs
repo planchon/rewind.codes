@@ -11,8 +11,8 @@
 //! - a signal awaited with an empty mailbox is a `signal` wait since its `signal_awaited`, until
 //!   its timeout timer's due time; that timer is not a wait of its own;
 //! - a pending timer is a `timer` wait since its `start_timer`, until its due time;
-//! - a pending call is a `host` wait when the pinned action set routes its tool to the host, a
-//!   `call` wait otherwise, since its `schedule_tool_call`;
+//! - a pending call is a `host` wait when the pinned action set routes its action to the host, a
+//!   `call` wait otherwise, since its `schedule_call`;
 //! - waits are ordered by `since`, then kind, then seq and name;
 //! - a failure or an abort gives the run's [`Ending`](crate::ports::Ending), its signature and
 //!   fingerprint ([`failures`]).
@@ -23,8 +23,8 @@
 use std::collections::BTreeSet;
 
 use rewind_core::{
-    ActionSet, Annotation, Callsite, Command, Event, HistoryEntry, Lifecycle, RunState, RunStatus,
-    ScriptError, Seq, Timestamp, ToolRoute,
+    ActionRoute, ActionSet, Annotation, Callsite, Command, Event, HistoryEntry, Lifecycle,
+    RunState, RunStatus, ScriptError, Seq, Timestamp,
 };
 
 use crate::failures;
@@ -94,9 +94,9 @@ pub(crate) fn lifecycle_events(
 /// What a run that has not ended waits for from the outside world: signals and host tools.
 /// Empty when it is still running something of its own: a call Rewind dispatches.
 fn waiting_for(state: &RunState, action_set: Option<&ActionSet>) -> Vec<String> {
-    let route = |tool: &str| {
+    let route = |action: &str| {
         action_set
-            .and_then(|action_set| action_set.tool(tool))
+            .and_then(|action_set| action_set.action(action))
             .map(|t| &t.route)
     };
     let mut waiting: Vec<String> = state
@@ -104,9 +104,9 @@ fn waiting_for(state: &RunState, action_set: Option<&ActionSet>) -> Vec<String> 
         .iter()
         .map(|wait| format!("signal {:?}", wait.name))
         .collect();
-    for (seq, tool) in state.pending_tool_calls() {
-        match route(tool) {
-            Some(ToolRoute::Host { .. }) => waiting.push(format!("tool {tool} {seq}")),
+    for (seq, action) in state.pending_calls() {
+        match route(action) {
+            Some(ActionRoute::Host { .. }) => waiting.push(format!("action {action} {seq}")),
             _ => return Vec::new(),
         }
     }
@@ -177,7 +177,7 @@ pub(crate) fn waits(
         let entry = opening(history, state, *seq)?;
         match &entry.event {
             Event::Command(
-                Command::ScheduleToolCall { callsite, .. } | Command::StartTimer { callsite, .. },
+                Command::ScheduleCall { callsite, .. } | Command::StartTimer { callsite, .. },
             ) => Some((entry.recorded_at, *callsite)),
             _ => None,
         }
@@ -227,17 +227,17 @@ pub(crate) fn waits(
             task: None,
         });
     }
-    for (seq, tool) in state.pending_tool_calls() {
+    for (seq, action) in state.pending_calls() {
         let Some((since, callsite)) = opened(seq) else {
             continue;
         };
         let host = action_set
-            .and_then(|action_set| action_set.tool(tool))
-            .is_some_and(|tool| matches!(tool.route, ToolRoute::Host { .. }));
+            .and_then(|action_set| action_set.action(action))
+            .is_some_and(|action| matches!(action.route, ActionRoute::Host { .. }));
         waits.push(Wait {
             kind: if host { WaitKind::Host } else { WaitKind::Call },
             seq: Some(*seq),
-            name: Some(tool.clone()),
+            name: Some(action.clone()),
             since,
             until: None,
             callsite,

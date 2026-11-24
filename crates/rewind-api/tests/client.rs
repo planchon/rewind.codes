@@ -183,11 +183,11 @@ fn app(log: Log) -> Router {
                 assert_eq!(headers.get(header::ACCEPT).unwrap(), "text/event-stream");
                 assert_eq!(
                     query.as_deref(),
-                    Some("actionSet=ab&slots=4&tools=ask_user&tools=approve&worker=w-1")
+                    Some("actionSet=ab&actions=ask_user&actions=approve&slots=4&worker=w-1")
                 );
                 let task = json!({
                     "token": "tk_1", "id": "task_1", "runId": "r1", "namespace": "alice",
-                    "seq": 3, "tool": "ask_user", "args": { "question": "ok?" },
+                    "seq": 3, "action": "ask_user", "args": { "question": "ok?" },
                     "idempotencyKey": "r1/3", "attempt": 1, "labels": {}
                 });
                 let body = format!(
@@ -358,7 +358,7 @@ async fn the_task_stream_hands_tasks_and_skips_comments_and_unknown_events() {
     let (client, _) = serve_tcp().await;
     let query = TaskStreamQuery {
         action_set: Some("ab".into()),
-        tools: vec!["ask_user".into(), "approve".into()],
+        actions: vec!["ask_user".into(), "approve".into()],
         slots: Some(4),
         worker: Some("w-1".into()),
         ..TaskStreamQuery::default()
@@ -374,7 +374,7 @@ async fn the_task_stream_hands_tasks_and_skips_comments_and_unknown_events() {
     match &events[0] {
         TaskStreamEvent::Task(task) => {
             assert_eq!(task.token, "tk_1");
-            assert_eq!(task.tool, "ask_user");
+            assert_eq!(task.action, "ask_user");
             assert_eq!(task.args, json!({ "question": "ok?" }));
         }
         other => panic!("expected a task, got {other:?}"),

@@ -1,14 +1,14 @@
-//! The tool dispatcher of Rewind outside mock mode (`archi/07-code-architecture.md`, "Crates";
+//! The action dispatcher of Rewind outside mock mode (`archi/07-code-architecture.md`, "Crates";
 //! `archi/04-tools.md`, "Routes").
 //!
 //! | Route | Dispatcher | What it does |
 //! | --- | --- | --- |
-//! | MCP tools | [`McpDispatcher`] | An MCP client (`rmcp`), over streamable HTTP or stdio: discovery (`tools/list`, pinned by the action set), calls with the idempotency key and the trace context in `_meta`, the attached secret or the signature in the transport, the execution timeout, the schema check before each call |
-//! | Built-ins | [`HttpTool`] | `http`, with the egress rules: allow-list, then `rewind-outbound`'s checks (one DNS resolution, private and metadata addresses refused, a connection to the checked address), redirects checked again, bounded responses. `webhook` is answered by the engine |
+//! | MCP actions | [`McpDispatcher`] | An MCP client (`rmcp`), over streamable HTTP or stdio: discovery (`tools/list`, pinned by the action set), calls with the idempotency key and the trace context in `_meta`, the attached secret or the signature in the transport, the execution timeout, the schema check before each call |
+//! | Built-ins | [`HttpAction`] | `http`, with the egress rules: allow-list, then `rewind-outbound`'s checks (one DNS resolution, private and metadata addresses refused, a connection to the checked address), redirects checked again, bounded responses. `webhook` is answered by the engine |
 //!
 //! A composition root plugs them into the engine's `RoutingDispatcher` (`mcp` and `builtins`).
-//! Where a deployment's HTTP servers may be is `rewind-outbound`'s [`ToolEgress`], with the
-//! operator's internal hosts (`--allow-internal-tools`). The dispatchers never write to the
+//! Where a deployment's HTTP servers may be is `rewind-outbound`'s [`ActionEgress`], with the
+//! operator's internal hosts (`--allow-internal-addresses`). The dispatchers never write to the
 //! journal; a secret or a key goes only into the transport, never into a result, a failure or a
 //! log.
 //!
@@ -40,12 +40,12 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use rewind_core::{McpServer, Tool, ToolAuth, ToolFailureKind, ToolRoute};
+use rewind_core::{Action, ActionAuth, ActionFailureKind, ActionRoute, McpServer};
 use rewind_engine::ports::{
-    CallAuth, Dispatched, ParkKind, ParkReason, Secret, SigningKey, TenantId, ToolCall,
-    ToolDispatcher,
+    ActionDispatcher, Call, CallAuth, Dispatched, ParkKind, ParkReason, Secret, SigningKey,
+    TenantId,
 };
-use rewind_outbound::{CallIdentity, ToolEgress};
+use rewind_outbound::{ActionEgress, CallIdentity};
 use rmcp::model::{CallToolRequestParams, JsonObject, MetaObject, RequestMetaObject};
 use serde_json::Value;
 
@@ -56,7 +56,7 @@ mod result;
 mod schema;
 mod transport;
 
-pub use http::{HttpConfig, HttpTool, http_input_schema, http_output_schema, http_tool};
+pub use http::{HttpAction, HttpConfig, http_action, http_input_schema, http_output_schema};
 
 use connection::{Credentials, Pool};
 use failure::Failure;
@@ -69,7 +69,7 @@ pub const IDEMPOTENCY_KEY_META: &str = "codes.rewind/idempotency-key";
 pub struct McpConfig {
     /// Where the streamable HTTP servers may be: with the egress checks of a deployment by
     /// default, anywhere for the embedded server and the CLI.
-    pub egress: ToolEgress,
+    pub egress: ActionEgress,
     /// How long opening a session may take: connecting or starting the process, then
     /// initializing. Listing the tools at discovery gets as long again.
     pub connect_timeout: Duration,
@@ -91,7 +91,7 @@ pub struct McpConfig {
 impl Default for McpConfig {
     fn default() -> Self {
         Self {
-            egress: ToolEgress::default(),
+            egress: ActionEgress::default(),
             connect_timeout: Duration::from_secs(30),
             idle_timeout: Duration::from_secs(5 * 60),
             tools_ttl: Duration::from_secs(60),
@@ -124,7 +124,7 @@ impl Default for McpConfig {
 }
 
 /// Why the tools of an MCP server could not be listed, what registering an action set reports to
-/// the harness developer, or why the `http` tool could not be set up. The message names the
+/// the harness developer, or why the `http` action could not be set up. The message names the
 /// server.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum McpError {
@@ -141,7 +141,7 @@ pub enum McpError {
     /// address is refused by the egress checks, or it redirects elsewhere.
     #[error("{message}")]
     Refused { server: String, message: String },
-    /// The HTTP client of the `http` tool could not be built.
+    /// The HTTP client of the `http` action could not be built.
     #[error("{message}")]
     Client { message: String },
 }
@@ -159,7 +159,7 @@ impl McpError {
     }
 }
 
-/// Calls the tools of MCP servers: the `mcp` route of the engine's `RoutingDispatcher`. Cheap
+/// Calls the actions of MCP servers: the `mcp` route of the engine's `RoutingDispatcher`. Cheap
 /// to clone: clones share their connections.
 #[derive(Debug, Clone)]
 pub struct McpDispatcher {
@@ -179,10 +179,10 @@ impl McpDispatcher {
         }
     }
 
-    /// Discovery: the tools of a server, as an action set pins them (`archi/04-tools.md`, "Action sets
-    /// and code generation"), sorted by name. Each is named `{server}.{tool}`, with its
+    /// Discovery: the actions of a server, as an action set pins them (`archi/04-tools.md`, "Action sets
+    /// and code generation"), sorted by name. Each is named `{server}.{action}`, with its
     /// description (or its title), its input and output schemas, and the default policy of an
-    /// MCP tool; the harness's policies are applied by whoever builds the action set. `auth` is how
+    /// MCP action; the harness's policies are applied by whoever builds the action set. `auth` is how
     /// the listing proves who calls: the organization's secret the registration attaches, or a
     /// listing signed with the reduced set of claims.
     pub async fn list_tools(
@@ -190,7 +190,7 @@ impl McpDispatcher {
         tenant: &TenantId,
         server: &McpServer,
         auth: ListingAuth,
-    ) -> Result<Vec<Tool>, McpError> {
+    ) -> Result<Vec<Action>, McpError> {
         let credentials = auth.credentials(server)?;
         let lease = self
             .pool
@@ -229,7 +229,7 @@ impl McpDispatcher {
 
     async fn attempt(
         &self,
-        call: &ToolCall,
+        call: &Call,
         server: &McpServer,
         credentials: &Credentials,
         identity: Option<CallIdentity>,
@@ -249,12 +249,12 @@ impl McpDispatcher {
                 .signer()
                 .map(|signer| signer.register(call.idempotency_key.clone(), identity))
         });
-        let local = call.tool.local_name();
+        let local = call.action.local_name();
         if !call.schema_change_approved {
             match lease.connection().tools(&server.name).await {
                 Ok(tools) => {
                     if let Some(message) =
-                        schema::mismatch(&call.tool, tools.get(local), &call.args)
+                        schema::mismatch(&call.action, tools.get(local), &call.args)
                     {
                         return Dispatched::Park(ParkReason {
                             kind: ParkKind::SchemaChanged,
@@ -275,8 +275,8 @@ impl McpDispatcher {
             Value::Null => JsonObject::new(),
             _ => {
                 return Failure::permanent(
-                    ToolFailureKind::Error,
-                    format!("the arguments of {} must be an object", call.tool.name),
+                    ActionFailureKind::Error,
+                    format!("the arguments of {} must be an object", call.action.name),
                     None,
                 )
                 .into_dispatched();
@@ -285,7 +285,7 @@ impl McpDispatcher {
         let mut params = CallToolRequestParams::new(local.to_owned()).with_arguments(arguments);
         params.meta = Some(meta(call));
         match lease.connection().call(params).await {
-            Ok(result) => result::outcome(&call.tool, result),
+            Ok(result) => result::outcome(&call.action, result),
             Err(error) => {
                 let (failure, broken) =
                     failure::of_service(&server.name, &error, lease.connection().answers());
@@ -298,19 +298,19 @@ impl McpDispatcher {
     }
 }
 
-impl ToolDispatcher for McpDispatcher {
-    async fn dispatch(&self, call: ToolCall, auth: CallAuth) -> Dispatched {
-        let ToolRoute::Mcp { server: name } = &call.tool.route else {
+impl ActionDispatcher for McpDispatcher {
+    async fn dispatch(&self, call: Call, auth: CallAuth) -> Dispatched {
+        let ActionRoute::Mcp { server: name } = &call.action.route else {
             return Failure::permanent(
-                ToolFailureKind::Unavailable,
-                format!("{} is not an MCP tool", call.tool.name),
+                ActionFailureKind::Unavailable,
+                format!("{} is not an MCP action", call.action.name),
                 None,
             )
             .into_dispatched();
         };
         let Some(server) = call.server.as_ref().filter(|server| &server.name == name) else {
             return Failure::permanent(
-                ToolFailureKind::Unavailable,
+                ActionFailureKind::Unavailable,
                 format!("the action set does not say how to reach the MCP server {name}"),
                 None,
             )
@@ -318,18 +318,18 @@ impl ToolDispatcher for McpDispatcher {
         };
         let (credentials, identity) = credentials_of(auth);
         let attempt = self.attempt(&call, server, &credentials, identity);
-        let dispatched = match call.tool.policy.execution_timeout {
+        let dispatched = match call.action.policy.execution_timeout {
             Some(timeout) => match tokio::time::timeout(timeout, attempt).await {
                 Ok(dispatched) => dispatched,
                 // Dropping the call sends `notifications/cancelled` to the server.
-                Err(_) => failure::timed_out(&call.tool.name, timeout).into_dispatched(),
+                Err(_) => failure::timed_out(&call.action.name, timeout).into_dispatched(),
             },
             None => attempt.await,
         };
         tracing::debug!(
             run = %call.run,
             seq = call.seq.0,
-            tool = %call.tool.name,
+            action = %call.action.name,
             attempt = call.attempt,
             outcome = outcome_name(&dispatched),
             "MCP call"
@@ -362,12 +362,14 @@ impl ListingAuth {
         };
         match (self, &server.auth) {
             (ListingAuth::None, _) => Ok(Credentials::None),
-            (ListingAuth::Secret(value), ToolAuth::Secret(placement)) => Ok(Credentials::Secret {
-                placement: placement.clone(),
-                value,
-            }),
+            (ListingAuth::Secret(value), ActionAuth::Secret(placement)) => {
+                Ok(Credentials::Secret {
+                    placement: placement.clone(),
+                    value,
+                })
+            }
             (ListingAuth::Secret(_), _) => Err(refused("its auth takes no secret")),
-            (ListingAuth::Signed { key, issuer }, ToolAuth::Rewind) => Ok(Credentials::Signed {
+            (ListingAuth::Signed { key, issuer }, ActionAuth::Rewind) => Ok(Credentials::Signed {
                 key,
                 issuer,
                 subject: None,
@@ -389,7 +391,7 @@ fn credentials_of(auth: CallAuth) -> (Credentials, Option<CallIdentity>) {
                 subject: claims.subject.as_str().to_owned(),
                 labels: claims.labels.clone(),
                 run: claims.run.to_string(),
-                tool: claims.tool.clone(),
+                action: claims.action.clone(),
                 idempotency_key: claims.idempotency_key.clone(),
                 jti: claims.jti(),
             };
@@ -405,7 +407,7 @@ fn credentials_of(auth: CallAuth) -> (Credentials, Option<CallIdentity>) {
 
 /// `_meta` of a call: the idempotency key, and the W3C trace context so that the server's own
 /// spans join the run's trace.
-fn meta(call: &ToolCall) -> RequestMetaObject {
+fn meta(call: &Call) -> RequestMetaObject {
     let mut meta = JsonObject::new();
     meta.insert(
         IDEMPOTENCY_KEY_META.to_owned(),
@@ -424,10 +426,10 @@ fn meta(call: &ToolCall) -> RequestMetaObject {
 }
 
 /// A listed tool, as an action set pins it.
-fn pinned(server: &str, tool: &rmcp::model::Tool) -> Tool {
-    let mut pinned = Tool::new(
+fn pinned(server: &str, tool: &rmcp::model::Tool) -> Action {
+    let mut pinned = Action::new(
         format!("{server}.{}", tool.name),
-        ToolRoute::Mcp {
+        ActionRoute::Mcp {
             server: server.to_owned(),
         },
         Value::Object((*tool.input_schema).clone()),

@@ -19,9 +19,9 @@ use super::{T0, tenant};
 use crate::ports::catalog::{NamespaceFilter, NamespacePage};
 use crate::ports::cluster::Membership;
 use crate::ports::{
-    CatalogError, CatalogStore, Cluster, CompiledScript, ControlPlaneChange, DeleteNamespace,
-    DisplayName, DropNamespace, NamespaceName, NamespaceWrite, NodeId, NodeInfo, Quotas,
-    ScriptTitle, Secret, Subscription, TEST_GRACE, Tenant, TenantId, TestRecord, ToolDeclarations,
+    ActionDeclarations, CatalogError, CatalogStore, Cluster, CompiledScript, ControlPlaneChange,
+    DeleteNamespace, DisplayName, DropNamespace, NamespaceName, NamespaceWrite, NodeId, NodeInfo,
+    Quotas, ScriptTitle, Secret, Subscription, TEST_GRACE, Tenant, TenantId, TestRecord,
     WebhookEventType, WorkflowFilter, namespace_partition,
 };
 
@@ -194,8 +194,8 @@ pub async fn scripts_and_action_sets_are_stored_by_tenant_and_digest<C: CatalogS
     );
 
     let action_set = ActionSet::from_host_tools(["a", "b"]).expect("action set");
-    let declarations = ToolDeclarations {
-        typescript: "declare module \"rewind:tools\" {}".into(),
+    let declarations = ActionDeclarations {
+        typescript: "declare module \"rewind:actions\" {}".into(),
         prompt: "a() · b()".into(),
     };
     catalog
@@ -203,7 +203,7 @@ pub async fn scripts_and_action_sets_are_stored_by_tenant_and_digest<C: CatalogS
         .await
         .expect("put_action_set");
     catalog
-        .put_action_set(&acme(), &action_set, &ToolDeclarations::default())
+        .put_action_set(&acme(), &action_set, &ActionDeclarations::default())
         .await
         .expect("put_action_set is idempotent");
     let stored = catalog
@@ -223,7 +223,7 @@ pub async fn scripts_and_action_sets_are_stored_by_tenant_and_digest<C: CatalogS
     let second = ActionSet::from_host_tools(["c"]).expect("action set");
     for tenant in [acme(), other] {
         catalog
-            .put_action_set(&tenant, &second, &ToolDeclarations::default())
+            .put_action_set(&tenant, &second, &ActionDeclarations::default())
             .await
             .expect("put_action_set");
     }
@@ -1342,7 +1342,7 @@ pub async fn every_write_sends_its_change<C: CatalogStore, K: Cluster>(catalog: 
     );
     let action_set = ActionSet::from_host_tools(["a"]).expect("action set");
     catalog
-        .put_action_set(&acme(), &action_set, &ToolDeclarations::default())
+        .put_action_set(&acme(), &action_set, &ActionDeclarations::default())
         .await
         .expect("put_action_set");
     assert_eq!(

@@ -1,7 +1,7 @@
 //! The declarations of workflows (`archi/04-tools.md`, "Action sets and code generation" and
 //! "Type-checking").
 //!
-//! For the workflows an action set pins, `rewind-tools.d.ts` declares `rewind:workflows`:
+//! For the workflows an action set pins, `rewind-actions.d.ts` declares `rewind:workflows`:
 //!
 //! ```ts
 //! declare module "rewind:workflows" {
@@ -110,7 +110,7 @@ pub(crate) fn module(workflows: &[PinnedWorkflow]) -> String {
     out
 }
 
-/// One workflow's declaration, as a module of its own: what `search_tools` returns.
+/// One workflow's declaration, as a module of its own: what `search_actions` returns.
 pub(crate) fn declaration(workflow: &PinnedWorkflow) -> String {
     let mut out = String::from(
         "declare module \"rewind:workflows\" {\n  import type { Workflow } from \"rewind\";\n\n",

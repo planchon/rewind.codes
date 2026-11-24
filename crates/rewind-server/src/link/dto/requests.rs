@@ -306,7 +306,7 @@ pub enum PartitionRequest {
         tenant: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         namespace: Option<String>,
-        tools: Vec<String>,
+        actions: Vec<String>,
     },
 }
 
@@ -493,11 +493,11 @@ impl From<&link::PartitionRequest> for PartitionRequest {
             R::Shapes {
                 tenant,
                 namespace,
-                tools,
+                actions,
             } => PartitionRequest::Shapes {
                 tenant: tenant.to_string(),
                 namespace: namespace.as_ref().map(ToString::to_string),
-                tools: tools.clone(),
+                actions: actions.clone(),
             },
         }
     }
@@ -623,11 +623,11 @@ impl TryFrom<PartitionRequest> for link::PartitionRequest {
             PartitionRequest::Shapes {
                 tenant: id,
                 namespace: name,
-                tools,
+                actions,
             } => R::Shapes {
                 tenant: tenant(id)?,
                 namespace: name.map(namespace).transpose()?,
-                tools,
+                actions,
             },
         })
     }
@@ -725,9 +725,9 @@ impl From<&link::PartitionReply> for PartitionReply {
             R::Shapes(result) => PartitionReply::Shapes(refused(result, |shapes| {
                 shapes
                     .iter()
-                    .map(|(tool, shape)| {
+                    .map(|(action, shape)| {
                         (
-                            tool.clone(),
+                            action.clone(),
                             record::Shape {
                                 shape: shape.clone(),
                             },
@@ -801,7 +801,7 @@ impl TryFrom<PartitionReply> for link::PartitionReply {
             PartitionReply::Shapes(result) => R::Shapes(refused_of(result, |shapes| {
                 Ok(shapes
                     .into_iter()
-                    .map(|(tool, shape)| (tool, shape.shape))
+                    .map(|(action, shape)| (action, shape.shape))
                     .collect())
             })?),
         })
@@ -880,7 +880,7 @@ pub struct HostTaskOffer {
 }
 
 /// A host-tool call as an SDK worker receives it: `{"token":"rewind_tk_…","task":{…},
-/// "namespace":"user-1","tool":"…","args":…,"idempotency_key":"…","attempt":1,
+/// "namespace":"user-1","action":"…","args":…,"idempotency_key":"…","attempt":1,
 /// "execution_timeout":{…},"labels":{…},"trace_context":{…}}`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -888,7 +888,7 @@ pub struct HostTask {
     pub token: String,
     pub task: TaskRef,
     pub namespace: String,
-    pub tool: String,
+    pub action: String,
     pub args: JsonValue,
     pub idempotency_key: String,
     pub attempt: u32,
@@ -901,7 +901,7 @@ pub struct HostTask {
 }
 
 /// An SDK stream opened at an edge: `{"stream":"…","worker":"…","node":"node-a",
-/// "namespace":…,"labels":{…},"action_set":"<hex>","tools":[…],"slots":4}`.
+/// "namespace":…,"labels":{…},"action_set":"<hex>","actions":[…],"slots":4}`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StreamAttach {
@@ -915,7 +915,7 @@ pub struct StreamAttach {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub action_set: Option<Hex>,
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
-    pub tools: BTreeSet<String>,
+    pub actions: BTreeSet<String>,
     pub slots: u32,
 }
 
@@ -950,7 +950,7 @@ impl From<&link::HostTask> for HostTask {
             token: task.token.0.clone(),
             task: (&task.task).into(),
             namespace: task.namespace.to_string(),
-            tool: task.tool.clone(),
+            action: task.action.clone(),
             args: task.args.clone(),
             idempotency_key: task.idempotency_key.clone(),
             attempt: task.attempt,
@@ -975,7 +975,7 @@ impl TryFrom<HostTask> for link::HostTask {
             token: engine::TaskToken(task.token),
             task: task.task.try_into()?,
             namespace: namespace(task.namespace)?,
-            tool: task.tool,
+            action: task.action,
             args: task.args,
             idempotency_key: task.idempotency_key,
             attempt: task.attempt,
@@ -998,7 +998,7 @@ impl From<&link::StreamAttach> for StreamAttach {
             namespace: attach.namespace.as_ref().map(ToString::to_string),
             labels: attach.labels.clone(),
             action_set: attach.action_set.map(Hex),
-            tools: attach.tools.clone(),
+            actions: attach.actions.clone(),
             slots: attach.slots,
         }
     }
@@ -1015,7 +1015,7 @@ impl TryFrom<StreamAttach> for link::StreamAttach {
             namespace: attach.namespace.map(namespace).transpose()?,
             labels: attach.labels,
             action_set: attach.action_set.map(|hex| hex.0),
-            tools: attach.tools,
+            actions: attach.actions,
             slots: attach.slots,
         })
     }

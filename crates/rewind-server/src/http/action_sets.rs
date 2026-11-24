@@ -1,7 +1,7 @@
 //! Action sets: registering and pinning them, their declarations, search (`archi/04-tools.md`,
-//! "Action sets and code generation", "API tools", "Authenticating calls").
+//! "Action sets and code generation", "API actions", "Authenticating calls").
 //!
-//! Registering connects to the MCP servers and lists their tools, and reads the APIs' OpenAPI
+//! Registering connects to the MCP servers and lists their actions, and reads the APIs' OpenAPI
 //! documents; each server's and API's `auth` is pinned with it; the harness's policies, its
 //! host tools and the `http` built-in (with its allow-list) are added, and so is the `webhook`
 //! built-in, always: every script may call `webhook()`. The pinned action set is content-addressed,
@@ -18,20 +18,20 @@ use axum::response::{IntoResponse, Response};
 use rewind_api::ProblemType;
 use rewind_api::access::Permission;
 use rewind_api::action_sets::{
+    Action as ApiAction, ActionMatch, ActionPolicy as ApiPolicy, ActionSearchResults,
     ActionSet as ApiActionSet, ActionSetList, ActionSetSummary, Api as ApiDeclared, ApiSummary,
     Auth, CreateActionSet, DeclarationFormat, Declarations, DeclarationsQuery, DeclarationsText,
     McpTransport as ApiTransport, OnInterruption, OpenApiDocument, Route, SearchQuery,
-    ServerSummary, SkippedOperation, Tool as ApiTool, ToolMatch, ToolPolicy as ApiPolicy,
-    ToolSearchResults,
+    ServerSummary, SkippedOperation,
 };
 use rewind_core::{
-    ActionSet, Api, Digest, Interruption, McpServer, McpTransport, SecretRef, SecretScope, Tool,
-    ToolAuth, ToolPolicy, ToolRoute,
+    Action, ActionAuth, ActionPolicy, ActionRoute, ActionSet, Api, Digest, Interruption, McpServer,
+    McpTransport, SecretRef, SecretScope,
 };
 use rewind_engine::attachments::{AttachmentProblem, RefusedAttachments};
 use rewind_engine::ports::{
-    CatalogStore, Day, Secret, SecretId, SecretNamespace, SecretReader, SecretStore,
-    StoredActionSet, TenantId, ToolDeclarations,
+    ActionDeclarations, CatalogStore, Day, Secret, SecretId, SecretNamespace, SecretReader,
+    SecretStore, StoredActionSet, TenantId,
 };
 use rewind_engine::text::{ACTION_SET_TEXT, refuse_nul};
 use rewind_mcp::ListingAuth;
@@ -42,7 +42,7 @@ use crate::auth::Caller;
 use crate::error::ApiError;
 use crate::extract::{Body, Query};
 use crate::http::workflows;
-use crate::wiring::tools::DiscoveryError;
+use crate::wiring::actions::DiscoveryError;
 
 /// `POST /v1/action-sets`.
 pub(super) async fn create(
@@ -60,7 +60,7 @@ pub(super) async fn create(
                 || request.http.is_some()
             {
                 return Err(invalid_action_set(
-                    "an action set derived from a base keeps its servers and tools: give only \
+                    "an action set derived from a base keeps its servers and actions: give only \
                      workflows with base",
                 ));
             }
@@ -80,9 +80,9 @@ pub(super) async fn create(
     )
     .await?;
     let names: Vec<String> = action_set
-        .tools()
+        .actions()
         .iter()
-        .map(|tool| tool.name.clone())
+        .map(|action| action.name.clone())
         .collect();
     let observed = app
         .edge
@@ -92,8 +92,8 @@ pub(super) async fn create(
             &names,
         )
         .await?;
-    let generated = app.tools.declarations(&action_set, &observed);
-    let declarations = ToolDeclarations {
+    let generated = app.actions.declarations(&action_set, &observed);
+    let declarations = ActionDeclarations {
         typescript: generated.typescript,
         prompt: generated.prompt,
     };
@@ -137,11 +137,11 @@ pub(super) async fn list(
             id: stored.action_set.digest().to_hex(),
             servers: servers(&stored.action_set),
             apis: apis(&stored.action_set),
-            tools: stored
+            actions: stored
                 .action_set
-                .tools()
+                .actions()
                 .iter()
-                .map(|tool| tool.name.clone())
+                .map(|action| action.name.clone())
                 .collect(),
             workflows: stored
                 .action_set
@@ -171,14 +171,14 @@ pub(super) async fn declarations(
     Ok(Json(DeclarationsText { format, text }))
 }
 
-/// `GET /v1/action-sets/{id}/search`: the tools whose name or description holds the most words
+/// `GET /v1/action-sets/{id}/search`: the actions whose name or description holds the most words
 /// of the query, best first.
 pub(super) async fn search(
     State(app): State<Arc<App>>,
     caller: Caller,
     Path(id): Path<String>,
     Query(query): Query<SearchQuery>,
-) -> Result<Json<ToolSearchResults>, ApiError> {
+) -> Result<Json<ActionSearchResults>, ApiError> {
     caller.require(Permission::ActionsRead)?;
     let stored = stored(&app, &caller.tenant, &id).await?;
     let limit = usize::try_from(query.limit.unwrap_or(10).clamp(1, 100)).unwrap_or(10);
@@ -195,9 +195,9 @@ pub(super) async fn search(
     }
     let names: Vec<String> = stored
         .action_set
-        .tools()
+        .actions()
         .iter()
-        .map(|tool| tool.name.clone())
+        .map(|action| action.name.clone())
         .collect();
     let observed = app
         .edge
@@ -207,26 +207,26 @@ pub(super) async fn search(
             &names,
         )
         .await?;
-    let generated = app.tools.declarations(&stored.action_set, &observed);
+    let generated = app.actions.declarations(&stored.action_set, &observed);
     let declared: BTreeMap<&str, _> = generated
-        .tools
+        .actions
         .iter()
-        .map(|tool| (tool.name.as_str(), tool))
+        .map(|action| (action.name.as_str(), action))
         .collect();
-    // The tools, and the workflows as `workflows.<name>`, with their descriptions.
+    // The actions, and the workflows as `workflows.<name>`, with their descriptions.
     let candidates: Vec<(String, String)> = stored
         .action_set
-        .tools()
+        .actions()
         .iter()
-        .map(|tool| {
+        .map(|action| {
             (
-                tool.name.clone(),
-                tool.description.clone().unwrap_or_default(),
+                action.name.clone(),
+                action.description.clone().unwrap_or_default(),
             )
         })
         .chain(stored.action_set.workflows().iter().map(|workflow| {
             (
-                format!("{}.{}", rewind_core::WORKFLOWS_NAMESPACE, workflow.name),
+                format!("{}.{}", rewind_core::WORKFLOWS_GROUP, workflow.name),
                 workflow.description.clone().unwrap_or_default(),
             )
         }))
@@ -247,13 +247,14 @@ pub(super) async fn search(
         })
         .filter(|(score, _)| *score > 0)
         .collect();
-    scored.sort_by(|(a, tool_a), (b, tool_b)| b.cmp(a).then_with(|| tool_a.0.cmp(&tool_b.0)));
-    let tools = scored
+    scored
+        .sort_by(|(a, action_a), (b, action_b)| b.cmp(a).then_with(|| action_a.0.cmp(&action_b.0)));
+    let actions = scored
         .into_iter()
         .take(limit)
         .map(|(_, (name, description))| {
             let declared = declared.get(name.as_str());
-            ToolMatch {
+            ActionMatch {
                 name: name.clone(),
                 description: description.clone(),
                 prompt: declared.map(|d| d.prompt.clone()).unwrap_or_default(),
@@ -261,12 +262,12 @@ pub(super) async fn search(
             }
         })
         .collect();
-    Ok(Json(ToolSearchResults { tools }))
+    Ok(Json(ActionSearchResults { actions }))
 }
 
 /// How the API's `auth` pins (`archi/04-tools.md`, "Authenticating calls"); none when absent.
-fn auth_of(auth: Option<&Auth>, of: &str) -> Result<ToolAuth, ApiError> {
-    auth.map_or(Ok(ToolAuth::None), |auth| {
+fn auth_of(auth: Option<&Auth>, of: &str) -> Result<ActionAuth, ApiError> {
+    auth.map_or(Ok(ActionAuth::None), |auth| {
         auth.to_core()
             .map_err(|message| invalid_action_set(format!("{of}: {message}")))
     })
@@ -314,7 +315,7 @@ async fn pin(
     } else {
         attached_for_listing(app, caller, &request).await?
     };
-    let (apis, mut tools, skipped) = read_apis(app, &request).await?;
+    let (apis, mut actions, skipped) = read_apis(app, &request).await?;
     let mut servers = Vec::new();
     let mut names = BTreeSet::new();
     for server in &request.mcp {
@@ -360,7 +361,7 @@ async fn pin(
         let secret = listing.remove(&server.name);
         let attached = secret.is_some();
         let auth = listing_auth(app, tenant, &pinned, secret).await?;
-        let listed = app.tools.discover(tenant, &pinned, auth).await.map_err(
+        let listed = app.actions.discover(tenant, &pinned, auth).await.map_err(
             |DiscoveryError(message)| {
                 let hint = if pinned.auth.takes_secret() && !attached {
                     format!(
@@ -374,21 +375,21 @@ async fn pin(
                 ApiError::new(ProblemType::ActionSetUnavailable, hint)
             },
         )?;
-        if let Some(unknown) = server
-            .policies
-            .keys()
-            .find(|name| !listed.iter().any(|tool| tool.local_name() == name.as_str()))
-        {
+        if let Some(unknown) = server.policies.keys().find(|name| {
+            !listed
+                .iter()
+                .any(|action| action.local_name() == name.as_str())
+        }) {
             return Err(invalid_action_set(format!(
                 "MCP server {}: a policy names {unknown:?}, which the server does not have",
                 server.name
             )));
         }
-        for mut tool in listed {
-            if let Some(policy) = server.policies.get(tool.local_name()) {
-                tool.policy = policy_of(&tool.route, *policy, &tool.name)?;
+        for mut action in listed {
+            if let Some(policy) = server.policies.get(action.local_name()) {
+                action.policy = policy_of(&action.route, *policy, &action.name)?;
             }
-            tools.push(tool);
+            actions.push(action);
         }
         servers.push(pinned);
     }
@@ -400,7 +401,7 @@ async fn pin(
             )));
         }
         // The harness writes these schemas: one that cannot be compiled is refused here, rather
-        // than refusing every call of the tool later (an MCP server's own schemas are taken as
+        // than refusing every call of the action later (an MCP server's own schemas are taken as
         // listed, `archi/08-decisions.md`).
         let schemas = [
             Some(("inputSchema", &host.input_schema)),
@@ -417,36 +418,36 @@ async fn pin(
             }
         }
         let group = host.name.split_once('.').map(|(group, _)| group.to_owned());
-        let route = ToolRoute::Host { group };
-        let mut tool = Tool::new(host.name.clone(), route.clone(), host.input_schema);
-        tool.description = Some(host.description);
-        tool.output_schema = host.output_schema;
+        let route = ActionRoute::Host { group };
+        let mut action = Action::new(host.name.clone(), route.clone(), host.input_schema);
+        action.description = Some(host.description);
+        action.output_schema = host.output_schema;
         if let Some(policy) = host.policy {
-            tool.policy = policy_of(&route, policy, &host.name)?;
+            action.policy = policy_of(&route, policy, &host.name)?;
         }
-        tools.push(tool);
+        actions.push(action);
     }
     if let Some(http) = request.http {
         if http.allow.is_empty() {
             return Err(invalid_action_set(
-                "http: allow needs at least one host; without one there is no http tool",
+                "http: allow needs at least one host; without one there is no http action",
             ));
         }
-        let mut tool = app.tools.http_tool(http.allow);
+        let mut action = app.actions.http_action(http.allow);
         if let Some(policy) = http.policy {
-            tool.policy = policy_of(&tool.route.clone(), policy, "http")?;
+            action.policy = policy_of(&action.route.clone(), policy, "http")?;
         }
-        tools.push(tool);
+        actions.push(action);
     }
-    tools.push(app.tools.webhook_tool());
-    let action_set = ActionSet::from_parts(servers, apis, tools)
+    actions.push(app.actions.webhook_action());
+    let action_set = ActionSet::from_parts(servers, apis, actions)
         .map_err(|error| invalid_action_set(error.to_string()))?;
     Ok((action_set, skipped))
 }
 
 /// The organization's secrets `secrets` attaches for the listings, read, by server
 /// (`archi/04-tools.md`, "Secrets": `POST /v1/action-sets` attaches an organization's secrets only,
-/// to list the tools of an MCP server that needs one; no run keeps them). The caller holds
+/// to list the actions of an MCP server that needs one; no run keeps them). The caller holds
 /// `secrets:use`, and each secret is an organization's it sees (its labels), attached for an
 /// MCP server of the request whose `auth` takes a secret. A read is counted as a registration's,
 /// which names no run.
@@ -464,7 +465,7 @@ async fn attached_for_listing(
         if secret.scope != SecretScope::Organization {
             return Err(ApiError::invalid(format!(
                 "secrets.{server}: {secret} is a namespace's secret, and a registration has no \
-                 namespace: attach an organization's secret (org/<name>) to list the tools"
+                 namespace: attach an organization's secret (org/<name>) to list the actions"
             )));
         }
         let takes_secret = request
@@ -533,7 +534,7 @@ async fn attached_for_listing(
     Err(ApiError::secret_required(refused.to_string(), &refused))
 }
 
-/// How the listing of a server's tools authenticates at registration (`archi/04-tools.md`,
+/// How the listing of a server's actions authenticates at registration (`archi/04-tools.md`,
 /// "Authenticating calls"): the organization's secret attached for it, if any; or a JWT signed
 /// with the tenant's key, made with the first action set that needs it, without the claims of a
 /// call (`iss`, `aud`, `jti`, `htm`, `htu`, `body`, `iat`, `exp`).
@@ -544,8 +545,8 @@ async fn listing_auth(
     secret: Option<Secret>,
 ) -> Result<ListingAuth, ApiError> {
     Ok(match (&server.auth, secret) {
-        (ToolAuth::Secret(_), Some(secret)) => ListingAuth::Secret(secret),
-        (ToolAuth::Rewind, _) => ListingAuth::Signed {
+        (ActionAuth::Secret(_), Some(secret)) => ListingAuth::Secret(secret),
+        (ActionAuth::Rewind, _) => ListingAuth::Signed {
             key: app.store.signing_key(tenant, app.now()).await?,
             issuer: issuer(app, tenant, &format!("MCP server {}", server.name))?,
         },
@@ -570,16 +571,16 @@ fn issuer(app: &App, tenant: &TenantId, of: &str) -> Result<String, ApiError> {
     }
 }
 
-/// Reads each API's OpenAPI document into its tools (`archi/04-tools.md`, "API tools"), with
+/// Reads each API's OpenAPI document into its actions (`archi/04-tools.md`, "API actions"), with
 /// its `auth` or the document's security requirement, its policies, and the operations it
 /// leaves out (`skipped`). A document given by URL is read once, through the egress checks;
 /// what an internal server answered is not quoted.
 async fn read_apis(
     app: &App,
     request: &CreateActionSet,
-) -> Result<(Vec<Api>, Vec<Tool>, Vec<SkippedOperation>), ApiError> {
+) -> Result<(Vec<Api>, Vec<Action>, Vec<SkippedOperation>), ApiError> {
     let mut apis = Vec::new();
-    let mut tools = Vec::new();
+    let mut actions = Vec::new();
     let mut skipped = Vec::new();
     for declared in &request.apis {
         let (read_api, internal) = read_api(app, declared).await?;
@@ -596,20 +597,20 @@ async fn read_apis(
         })?;
         if let Some(unknown) = declared.policies.keys().find(|name| {
             !read_api
-                .tools
+                .actions
                 .iter()
-                .any(|tool| tool.local_name() == name.as_str())
+                .any(|action| action.local_name() == name.as_str())
         }) {
             return Err(invalid_action_set(format!(
                 "API {}: a policy names {unknown:?}, which it does not have",
                 declared.name
             )));
         }
-        for mut tool in read_api.tools {
-            if let Some(policy) = declared.policies.get(tool.local_name()) {
-                tool.policy = policy_over(tool.policy, *policy, &tool.name)?;
+        for mut action in read_api.actions {
+            if let Some(policy) = declared.policies.get(action.local_name()) {
+                action.policy = policy_over(action.policy, *policy, &action.name)?;
             }
-            tools.push(tool);
+            actions.push(action);
         }
         skipped.extend(
             read_api
@@ -625,7 +626,7 @@ async fn read_apis(
         );
         apis.push(read_api.api);
     }
-    Ok((apis, tools, skipped))
+    Ok((apis, actions, skipped))
 }
 
 /// One API read from its document: what was read, and whether the document came from an
@@ -657,7 +658,7 @@ async fn read_api(
     Ok(match &declared.openapi {
         OpenApiDocument::Document(document) => (read(document, &options), false),
         OpenApiDocument::Url(url) => {
-            let fetched = app.tools.fetch_document(url).await.map_err(|error| {
+            let fetched = app.actions.fetch_document(url).await.map_err(|error| {
                 ApiError::new(
                     ProblemType::ActionSetUnavailable,
                     format!("API {}: {error}", declared.name),
@@ -670,17 +671,21 @@ async fn read_api(
 }
 
 /// A policy of the API, with the route's defaults for what it leaves out.
-fn policy_of(route: &ToolRoute, policy: ApiPolicy, tool: &str) -> Result<ToolPolicy, ApiError> {
-    policy_over(ToolPolicy::default_for(route), policy, tool)
+fn policy_of(
+    route: &ActionRoute,
+    policy: ApiPolicy,
+    action: &str,
+) -> Result<ActionPolicy, ApiError> {
+    policy_over(ActionPolicy::default_for(route), policy, action)
 }
 
-/// A policy of the API over `pinned`, the tool's default: its route's, or for an API's
+/// A policy of the API over `pinned`, the action's default: its route's, or for an API's
 /// operation its method's.
 fn policy_over(
-    mut pinned: ToolPolicy,
+    mut pinned: ActionPolicy,
     policy: ApiPolicy,
-    tool: &str,
-) -> Result<ToolPolicy, ApiError> {
+    action: &str,
+) -> Result<ActionPolicy, ApiError> {
     if let Some(on) = policy.on_interruption {
         pinned.on_interruption = match on {
             OnInterruption::Retry => Interruption::Retry,
@@ -693,7 +698,7 @@ fn policy_over(
     if let Some(timeout) = policy.timeout {
         if timeout.as_millis() == 0 {
             return Err(invalid_action_set(format!(
-                "{tool}: timeout must be positive"
+                "{action}: timeout must be positive"
             )));
         }
         pinned.execution_timeout = Some(timeout.get());
@@ -701,7 +706,7 @@ fn policy_over(
     if let Some(heartbeat) = policy.heartbeat_timeout {
         if heartbeat.get() < Duration::from_secs(1) {
             return Err(invalid_action_set(format!(
-                "{tool}: heartbeatTimeout must be at least 1s"
+                "{action}: heartbeatTimeout must be at least 1s"
             )));
         }
         pinned.heartbeat_timeout = heartbeat.get();
@@ -709,7 +714,7 @@ fn policy_over(
     if let Some(concurrency) = policy.concurrency {
         if concurrency == 0 {
             return Err(invalid_action_set(format!(
-                "{tool}: concurrency must be at least 1"
+                "{action}: concurrency must be at least 1"
             )));
         }
         pinned.concurrency = concurrency;
@@ -725,12 +730,12 @@ fn apis(action_set: &ActionSet) -> Vec<ApiSummary> {
             name: api.name.clone(),
             base_url: api.base_url.clone(),
             auth: Auth::of_core(&api.auth),
-            tools: u32::try_from(
+            actions: u32::try_from(
                 action_set
-                    .tools()
+                    .actions()
                     .iter()
                     .filter(
-                        |tool| matches!(&tool.route, ToolRoute::Api { api: of } if *of == api.name),
+                        |action| matches!(&action.route, ActionRoute::Api { api: of } if *of == api.name),
                     )
                     .count(),
             )
@@ -750,11 +755,11 @@ fn servers(action_set: &ActionSet) -> Vec<ServerSummary> {
                 McpTransport::Stdio { .. } => ApiTransport::Stdio,
             },
             auth: Auth::of_core(&server.auth),
-            tools: u32::try_from(
+            actions: u32::try_from(
                 action_set
-                    .tools()
+                    .actions()
                     .iter()
-                    .filter(|tool| matches!(&tool.route, ToolRoute::Mcp { server: of } if *of == server.name))
+                    .filter(|action| matches!(&action.route, ActionRoute::Mcp { server: of } if *of == server.name))
                     .count(),
             )
             .unwrap_or(u32::MAX),
@@ -769,37 +774,37 @@ pub(crate) fn view(stored: &StoredActionSet) -> ApiActionSet {
         id: action_set.digest().to_hex(),
         servers: servers(action_set),
         apis: apis(action_set),
-        tools: action_set
-            .tools()
+        actions: action_set
+            .actions()
             .iter()
-            .map(|tool| ApiTool {
-                name: tool.name.clone(),
-                route: match tool.route {
-                    ToolRoute::Mcp { .. } => Route::Mcp,
-                    ToolRoute::Api { .. } => Route::Api,
-                    ToolRoute::Host { .. } => Route::Host,
-                    ToolRoute::Builtin(_) => Route::Builtin,
+            .map(|action| ApiAction {
+                name: action.name.clone(),
+                route: match action.route {
+                    ActionRoute::Mcp { .. } => Route::Mcp,
+                    ActionRoute::Api { .. } => Route::Api,
+                    ActionRoute::Host { .. } => Route::Host,
+                    ActionRoute::Builtin(_) => Route::Builtin,
                 },
-                server: match &tool.route {
-                    ToolRoute::Mcp { server } => Some(server.clone()),
+                server: match &action.route {
+                    ActionRoute::Mcp { server } => Some(server.clone()),
                     _ => None,
                 },
-                api: match &tool.route {
-                    ToolRoute::Api { api } => Some(api.clone()),
+                api: match &action.route {
+                    ActionRoute::Api { api } => Some(api.clone()),
                     _ => None,
                 },
-                description: tool.description.clone().unwrap_or_default(),
-                input_schema: tool.input_schema.clone(),
-                output_schema: tool.output_schema.clone(),
+                description: action.description.clone().unwrap_or_default(),
+                input_schema: action.input_schema.clone(),
+                output_schema: action.output_schema.clone(),
                 policy: ApiPolicy {
-                    on_interruption: Some(match tool.policy.on_interruption {
+                    on_interruption: Some(match action.policy.on_interruption {
                         Interruption::Retry => OnInterruption::Retry,
                         Interruption::AtMostOnce => OnInterruption::AtMostOnce,
                     }),
-                    approval: Some(tool.policy.approval),
-                    timeout: tool.policy.execution_timeout.map(Into::into),
-                    heartbeat_timeout: Some(tool.policy.heartbeat_timeout.into()),
-                    concurrency: Some(tool.policy.concurrency),
+                    approval: Some(action.policy.approval),
+                    timeout: action.policy.execution_timeout.map(Into::into),
+                    heartbeat_timeout: Some(action.policy.heartbeat_timeout.into()),
+                    concurrency: Some(action.policy.concurrency),
                 },
             })
             .collect(),

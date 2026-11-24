@@ -10,8 +10,8 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use rewind_core::{
-    ActionSet, Builtin, Command, Completion, Event, JsonValue, McpServer, McpTransport, RunMode,
-    Script, Tool, ToolFailure, ToolFailureKind, ToolRoute,
+    Action, ActionFailure, ActionFailureKind, ActionRoute, ActionSet, Builtin, Command, Completion,
+    Event, JsonValue, McpServer, McpTransport, RunMode, Script,
 };
 use rewind_engine::StartRun;
 use rewind_engine::edge::EdgeError;
@@ -25,21 +25,21 @@ use support::{FakeExecutor, RecordingDispatcher, T0};
 const ISSUE: &str = "github.get_issue";
 const PUBLIC_URL: &str = "https://rewind.example.com/";
 
-/// Calls the tool named in its input (`{"tool": …, "args": …}`), and completes with what came
+/// Calls the action named in its input (`{"action": …, "args": …}`), and completes with what came
 /// back: `{"result": …}`, or `{"error": kind, "message": …}`.
 fn caller() -> FakeExecutor {
     FakeExecutor::new().with(
         "caller",
         |run| {
-            let tool = run.input["tool"].as_str().unwrap().to_owned();
+            let action = run.input["action"].as_str().unwrap().to_owned();
             let args = run.input.get("args").cloned().unwrap_or(json!({}));
-            run.call(&tool, args);
+            run.call(&action, args);
         },
         |run, delivery| match delivery {
-            Delivery::ToolCallCompleted { result, .. } => {
+            Delivery::CallCompleted { result, .. } => {
                 run.complete(json!({ "result": result }));
             }
-            Delivery::ToolCallFailed { error, .. } => run.complete(json!({
+            Delivery::CallFailed { error, .. } => run.complete(json!({
                 "error": error.kind.as_str(),
                 "message": error.message,
             })),
@@ -48,7 +48,7 @@ fn caller() -> FakeExecutor {
     )
 }
 
-/// An MCP server `github` with the tool `github.get_issue`, the host tool `ask_user` and the
+/// An MCP server `github` with the action `github.get_issue`, the host tool `ask_user` and the
 /// `webhook` built-in.
 fn action_set() -> ActionSet {
     let server = McpServer::new(
@@ -57,23 +57,23 @@ fn action_set() -> ActionSet {
             url: "https://mcp.example.com/github".into(),
         },
     );
-    let issue = Tool::new(
+    let issue = Action::new(
         ISSUE,
-        ToolRoute::Mcp {
+        ActionRoute::Mcp {
             server: "github".into(),
         },
         json!({}),
     );
-    let ask = Tool::new("ask_user", ToolRoute::Host { group: None }, json!({}));
-    let webhook = Tool::new("webhook", ToolRoute::Builtin(Builtin::Webhook), json!({}));
+    let ask = Action::new("ask_user", ActionRoute::Host { group: None }, json!({}));
+    let webhook = Action::new("webhook", ActionRoute::Builtin(Builtin::Webhook), json!({}));
     ActionSet::new([server], [issue, ask, webhook]).unwrap()
 }
 
-fn calling(tool: &str, args: JsonValue) -> StartRun {
+fn calling(action: &str, args: JsonValue) -> StartRun {
     StartRun::new(
         Script::new("caller"),
         action_set(),
-        json!({ "tool": tool, "args": args }),
+        json!({ "action": action, "args": args }),
     )
 }
 
@@ -96,8 +96,8 @@ async fn output(world: &mut World, run: &RunRef) -> JsonValue {
 async fn a_transient_failure_is_retried_no_sooner_than_its_retry_after() {
     let dispatcher = RecordingDispatcher::dispatching(|call, _| {
         if call.attempt < 2 {
-            Dispatched::Transient(ToolFailure {
-                kind: ToolFailureKind::Unavailable,
+            Dispatched::Transient(ActionFailure {
+                kind: ActionFailureKind::Unavailable,
                 message: "rate limited".into(),
                 data: Some(json!({ "status": 429, "retryAfter": 3600 })),
             })
@@ -123,7 +123,7 @@ async fn a_transient_failure_is_retried_no_sooner_than_its_retry_after() {
         .find(|entry| {
             matches!(
                 entry.event,
-                Event::Completion(Completion::ToolCallCompleted { .. })
+                Event::Completion(Completion::CallCompleted { .. })
             )
         })
         .unwrap();
@@ -171,7 +171,7 @@ async fn a_result_above_the_payload_limit_is_refused() {
                 namespace: None,
                 labels: BTreeMap::new(),
                 action_set: None,
-                tools: Default::default(),
+                actions: Default::default(),
                 slots: 1,
             },
         )
@@ -201,7 +201,7 @@ fn hooked() -> FakeExecutor {
             run.call("webhook", json!({ "name": "pr_merged" }));
         },
         |run, delivery| match delivery {
-            Delivery::ToolCallCompleted { .. } => run.await_signal("pr_merged"),
+            Delivery::CallCompleted { .. } => run.await_signal("pr_merged"),
             Delivery::SignalReceived { name, payload } => {
                 run.complete(json!({ "name": name, "payload": payload }));
             }
@@ -217,9 +217,7 @@ async fn first_result(world: &mut World, run: &RunRef) -> JsonValue {
         .await
         .iter()
         .find_map(|entry| match &entry.event {
-            Event::Completion(Completion::ToolCallCompleted { result, .. }) => {
-                result.value().cloned()
-            }
+            Event::Completion(Completion::CallCompleted { result, .. }) => result.value().cloned(),
             _ => None,
         })
         .unwrap()

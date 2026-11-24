@@ -4,7 +4,7 @@
 //! SecretRef     org/<name> | ns/<name>      what an attachment names: an organization's secret,
 //!                                           or the secret <name> of the run's own namespace
 //! Attachments   { <server or API>: SecretRef }   a run's, a fork's, a workflow version's
-//! ToolAuth      none | rewind | secret(SecretPlacement)   how a server's or an API's calls
+//! ActionAuth      none | rewind | secret(SecretPlacement)   how a server's or an API's calls
 //!                                                         authenticate, pinned in the action set
 //! SecretPlacement  header(name, format?, encoding) | env(variable)
 //! ```
@@ -212,7 +212,7 @@ impl From<BTreeMap<String, SecretRef>> for Attachments {
 /// How the calls to an MCP server or an API prove who calls (`archi/04-tools.md`,
 /// "Authenticating calls"). Part of the pinned action set, and so of its digest; never a value.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
-pub enum ToolAuth {
+pub enum ActionAuth {
     /// Nothing: a public server. Left out of the pinned document.
     #[default]
     None,
@@ -223,10 +223,10 @@ pub enum ToolAuth {
     Secret(SecretPlacement),
 }
 
-impl ToolAuth {
+impl ActionAuth {
     /// Whether a run that imports the server must attach a secret for it.
     pub fn takes_secret(&self) -> bool {
-        matches!(self, ToolAuth::Secret(_))
+        matches!(self, ActionAuth::Secret(_))
     }
 }
 
@@ -295,7 +295,7 @@ impl SecretEncoding {
 }
 
 /// Headers Rewind sets itself on a call, which no `auth` may take (`archi/04-tools.md`,
-/// "Routes" and "API tools"), compared without case.
+/// "Routes" and "API actions"), compared without case.
 pub const RESERVED_HEADERS: &[&str] = &[
     "content-length",
     "content-type",
@@ -427,8 +427,8 @@ mod tests {
         for invalid in ["", "1A", "A-B", "A B"] {
             assert!(!is_env_name(invalid), "{invalid}");
         }
-        assert!(ToolAuth::Secret(SecretPlacement::bearer()).takes_secret());
-        assert!(!ToolAuth::Rewind.takes_secret());
-        assert!(!ToolAuth::None.takes_secret());
+        assert!(ActionAuth::Secret(SecretPlacement::bearer()).takes_secret());
+        assert!(!ActionAuth::Rewind.takes_secret());
+        assert!(!ActionAuth::None.takes_secret());
     }
 }

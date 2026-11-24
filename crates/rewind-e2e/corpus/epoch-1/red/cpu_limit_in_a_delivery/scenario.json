@@ -1,6 +1,6 @@
 {
-  "description": "The CPU budget applies to each trigger: main stays within it, the delivery of the tool result spins past it, and the host aborts the run at that delivery.",
-  "tools": {
+  "description": "The CPU budget applies to each trigger: main stays within it, the delivery of the action result spins past it, and the host aborts the run at that delivery.",
+  "actions": {
     "github.get_issue": {
       "title": "Crash"
     }
@@ -14,6 +14,6 @@
       "kind": "limit_exceeded",
       "message": "200ms of CPU time"
     },
-    "events": ["run_started", "schedule_tool_call", "tool_call_completed", "run_aborted"]
+    "events": ["run_started", "schedule_call", "call_completed", "run_aborted"]
   }
 }

@@ -1,4 +1,4 @@
-import { github } from "rewind:tools";
+import { github } from "rewind:actions";
 
 export default async function main(input: { repo: string }) {
   const issues = await github.list_issues({ repo: input.repo });

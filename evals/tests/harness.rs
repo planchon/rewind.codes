@@ -10,7 +10,7 @@ use std::sync::{Arc, LazyLock};
 
 use evals::episode::{self, Episode, EpisodeConfig};
 use evals::model::scripted::{Scripted, first_run, first_uuid};
-use evals::model::{AssistantTurn, Conversation, Model, ToolCall, Turn};
+use evals::model::{AssistantTurn, Call, Conversation, Model, Turn};
 use evals::prompt::Rendering;
 use evals::task::Task;
 use evals::tasks;
@@ -38,7 +38,7 @@ fn solution(id: &str) -> String {
 fn call(name: &str, input: Value) -> AssistantTurn {
     AssistantTurn {
         text: String::new(),
-        calls: vec![ToolCall {
+        calls: vec![Call {
             id: format!("call_{name}"),
             name: name.into(),
             input,
@@ -173,7 +173,7 @@ fn upgraded_suite() -> Value {
                 "test": {
                     "name": "posts the open bugs",
                     "input": { "repo": "acme/api" },
-                    "world": { "tools": {
+                    "world": { "actions": {
                         "tracker.list_issues": {
                             "args": { "repo": "acme/api", "label": "bug" },
                             "returns": { "issues": [bug(3, "Login fails with SSO (3)"), bug(6, "Slow dashboard (6)")] }
@@ -183,7 +183,7 @@ fn upgraded_suite() -> Value {
                     "expect": {
                         "status": "completed",
                         "output": { "posted": 2 },
-                        "calls": [{ "tool": "chat.post_message", "args": { "channel": "#bugs" }, "times": 1 }]
+                        "calls": [{ "action": "chat.post_message", "args": { "channel": "#bugs" }, "times": 1 }]
                     }
                 }
             },
@@ -193,13 +193,13 @@ fn upgraded_suite() -> Value {
                 "test": {
                     "name": "posts nothing without open bugs",
                     "input": { "repo": "acme/web" },
-                    "world": { "tools": {
+                    "world": { "actions": {
                         "tracker.list_issues": { "args": { "label": "bug" }, "returns": { "issues": [] } }
                     } },
                     "expect": {
                         "status": "completed",
                         "output": { "posted": 0 },
-                        "calls": [{ "tool": "chat.post_message", "times": 0 }]
+                        "calls": [{ "action": "chat.post_message", "times": 0 }]
                     }
                 }
             }
@@ -211,7 +211,7 @@ fn upgraded_suite() -> Value {
         "tests": [{
             "name": "posts the bugs of every page",
             "input": { "repo": "acme/api" },
-            "world": { "tools": {
+            "world": { "actions": {
                 "tracker.list_issues": [
                     { "args": { "cursor": "page_25" }, "returns": { "issues": [bug(60, "Pagination skips items (60)")] } },
                     { "args": { "label": "bug" }, "returns": { "issues": [bug(3, "Login fails with SSO (3)")], "next_cursor": "page_25" } }
@@ -221,7 +221,7 @@ fn upgraded_suite() -> Value {
             "expect": {
                 "status": "completed",
                 "output": { "posted": 2 },
-                "calls": [{ "tool": "tracker.list_issues", "times": 2 }]
+                "calls": [{ "action": "tracker.list_issues", "times": 2 }]
             }
         }]
     })
@@ -275,7 +275,7 @@ fn reference(id: &'static str) -> Model {
                     let digest = digest_in(&last.unwrap_or_default())?;
                     let expect = json!({
                         "status": "completed",
-                        "calls": [{ "tool": "shipping.create_label", "times": 3 }]
+                        "calls": [{ "action": "shipping.create_label", "times": 3 }]
                     });
                     Some(call(
                         "save_workflow",
@@ -468,7 +468,7 @@ async fn retrying_with_new_request_ids_duplicates_shipments() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_failed_run_shows_the_call_that_failed_with_its_line() {
-    let code = "import { crm } from \"rewind:tools\";\n\nexport default async function main() {\n  return (await crm.get_order({ id: \"O-504\" })).json();\n}\n";
+    let code = "import { crm } from \"rewind:actions\";\n\nexport default async function main() {\n  return (await crm.get_order({ id: \"O-504\" })).json();\n}\n";
     let model = Model::Scripted(Scripted::turns(
         "scripted",
         vec![call("run_script", json!({ "code": code }))],
@@ -479,7 +479,7 @@ async fn a_failed_run_shows_the_call_that_failed_with_its_line() {
     };
     let text = &results[0].content;
     assert!(results[0].is_error);
-    assert!(text.contains(" failed.\nToolError: "), "{text}");
+    assert!(text.contains(" failed.\nActionError: "), "{text}");
     assert!(
         text.contains("The call that failed: crm.get_order (call 1 at script.ts:4:"),
         "{text}"
@@ -520,7 +520,7 @@ async fn every_rendering_gives_the_model_what_it_needs() {
         let model = Model::Scripted(Scripted::turns(
             "scripted",
             vec![
-                call("search_tools", json!({ "query": "customer" })),
+                call("search_actions", json!({ "query": "customer" })),
                 episode::answer("done"),
             ],
         ));
@@ -552,7 +552,7 @@ fn calls(list: Vec<(&str, Value)>) -> AssistantTurn {
         calls: list
             .into_iter()
             .enumerate()
-            .map(|(n, (name, input))| ToolCall {
+            .map(|(n, (name, input))| Call {
                 id: format!("call_{n}_{name}"),
                 name: name.into(),
                 input,
@@ -718,7 +718,7 @@ async fn a_stale_test_cannot_be_updated_by_its_expectation_alone() {
     assert!(results[0].is_error);
     assert!(
         results[0].content.contains(
-            "FAIL \"posts the open bugs\" (stale): it names tools, answers or args the action set no longer has; it was not run.\n  - rule 1 of tracker.list_issues answers what its output schema refuses"
+            "FAIL \"posts the open bugs\" (stale): it names actions, answers or args the action set no longer has; it was not run.\n  - rule 1 of tracker.list_issues answers what its output schema refuses"
         ),
         "{}",
         results[0].content

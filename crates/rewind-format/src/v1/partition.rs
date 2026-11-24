@@ -11,8 +11,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use rewind_core::{
-    Attachments, Digest, Event, JsonValue, Payload, RunId, RunMode, RunStatus, Shape as CoreShape,
-    ToolFailureKind, ToolPolicy, ToolRoute,
+    ActionFailureKind, ActionPolicy, ActionRoute, Attachments, Digest, Event, JsonValue, Payload,
+    RunId, RunMode, RunStatus, Shape as CoreShape,
 };
 use rewind_core::{LogLevel, WorkflowOp};
 use serde::{Deserialize, Serialize};
@@ -213,7 +213,7 @@ pub struct InboxItem {
 #[serde(deny_unknown_fields)]
 pub struct SignalKey {}
 
-/// A tool task.
+/// A call's task.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Task {
@@ -223,13 +223,13 @@ pub struct Task {
     pub seq: u32,
     #[serde(with = "with::digest")]
     pub action_set: Digest,
-    pub tool: String,
+    pub action: String,
     #[serde(with = "with::route")]
-    pub route: ToolRoute,
+    pub route: ActionRoute,
     #[serde(with = "with::payload")]
     pub args: Payload,
     #[serde(with = "with::policy")]
-    pub policy: ToolPolicy,
+    pub policy: ActionPolicy,
     pub state: TaskState,
     pub attempt: u32,
     #[serde(default, skip_serializing_if = "is_false")]
@@ -415,7 +415,7 @@ pub struct Summary {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ended_at: Option<u64>,
     pub last_activity_at: u64,
-    pub tool_calls: u64,
+    pub calls: u64,
     pub errors: u64,
     pub history_len: u64,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -427,7 +427,7 @@ pub struct Summary {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quarantine: Option<QuarantineNote>,
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
-    pub tools: BTreeSet<String>,
+    pub actions: BTreeSet<String>,
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub call_errors: BTreeSet<FailureKind>,
 }
@@ -478,7 +478,7 @@ pub struct Counters {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub failures: BTreeMap<String, FailureCounts>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub tools: BTreeMap<String, ToolCounts>,
+    pub actions: BTreeMap<String, ActionCounts>,
     #[serde(
         default,
         with = "with::digest_map",
@@ -553,7 +553,7 @@ pub struct LatestRun {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ToolCounts {
+pub struct ActionCounts {
     pub calls: u64,
     pub completed: u64,
     pub failed: u64,
@@ -570,14 +570,14 @@ pub struct ScriptCounts {
     #[serde(default, skip_serializing_if = "RunCounts::is_empty")]
     pub runs: RunCounts,
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
-    pub tools: BTreeSet<String>,
+    pub actions: BTreeSet<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub first_started_at: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_started_at: Option<u64>,
 }
 
-/// The shape of the results observed for one tool in one namespace.
+/// The shape of the results observed for one action in one namespace.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Shape {
@@ -755,14 +755,14 @@ pub enum WebhookKind {
     RunQuarantined {
         reason: String,
     },
-    ToolSchemaChanged {
+    ActionSchemaChanged {
         seq: u32,
-        tool: String,
+        action: String,
         message: String,
     },
     CredentialsExpired {
         seq: u32,
-        tool: String,
+        action: String,
         message: String,
         reason: CredentialsReason,
         /// `org/<name>` or `ns/<name>`.
@@ -918,24 +918,24 @@ pub enum FailureKind {
     OutcomeUnknown,
 }
 
-impl From<ToolFailureKind> for FailureKind {
-    fn from(kind: ToolFailureKind) -> Self {
+impl From<ActionFailureKind> for FailureKind {
+    fn from(kind: ActionFailureKind) -> Self {
         match kind {
-            ToolFailureKind::Error => FailureKind::Error,
-            ToolFailureKind::Unavailable => FailureKind::Unavailable,
-            ToolFailureKind::Timeout => FailureKind::Timeout,
-            ToolFailureKind::OutcomeUnknown => FailureKind::OutcomeUnknown,
+            ActionFailureKind::Error => FailureKind::Error,
+            ActionFailureKind::Unavailable => FailureKind::Unavailable,
+            ActionFailureKind::Timeout => FailureKind::Timeout,
+            ActionFailureKind::OutcomeUnknown => FailureKind::OutcomeUnknown,
         }
     }
 }
 
-impl From<FailureKind> for ToolFailureKind {
+impl From<FailureKind> for ActionFailureKind {
     fn from(kind: FailureKind) -> Self {
         match kind {
-            FailureKind::Error => ToolFailureKind::Error,
-            FailureKind::Unavailable => ToolFailureKind::Unavailable,
-            FailureKind::Timeout => ToolFailureKind::Timeout,
-            FailureKind::OutcomeUnknown => ToolFailureKind::OutcomeUnknown,
+            FailureKind::Error => ActionFailureKind::Error,
+            FailureKind::Unavailable => ActionFailureKind::Unavailable,
+            FailureKind::Timeout => ActionFailureKind::Timeout,
+            FailureKind::OutcomeUnknown => ActionFailureKind::OutcomeUnknown,
         }
     }
 }
@@ -1131,13 +1131,15 @@ mod with {
         use super::*;
 
         pub(crate) fn serialize<S: Serializer>(
-            policy: &ToolPolicy,
+            policy: &ActionPolicy,
             s: S,
         ) -> Result<S::Ok, S::Error> {
             policy_dto(policy).serialize(s)
         }
 
-        pub(crate) fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<ToolPolicy, D::Error> {
+        pub(crate) fn deserialize<'de, D: Deserializer<'de>>(
+            d: D,
+        ) -> Result<ActionPolicy, D::Error> {
             Ok(policy_from_dto(PolicyV1::deserialize(d)?))
         }
     }
@@ -1187,7 +1189,10 @@ mod with {
         use super::*;
         use rewind_core::Builtin;
 
-        pub(crate) fn serialize<S: Serializer>(route: &ToolRoute, s: S) -> Result<S::Ok, S::Error> {
+        pub(crate) fn serialize<S: Serializer>(
+            route: &ActionRoute,
+            s: S,
+        ) -> Result<S::Ok, S::Error> {
             let builtin = |builtin, allowed_hosts, workflow, op| RouteV1::Builtin {
                 builtin,
                 allowed_hosts,
@@ -1195,20 +1200,20 @@ mod with {
                 op,
             };
             let dto = match route {
-                ToolRoute::Mcp { server } => RouteV1::Mcp {
+                ActionRoute::Mcp { server } => RouteV1::Mcp {
                     server: server.clone(),
                 },
-                ToolRoute::Api { api } => RouteV1::Api { api: api.clone() },
-                ToolRoute::Host { group } => RouteV1::Host {
+                ActionRoute::Api { api } => RouteV1::Api { api: api.clone() },
+                ActionRoute::Host { group } => RouteV1::Host {
                     group: group.clone(),
                 },
-                ToolRoute::Builtin(Builtin::Http { allowed_hosts }) => {
+                ActionRoute::Builtin(Builtin::Http { allowed_hosts }) => {
                     builtin(BuiltinV1::Http, Some(allowed_hosts.clone()), None, None)
                 }
-                ToolRoute::Builtin(Builtin::Webhook) => {
+                ActionRoute::Builtin(Builtin::Webhook) => {
                     builtin(BuiltinV1::Webhook, None, None, None)
                 }
-                ToolRoute::Builtin(Builtin::Workflow { workflow, op }) => builtin(
+                ActionRoute::Builtin(Builtin::Workflow { workflow, op }) => builtin(
                     BuiltinV1::Workflow,
                     None,
                     Some(workflow.clone()),
@@ -1221,29 +1226,31 @@ mod with {
             dto.serialize(s)
         }
 
-        pub(crate) fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<ToolRoute, D::Error> {
+        pub(crate) fn deserialize<'de, D: Deserializer<'de>>(
+            d: D,
+        ) -> Result<ActionRoute, D::Error> {
             Ok(match RouteV1::deserialize(d)? {
-                RouteV1::Mcp { server } => ToolRoute::Mcp { server },
-                RouteV1::Api { api } => ToolRoute::Api { api },
-                RouteV1::Host { group } => ToolRoute::Host { group },
+                RouteV1::Mcp { server } => ActionRoute::Mcp { server },
+                RouteV1::Api { api } => ActionRoute::Api { api },
+                RouteV1::Host { group } => ActionRoute::Host { group },
                 RouteV1::Builtin {
                     builtin: BuiltinV1::Http,
                     allowed_hosts: Some(allowed_hosts),
                     workflow: None,
                     op: None,
-                } => ToolRoute::Builtin(Builtin::Http { allowed_hosts }),
+                } => ActionRoute::Builtin(Builtin::Http { allowed_hosts }),
                 RouteV1::Builtin {
                     builtin: BuiltinV1::Webhook,
                     allowed_hosts: None,
                     workflow: None,
                     op: None,
-                } => ToolRoute::Builtin(Builtin::Webhook),
+                } => ActionRoute::Builtin(Builtin::Webhook),
                 RouteV1::Builtin {
                     builtin: BuiltinV1::Workflow,
                     allowed_hosts: None,
                     workflow: Some(workflow),
                     op: Some(op),
-                } => ToolRoute::Builtin(Builtin::Workflow {
+                } => ActionRoute::Builtin(Builtin::Workflow {
                     workflow,
                     op: match op {
                         OpV1::Start => WorkflowOp::Start,

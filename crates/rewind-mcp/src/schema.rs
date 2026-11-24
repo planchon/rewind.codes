@@ -1,6 +1,6 @@
-//! Does a call still match its tool? (`archi/04-tools.md`, "When an action set changes during a
+//! Does a call still match its action? (`archi/04-tools.md`, "When an action set changes during a
 //! run".) A run keeps the action set it started with, but the server behind it can change during a
-//! long pause. Before each call, the dispatcher compares the pinned tool with the tool the
+//! long pause. Before each call, the dispatcher compares the pinned action with the tool the
 //! server lists now.
 //!
 //! The call no longer matches, and is parked, when:
@@ -11,29 +11,29 @@
 //!   script's code reads the result through it.
 //!
 //! An input schema that changed without refusing the args (a new optional property, a new
-//! description), and an output schema the pinned tool did not have, do not stop the call: the
+//! description), and an output schema the pinned action did not have, do not stop the call: the
 //! script's code still fits. Schemas are compared in their canonical JSON (RFC 8785).
 
-use rewind_core::{Tool, canonical_json};
+use rewind_core::{Action, canonical_json};
 use serde_json::Value;
 
 use crate::failure::bounded;
 
-/// Why the call no longer matches the tool, written for the harness developer and the model;
+/// Why the call no longer matches the action, written for the harness developer and the model;
 /// `None` when it still does. Cut at 2,000 characters: a refused argument is quoted in it.
 pub(crate) fn mismatch(
-    pinned: &Tool,
+    pinned: &Action,
     current: Option<&rmcp::model::Tool>,
     args: &Value,
 ) -> Option<String> {
     changed(pinned, current, args).map(|message| bounded(&message))
 }
 
-fn changed(pinned: &Tool, current: Option<&rmcp::model::Tool>, args: &Value) -> Option<String> {
+fn changed(pinned: &Action, current: Option<&rmcp::model::Tool>, args: &Value) -> Option<String> {
     let name = &pinned.name;
     let Some(current) = current else {
         return Some(format!(
-            "{name} changed on its server: the server no longer lists the tool {:?}",
+            "{name} changed on its server: the server no longer lists the action {:?}",
             pinned.local_name()
         ));
     };
@@ -90,7 +90,7 @@ fn changed(pinned: &Tool, current: Option<&rmcp::model::Tool>, args: &Value) -> 
 mod tests {
     use std::sync::Arc;
 
-    use rewind_core::ToolRoute;
+    use rewind_core::ActionRoute;
     use serde_json::{Map, json};
 
     use super::*;
@@ -102,22 +102,22 @@ mod tests {
         }
     }
 
-    fn pinned(input: Value, output: Option<Value>) -> Tool {
-        let mut tool = Tool::new(
+    fn pinned(input: Value, output: Option<Value>) -> Action {
+        let mut action = Action::new(
             "github.list_issues",
-            ToolRoute::Mcp {
+            ActionRoute::Mcp {
                 server: "github".into(),
             },
             input,
         );
-        tool.output_schema = output;
-        tool
+        action.output_schema = output;
+        action
     }
 
     fn current(input: Value, output: Option<Value>) -> rmcp::model::Tool {
-        let mut tool = rmcp::model::Tool::new("list_issues", "List the issues.", object(input));
-        tool.output_schema = output.map(object);
-        tool
+        let mut action = rmcp::model::Tool::new("list_issues", "List the issues.", object(input));
+        action.output_schema = output.map(object);
+        action
     }
 
     fn schema(state: &[&str]) -> Value {
@@ -129,8 +129,8 @@ mod tests {
     }
 
     #[test]
-    fn an_unchanged_tool_matches() {
-        let tool = pinned(
+    fn an_unchanged_action_matches() {
+        let action = pinned(
             schema(&["open", "closed"]),
             Some(json!({ "type": "object" })),
         );
@@ -139,34 +139,34 @@ mod tests {
             Some(json!({ "type": "object" })),
         );
         assert_eq!(
-            mismatch(&tool, Some(&same), &json!({ "repo": "a/b" })),
+            mismatch(&action, Some(&same), &json!({ "repo": "a/b" })),
             None
         );
     }
 
     #[test]
-    fn a_removed_tool_does_not() {
-        let tool = pinned(schema(&["open"]), None);
+    fn a_removed_action_does_not() {
+        let action = pinned(schema(&["open"]), None);
         assert_eq!(
-            mismatch(&tool, None, &json!({})).unwrap(),
-            "github.list_issues changed on its server: the server no longer lists the tool \"list_issues\""
+            mismatch(&action, None, &json!({})).unwrap(),
+            "github.list_issues changed on its server: the server no longer lists the action \"list_issues\""
         );
     }
 
     #[test]
     fn a_new_input_schema_stops_only_the_calls_it_refuses() {
-        let tool = pinned(schema(&["open", "closed"]), None);
+        let action = pinned(schema(&["open", "closed"]), None);
         let narrower = current(schema(&["open"]), None);
         assert_eq!(
             mismatch(
-                &tool,
+                &action,
                 Some(&narrower),
                 &json!({ "repo": "a/b", "state": "open" })
             ),
             None
         );
         let refused = mismatch(
-            &tool,
+            &action,
             Some(&narrower),
             &json!({ "repo": "a/b", "state": "closed" }),
         )
@@ -181,11 +181,11 @@ mod tests {
 
     #[test]
     fn the_message_holds_a_bounded_part_of_the_args() {
-        let tool = pinned(schema(&["open"]), None);
+        let action = pinned(schema(&["open"]), None);
         let mut narrower = schema(&["open"]);
         narrower["properties"]["repo"]["maxLength"] = json!(3);
         let message = mismatch(
-            &tool,
+            &action,
             Some(&current(narrower, None)),
             &json!({ "repo": "x".repeat(100_000) }),
         )
@@ -195,16 +195,16 @@ mod tests {
 
     #[test]
     fn a_changed_or_dropped_output_schema_does_not_match() {
-        let tool = pinned(schema(&["open"]), Some(json!({ "type": "object" })));
+        let action = pinned(schema(&["open"]), Some(json!({ "type": "object" })));
         let changed = current(
             schema(&["open"]),
             Some(json!({ "type": "object", "properties": { "a": {} } })),
         );
-        assert!(mismatch(&tool, Some(&changed), &json!({ "repo": "a" })).is_some());
+        assert!(mismatch(&action, Some(&changed), &json!({ "repo": "a" })).is_some());
         let dropped = current(schema(&["open"]), None);
-        assert!(mismatch(&tool, Some(&dropped), &json!({ "repo": "a" })).is_some());
+        assert!(mismatch(&action, Some(&dropped), &json!({ "repo": "a" })).is_some());
 
-        // A tool pinned without one returns its content, whatever it declares now.
+        // An action pinned without one returns its content, whatever it declares now.
         let content = pinned(schema(&["open"]), None);
         assert_eq!(
             mismatch(&content, Some(&changed), &json!({ "repo": "a" })),

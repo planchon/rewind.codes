@@ -1,11 +1,11 @@
-//! Reading OpenAPI documents into pinned APIs and tools (`archi/04-tools.md`, "API tools"):
+//! Reading OpenAPI documents into pinned APIs and actions (`archi/04-tools.md`, "API actions"):
 //! a 3.0 and a 3.1 document from `fixtures/`, and the refusals.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use rewind_core::{
-    ActionSet, ApiParameter, HttpMethod, Interruption, ParameterLocation, SecretPlacement, Tool,
-    ToolAuth,
+    Action, ActionAuth, ActionSet, ApiParameter, HttpMethod, Interruption, ParameterLocation,
+    SecretPlacement,
 };
 use rewind_engine::schema::Validator;
 use rewind_openapi::{ReadApi, ReadOptions, read};
@@ -17,11 +17,11 @@ fn fixture(name: &str) -> Value {
     serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
 }
 
-fn tool<'a>(read: &'a ReadApi, name: &str) -> &'a Tool {
-    read.tools
+fn action<'a>(read: &'a ReadApi, name: &str) -> &'a Action {
+    read.actions
         .iter()
-        .find(|tool| tool.name == name)
-        .unwrap_or_else(|| panic!("no tool {name}"))
+        .find(|action| action.name == name)
+        .unwrap_or_else(|| panic!("no action {name}"))
 }
 
 /// The schema compiles, and accepts `args`.
@@ -32,11 +32,15 @@ fn accepts(schema: &Value, args: &Value) -> bool {
 }
 
 #[test]
-fn an_openapi_3_0_document_is_read_into_tools() {
+fn an_openapi_3_0_document_is_read_into_actions() {
     let read = read(&fixture("measures-3.0.json"), &ReadOptions::new("dax")).unwrap();
     assert_eq!(read.api.base_url, "https://eu.api.example.com/v1");
-    assert_eq!(read.api.auth, ToolAuth::Secret(SecretPlacement::bearer()));
-    let names: Vec<&str> = read.tools.iter().map(|tool| tool.name.as_str()).collect();
+    assert_eq!(read.api.auth, ActionAuth::Secret(SecretPlacement::bearer()));
+    let names: Vec<&str> = read
+        .actions
+        .iter()
+        .map(|action| action.name.as_str())
+        .collect();
     assert_eq!(
         names,
         [
@@ -79,7 +83,7 @@ fn an_openapi_3_0_document_is_read_into_tools() {
     );
 
     // The body's schema from a request body and a component, 3.0's keywords converted.
-    let create = tool(&read, "dax.createMeasure");
+    let create = action(&read, "dax.createMeasure");
     let operation = create.operation.as_ref().unwrap();
     assert_eq!(operation.method, HttpMethod::Post);
     assert!(operation.body && operation.idempotency_key);
@@ -119,7 +123,7 @@ fn an_openapi_3_0_document_is_read_into_tools() {
     ));
 
     // A path item's parameter, by $ref; a PATCH without Idempotency-Key is at most once.
-    let get = tool(&read, "dax.getMeasure");
+    let get = action(&read, "dax.getMeasure");
     assert_eq!(
         get.operation.as_ref().unwrap().parameters,
         [ApiParameter {
@@ -136,16 +140,16 @@ fn an_openapi_3_0_document_is_read_into_tools() {
         &get.input_schema,
         &json!({ "id": "m", "other": 1 })
     ));
-    let rename = tool(&read, "dax.renameMeasure");
+    let rename = action(&read, "dax.renameMeasure");
     assert_eq!(rename.policy.on_interruption, Interruption::AtMostOnce);
     assert!(rename.output_schema.is_none());
     assert_eq!(
-        tool(&read, "dax.deleteMeasure").policy.on_interruption,
+        action(&read, "dax.deleteMeasure").policy.on_interruption,
         Interruption::Retry
     );
 
     // Accept is not an arg: Rewind sets it.
-    let list = tool(&read, "dax.listMeasures");
+    let list = action(&read, "dax.listMeasures");
     let parameters: Vec<&str> = list
         .operation
         .as_ref()
@@ -157,8 +161,8 @@ fn an_openapi_3_0_document_is_read_into_tools() {
     assert_eq!(parameters, ["limit", "tag"]);
 
     // What is read is an action set, with a digest that does not depend on the reading's order.
-    let action_set = ActionSet::from_parts([], [read.api.clone()], read.tools.clone()).unwrap();
-    let mut reversed = read.tools.clone();
+    let action_set = ActionSet::from_parts([], [read.api.clone()], read.actions.clone()).unwrap();
+    let mut reversed = read.actions.clone();
     reversed.reverse();
     assert_eq!(
         action_set.digest(),
@@ -169,7 +173,7 @@ fn an_openapi_3_0_document_is_read_into_tools() {
 }
 
 #[test]
-fn an_openapi_3_1_document_is_read_into_tools() {
+fn an_openapi_3_1_document_is_read_into_actions() {
     let mut options = ReadOptions::new("crm");
     options.document_url = Some(Url::parse("https://crm.example.com/openapi.json").unwrap());
     let read = read(&fixture("crm-3.1.json"), &options).unwrap();
@@ -178,14 +182,18 @@ fn an_openapi_3_1_document_is_read_into_tools() {
     // The first alternative of the requirement Rewind can follow: the key in a header.
     assert_eq!(
         read.api.auth,
-        ToolAuth::Secret(SecretPlacement::header("X-Api-Key"))
+        ActionAuth::Secret(SecretPlacement::header("X-Api-Key"))
     );
-    let names: Vec<&str> = read.tools.iter().map(|tool| tool.name.as_str()).collect();
+    let names: Vec<&str> = read
+        .actions
+        .iter()
+        .map(|action| action.name.as_str())
+        .collect();
     assert_eq!(
         names,
         ["crm.contacts.list", "crm.post_contacts_contactId_notes"]
     );
-    let note = tool(&read, "crm.post_contacts_contactId_notes");
+    let note = action(&read, "crm.post_contacts_contactId_notes");
     let parameters: Vec<(&str, ParameterLocation)> = note
         .operation
         .as_ref()
@@ -204,7 +212,7 @@ fn an_openapi_3_1_document_is_read_into_tools() {
     );
     assert!(note.operation.as_ref().unwrap().body);
     assert_eq!(note.description.as_deref(), Some("Add a note."));
-    // `2XX`, and `$id` left out: the references are the tool's own.
+    // `2XX`, and `$id` left out: the references are the action's own.
     let output = note.output_schema.as_ref().unwrap();
     assert!(output["$defs"]["Contact"].get("$id").is_none());
     assert!(accepts(
@@ -215,8 +223,8 @@ fn an_openapi_3_1_document_is_read_into_tools() {
         &note.input_schema,
         &json!({ "contactId": 4, "body": { "text": "hi" } })
     ));
-    assert!(tool(&read, "crm.contacts.list").output_schema.is_none());
-    ActionSet::from_parts([], [read.api], read.tools).unwrap();
+    assert!(action(&read, "crm.contacts.list").output_schema.is_none());
+    ActionSet::from_parts([], [read.api], read.actions).unwrap();
 }
 
 #[test]
@@ -224,18 +232,18 @@ fn the_registration_s_options_win_over_the_document() {
     let mut options = ReadOptions::new("dax");
     options.base_url = Some("http://127.0.0.1:8080/v1/".into());
     options.allow_http = true;
-    options.auth = Some(ToolAuth::Rewind);
+    options.auth = Some(ActionAuth::Rewind);
     options.operations = Some(vec!["getMeasure".into(), "createMeasure".into()]);
     options.concurrency = Some(2);
     let read = read(&fixture("measures-3.0.json"), &options).unwrap();
     assert_eq!(read.api.base_url, "http://127.0.0.1:8080/v1");
-    assert_eq!(read.api.auth, ToolAuth::Rewind);
+    assert_eq!(read.api.auth, ActionAuth::Rewind);
     assert_eq!(read.api.concurrency, 2);
-    assert_eq!(read.tools.len(), 2);
+    assert_eq!(read.actions.len(), 2);
     assert!(read.skipped.is_empty());
     // `auth: none` sets aside the document's requirement.
     let mut options = ReadOptions::new("dax");
-    options.auth = Some(ToolAuth::None);
+    options.auth = Some(ActionAuth::None);
     assert_eq!(
         read_error(&fixture("measures-3.0.json"), &options),
         None,
@@ -281,14 +289,14 @@ fn documents_rewind_cannot_follow_are_refused() {
             }),
             json!({})
         )),
-        "API api: GET /a and GET /b are both named \"same\": two tools cannot share a name"
+        "API api: GET /a and GET /b are both named \"same\": two actions cannot share a name"
     );
     assert_eq!(
         refused(document(
             json!({ "/a": { "get": { "operationId": "list items", "responses": ok } } }),
             json!({})
         )),
-        "API api: GET /a: its operationId \"list items\" is not a tool name: 1 to 128 letters, \
+        "API api: GET /a: its operationId \"list items\" is not an action name: 1 to 128 letters, \
          digits, _, - and ."
     );
     assert!(
@@ -338,7 +346,7 @@ fn documents_rewind_cannot_follow_are_refused() {
          a secret never goes in a URL or a cookie; give auth"
     );
     let mut options = ReadOptions::new("api");
-    options.auth = Some(ToolAuth::Secret(SecretPlacement::header("X-Key")));
+    options.auth = Some(ActionAuth::Secret(SecretPlacement::header("X-Key")));
     assert_eq!(read_error(&in_query, &options), None, "auth given reads");
     let mut both = in_query.clone();
     both["security"] = json!([{ "key": [], "bearer": [] }]);
@@ -366,7 +374,7 @@ fn documents_rewind_cannot_follow_are_refused() {
     let mut options = ReadOptions::new("api");
     options.operations = Some(vec!["get_b".into()]);
     let one = read(&different, &options).unwrap();
-    assert_eq!(one.api.auth, ToolAuth::Secret(SecretPlacement::bearer()));
+    assert_eq!(one.api.auth, ActionAuth::Secret(SecretPlacement::bearer()));
     options.operations = Some(vec!["get_c".into()]);
     assert_eq!(
         read_error(&different, &options).unwrap(),

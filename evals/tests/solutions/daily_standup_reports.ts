@@ -1,4 +1,4 @@
-import { chat, tracker } from "rewind:tools";
+import { chat, tracker } from "rewind:actions";
 import { sleep } from "rewind";
 
 const DAY = 86_400_000;

@@ -30,7 +30,7 @@
   "secrets": {
     "crm": "ns/crm"
   },
-  "tools": {
+  "actions": {
     "crm.lookup": {
       "$sequence": [
         {
@@ -51,7 +51,7 @@
     },
     {
       "parked": {
-        "tool": "crm.lookup",
+        "action": "crm.lookup",
         "reason": "secret_missing"
       }
     },

@@ -1,6 +1,6 @@
 {
   "description": "Serializing the output runs the script's code: a call it makes then is still a call in flight, and the run waits for its outcome before it ends.",
-  "tools": {
+  "actions": {
     "audit.record": {
       "ok": true
     }
@@ -10,8 +10,8 @@
     "output": "out",
     "events": [
       "run_started",
-      "schedule_tool_call",
-      "tool_call_completed",
+      "schedule_call",
+      "call_completed",
       "complete_run"
     ]
   }

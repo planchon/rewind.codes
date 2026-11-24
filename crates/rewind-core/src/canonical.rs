@@ -60,7 +60,7 @@ fn write_value(value: &Value, out: &mut String) {
 /// parses back to.
 ///
 /// What a script observes of a value must not depend on where it comes from. A value
-/// delivered live (as a tool or the harness built it) and the same value loaded back from
+/// delivered live (as an action or the harness built it) and the same value loaded back from
 /// storage (written in canonical form) must have their keys in the same order, or
 /// `Object.keys` would differ between a run and its replay.
 pub fn canonicalize(value: &Value) -> Value {

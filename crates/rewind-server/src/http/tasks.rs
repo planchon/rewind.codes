@@ -1,6 +1,6 @@
 //! Host-tool tasks: the harness's SDK worker holds a task stream open and is handed the tasks as
 //! they become ready, and answers each through its token; the harness approves or rejects the
-//! calls that wait for it (`archi/04-tools.md`, "Tool task lifecycle").
+//! calls that wait for it (`archi/04-tools.md`, "Call lifecycle").
 //!
 //! ```text
 //!  GET /v1/tasks/stream ── attach_stream ──► organization actor of the tenant (its home owner)
@@ -73,10 +73,10 @@ pub(super) async fn stream(
         (None, named) => named,
     };
     let action_set = query.action_set.as_deref().map(parse_digest).transpose()?;
-    let mut tools = BTreeSet::new();
-    for tool in query.tools {
-        refuse_nul_in_filter("tools", &tool)?;
-        tools.insert(tool);
+    let mut actions = BTreeSet::new();
+    for action in query.actions {
+        refuse_nul_in_filter("actions", &action)?;
+        actions.insert(action);
     }
     let slots = query.slots.unwrap_or(SLOTS);
     if slots > MAX_SLOTS {
@@ -109,7 +109,7 @@ pub(super) async fn stream(
                 namespace,
                 labels: caller.labels.clone(),
                 action_set,
-                tools,
+                actions,
                 slots,
             },
         )
@@ -171,7 +171,7 @@ fn handed(task: HostTask) -> HandedTask {
         run_id: task.task.run.id.to_string(),
         namespace: crate::views::namespace(&task.namespace),
         seq: task.task.seq.0,
-        tool: task.tool,
+        action: task.action,
         args: task.args,
         idempotency_key: task.idempotency_key,
         attempt: task.attempt,

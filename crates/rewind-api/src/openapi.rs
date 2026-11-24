@@ -58,7 +58,7 @@ use crate::webhooks::{
         operations::create_action_set,
         operations::list_action_sets,
         operations::get_action_set_declarations,
-        operations::search_tools,
+        operations::search_actions,
         operations::create_workflow,
         operations::list_workflows,
         operations::get_workflow_versions,
@@ -95,7 +95,7 @@ use crate::webhooks::{
         operations::create_subscription,
         operations::list_subscriptions,
         operations::delete_subscription,
-        operations::get_tool_stats,
+        operations::get_action_stats,
         operations::get_payload,
         operations::whoami,
         operations::create_organization,
@@ -192,7 +192,7 @@ use crate::webhooks::{
         (name = "runs", description = "Start, follow, steer, fork and erase runs."),
         (name = "tasks", description = "Host-tool tasks: handed to the harness's SDK worker on its task stream, answered by their token, approved or rejected by the harness."),
         (name = "webhooks", description = "Inbound webhooks that become signals, and subscriptions to signed lifecycle events."),
-        (name = "reading", description = "The scripts executed on the platform, tool statistics and payloads, for the dashboard."),
+        (name = "reading", description = "The scripts executed on the platform, action statistics and payloads, for the dashboard."),
         (name = "organization", description = "Who calls; the organizations, their members and invitations."),
         (name = "access", description = "The catalog of permissions, the roles and the API keys."),
         (name = "namespaces", description = "The end users of the organization: their limits, use and alerts, and their tokens."),
@@ -354,7 +354,7 @@ const NAMESPACED: [&str; 8] = [
     "/v1/check",
     "/v1/test",
     "/v1/scripts",
-    "/v1/tools/stats",
+    "/v1/actions/stats",
     "/v1/payloads",
     "/v1/tasks",
 ];
@@ -520,8 +520,8 @@ mod operations {
         ApiKey, ApiKeyList, CreateApiKey, Grant, PermissionList, PutRole, Role, RoleList, SetGrant,
     };
     use crate::action_sets::{
-        ActionSet, ActionSetList, CreateActionSet, DeclarationsQuery, DeclarationsText,
-        SearchQuery, ToolSearchResults,
+        ActionSearchResults, ActionSet, ActionSetList, CreateActionSet, DeclarationsQuery,
+        DeclarationsText, SearchQuery,
     };
     use crate::admin::ServerInfo;
     use crate::auth::{
@@ -548,7 +548,7 @@ mod operations {
         Organization, OrganizationSettings, UpdateOrganization,
     };
     use crate::problem::Problem;
-    use crate::reading::{PayloadQuery, ToolStatsFilter, ToolStatsPage};
+    use crate::reading::{ActionStatsFilter, ActionStatsPage, PayloadQuery};
     use crate::runs::{
         CancelRun, FailureGroupPage, FailureQuery, ForkRun, GetRunQuery, JournalQuery, Run,
         RunFilter, RunPage, RunStats, RunStatsQuery, SignalAccepted, StartRun, Trace, TraceQuery,
@@ -574,11 +574,11 @@ mod operations {
 
     /// Register and pin an action set
     ///
-    /// Connects to the MCP servers and lists their tools, reads the APIs' OpenAPI documents
-    /// (one tool per operation), pins their schemas, policies and `auth`, and returns the
+    /// Connects to the MCP servers and lists their actions, reads the APIs' OpenAPI documents
+    /// (one action per operation), pins their schemas, policies and `auth`, and returns the
     /// action set with its declarations, for the model's prompt, and the API operations it left
     /// out. Content-addressed: registering the same action set again returns it (200). `secrets`
-    /// attaches organization's secrets to list the tools of an MCP server that needs one
+    /// attaches organization's secrets to list the actions of an MCP server that needs one
     /// (`secrets:use`). Requires `actions:write`.
     #[utoipa::path(
         post, path = "/v1/action-sets", tag = "action-sets", operation_id = "createActionSet",
@@ -594,7 +594,7 @@ mod operations {
 
     /// List the action sets
     ///
-    /// The action sets the tenant registered, by id, with their servers and tool names.
+    /// The action sets the tenant registered, by id, with their servers and action names.
     #[utoipa::path(
         get, path = "/v1/action-sets", tag = "action-sets", operation_id = "listActionSets",
         responses((status = 200, description = "Every action set of the tenant.", body = ActionSetList))
@@ -612,18 +612,18 @@ mod operations {
     )]
     pub(super) fn get_action_set_declarations() {}
 
-    /// Search the action set's tools (`search_tools`)
+    /// Search the action set's actions (`search_actions`)
     ///
-    /// For action sets too large for the prompt: the declarations of the tools matching a query.
+    /// For action sets too large for the prompt: the declarations of the actions matching a query.
     #[utoipa::path(
-        get, path = "/v1/action-sets/{id}/search", tag = "action-sets", operation_id = "searchTools",
+        get, path = "/v1/action-sets/{id}/search", tag = "action-sets", operation_id = "searchActions",
         params(("id" = String, Path, description = "The action set's id."), SearchQuery),
         responses(
-            (status = 200, description = "The matching tools, best first.", body = ToolSearchResults),
+            (status = 200, description = "The matching actions, best first.", body = ActionSearchResults),
             (status = 404, description = "No such action set.", body = Problem, content_type = "application/problem+json"),
         )
     )]
-    pub(super) fn search_tools() {}
+    pub(super) fn search_actions() {}
 
     // ---------------------------------------------------------------------------------------
     // Workflows
@@ -725,7 +725,7 @@ mod operations {
     /// Run tests in mock mode (`test_script`)
     ///
     /// In virtual time, each test against its world: rules, mock handlers and a cassette. No
-    /// tool is really called. With `workflow`, the suite of that version runs too, against the
+    /// action is really called. With `workflow`, the suite of that version runs too, against the
     /// given script or action set. Served by a server with the worker role.
     #[utoipa::path(
         post, path = "/v1/test", tag = "scripts", operation_id = "testScript",
@@ -742,7 +742,7 @@ mod operations {
     /// List the distinct scripts executed
     ///
     /// From the hourly counters, over a window of whole hours: each script the runs of a
-    /// namespace or the tenant ran, with its runs by status and the tools it called. The scope as
+    /// namespace or the tenant ran, with its runs by status and the actions it called. The scope as
     /// `GET /v1/runs/stats` takes it.
     #[utoipa::path(
         get, path = "/v1/scripts", tag = "reading", operation_id = "listScripts",
@@ -1059,13 +1059,13 @@ mod operations {
 
     /// Follow the host-tool tasks handed to this worker (server-sent events)
     ///
-    /// The tasks of the host tools it names (`actionSet`, `tools`), as they become ready, among
+    /// The tasks of the host tools it names (`actionSet`, `actions`), as they become ready, among
     /// the runs the caller sees: an end user's token those of its namespace, a key limited to labels those of the
     /// runs carrying them. At most `slots` are in flight on the stream at once. Each event's
     /// `event` field names it and its `data` is a `TaskStreamEvent`: `task`, a task handed with
     /// its token, to answer with `/complete`, `/fail` or `/defer`; `gone`, a task handed on this
     /// stream that no longer waits for its answer. The open stream is the liveness of every task
-    /// handed on it: no heartbeat. When it closes, its tasks wait for the grace of their tool
+    /// handed on it: no heartbeat. When it closes, its tasks wait for the grace of their action
     /// (60 s by default) for a stream opened again with the same `worker`, which keeps them; then
     /// each is handed to another worker with its attempt + 1, or fails with `outcomeUnknown`
     /// under `at_most_once`. A worker opens the stream again after it drops, with a backoff. The
@@ -1114,7 +1114,7 @@ mod operations {
         params(("token" = String, Path, description = "The claim's token.")),
         request_body = FailTask,
         responses(
-            (status = 204, description = "Recorded: delivered as a `ToolError`, or retried."),
+            (status = 204, description = "Recorded: delivered as an `ActionError`, or retried."),
             (status = 410, description = "The task no longer exists (`task-gone`).", body = Problem, content_type = "application/problem+json"),
         )
     )]
@@ -1137,7 +1137,7 @@ mod operations {
 
     /// Reject a task that waits for the harness
     ///
-    /// The call fails with a `ToolError`.
+    /// The call fails with an `ActionError`.
     #[utoipa::path(
         post, path = "/v1/tasks/{id}/reject", tag = "tasks", operation_id = "rejectTask",
         params(("id" = String, Path, description = "The task's id.")),
@@ -1204,21 +1204,21 @@ mod operations {
     // ---------------------------------------------------------------------------------------
     // Reading
 
-    /// Latency, errors and retries per tool
+    /// Latency, errors and retries per action
     ///
-    /// From the hourly counters, over a window of whole hours: per tool, the calls of the runs of
-    /// a namespace or the tenant, filtered by the start of a tool's name. The scope as
+    /// From the hourly counters, over a window of whole hours: per action, the calls of the runs of
+    /// a namespace or the tenant, filtered by the start of an action's name. The scope as
     /// `GET /v1/runs/stats` takes it.
     #[utoipa::path(
-        get, path = "/v1/tools/stats", tag = "reading", operation_id = "getToolStats",
-        params(ToolStatsFilter),
+        get, path = "/v1/actions/stats", tag = "reading", operation_id = "getActionStats",
+        params(ActionStatsFilter),
         responses(
-            (status = 200, description = "Statistics per tool over the window.", body = ToolStatsPage),
+            (status = 200, description = "Statistics per action over the window.", body = ActionStatsPage),
             (status = 400, description = "`q` cannot be read, or holds another term than one `namespace:` of one value (`invalid-query`, with `query`); or the window is invalid.", body = Problem, content_type = "application/problem+json"),
             (status = 403, description = "The caller lacks `runs:read`, or its grant or token is limited to labels, which counters do not know (`forbidden`).", body = Problem, content_type = "application/problem+json"),
         )
     )]
-    pub(super) fn get_tool_stats() {}
+    pub(super) fn get_action_stats() {}
 
     /// A payload's value
     #[utoipa::path(

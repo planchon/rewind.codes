@@ -3,7 +3,7 @@
 //!
 //! A custom harness (libtest-mimic): with `REWIND_MCP_FIXTURE=stdio`, this binary is the stdio
 //! server the stdio tests start. `REWIND_MCP_REFERENCE_SERVER` names the command line of a
-//! reference MCP server that has the `echo` tool of `@modelcontextprotocol/server-everything`,
+//! reference MCP server that has the `echo` action of `@modelcontextprotocol/server-everything`,
 //! such as `npx -y @modelcontextprotocol/server-everything`; without it, that test is ignored.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -18,16 +18,16 @@ use std::time::{Duration, Instant};
 use fixture::{Auth, Fixture};
 use libtest_mimic::{Arguments, Trial};
 use rewind_core::{
-    ActionSet, McpServer, McpTransport, RunId, SecretPlacement, Seq, Timestamp, Tool, ToolAuth,
-    ToolFailure, ToolFailureKind, ToolRoute,
+    Action, ActionAuth, ActionFailure, ActionFailureKind, ActionRoute, ActionSet, McpServer,
+    McpTransport, RunId, SecretPlacement, Seq, Timestamp,
 };
 use rewind_engine::adapters::MemorySecrets;
 use rewind_engine::ports::{
-    CallAuth, CallClaims, Dispatched, NamespaceName, ParkKind, RunRef, Secret, SecretStore,
-    SigningKey, TaskToken, TenantId, ToolCall, ToolDispatcher, TraceContext,
+    ActionDispatcher, Call, CallAuth, CallClaims, Dispatched, NamespaceName, ParkKind, RunRef,
+    Secret, SecretStore, SigningKey, TaskToken, TenantId, TraceContext,
 };
 use rewind_mcp::{IDEMPOTENCY_KEY_META, ListingAuth, McpConfig, McpDispatcher, McpError};
-use rewind_outbound::ToolEgress;
+use rewind_outbound::ActionEgress;
 use serde_json::{Value, json};
 
 fn main() -> std::process::ExitCode {
@@ -37,8 +37,8 @@ fn main() -> std::process::ExitCode {
     }
     let mut trials = vec![
         test(
-            "discovery_pins_the_server_tools",
-            discovery_pins_the_server_tools(),
+            "discovery_pins_the_server_actions",
+            discovery_pins_the_server_actions(),
         ),
         test(
             "a_tool_list_without_end_is_refused",
@@ -145,7 +145,7 @@ where
 /// which do not concern them.
 fn open_config() -> McpConfig {
     McpConfig {
-        egress: ToolEgress::open(),
+        egress: ActionEgress::open(),
         ..McpConfig::default()
     }
 }
@@ -183,30 +183,30 @@ fn tenant() -> TenantId {
     TenantId::local()
 }
 
-/// The tools of a server as pinned, by local name.
+/// The actions of a server as pinned, by local name.
 async fn pin(
     dispatcher: &McpDispatcher,
     server: &McpServer,
     auth: ListingAuth,
-) -> BTreeMap<String, Tool> {
+) -> BTreeMap<String, Action> {
     dispatcher
         .list_tools(&tenant(), server, auth)
         .await
         .unwrap()
         .into_iter()
-        .map(|tool| (tool.local_name().to_owned(), tool))
+        .map(|action| (action.local_name().to_owned(), action))
         .collect()
 }
 
-fn call(server: &McpServer, tool: &Tool, args: Value) -> ToolCall {
+fn call(server: &McpServer, action: &Action, args: Value) -> Call {
     let run = RunRef::new(tenant(), RunId::from_u128(42));
-    ToolCall {
+    Call {
         idempotency_key: format!("{}/3", run.id),
         run,
         namespace: NamespaceName::new("alice").unwrap(),
         labels: BTreeMap::new(),
         seq: Seq(3),
-        tool: tool.clone(),
+        action: action.clone(),
         server: Some(server.clone()),
         api: None,
         args,
@@ -220,7 +220,7 @@ fn call(server: &McpServer, tool: &Tool, args: Value) -> ToolCall {
 /// A server whose secret goes in `Authorization: Bearer {secret}`.
 fn bearer_server(url: &str) -> McpServer {
     let mut server = http_server(url);
-    server.auth = ToolAuth::Secret(SecretPlacement::bearer());
+    server.auth = ActionAuth::Secret(SecretPlacement::bearer());
     server
 }
 
@@ -243,13 +243,13 @@ async fn signing_key() -> SigningKey {
 const ISSUER: &str = "https://rewind.example/organizations/local";
 
 /// The claims the engine resolves for `call`.
-fn claims(call: &ToolCall) -> CallClaims {
+fn claims(call: &Call) -> CallClaims {
     CallClaims {
         issuer: ISSUER.into(),
         subject: call.namespace.clone(),
         labels: call.labels.clone(),
         run: call.run.id,
-        tool: call.tool.name.clone(),
+        action: call.action.name.clone(),
         idempotency_key: call.idempotency_key.clone(),
         seq: call.seq,
         attempt: call.attempt,
@@ -263,19 +263,19 @@ fn result(dispatched: Dispatched) -> Value {
     }
 }
 
-/// The JSON a tool returned as its text content.
+/// The JSON an action returned as its text content.
 fn text_json(result: &Value) -> Value {
     serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap()
 }
 
-fn failed(dispatched: Dispatched) -> ToolFailure {
+fn failed(dispatched: Dispatched) -> ActionFailure {
     match dispatched {
         Dispatched::Failed(failure) => failure,
         other => panic!("expected a failure, got {other:?}"),
     }
 }
 
-fn transient(dispatched: Dispatched) -> ToolFailure {
+fn transient(dispatched: Dispatched) -> ActionFailure {
     match dispatched {
         Dispatched::Transient(failure) => failure,
         other => panic!("expected a transient failure, got {other:?}"),
@@ -285,15 +285,15 @@ fn transient(dispatched: Dispatched) -> ToolFailure {
 // -------------------------------------------------------------------------------------------
 // Tests
 
-async fn discovery_pins_the_server_tools() {
+async fn discovery_pins_the_server_actions() {
     let server = fixture::serve_http(Fixture::new(), Auth::default()).await;
     let dispatcher = open();
     let mcp = http_server(&server.url);
-    let tools = dispatcher
+    let actions = dispatcher
         .list_tools(&tenant(), &mcp, ListingAuth::None)
         .await
         .unwrap();
-    let names: Vec<&str> = tools.iter().map(|tool| tool.name.as_str()).collect();
+    let names: Vec<&str> = actions.iter().map(|action| action.name.as_str()).collect();
     assert_eq!(
         names,
         [
@@ -307,9 +307,9 @@ async fn discovery_pins_the_server_tools() {
             "fx.slow"
         ]
     );
-    let issue = tools
+    let issue = actions
         .iter()
-        .find(|tool| tool.name == "fx.get_issue")
+        .find(|action| action.name == "fx.get_issue")
         .unwrap();
     assert_eq!(issue.description.as_deref(), Some("Get one issue."));
     assert_eq!(issue.input_schema["required"], json!(["number"]));
@@ -319,8 +319,8 @@ async fn discovery_pins_the_server_tools() {
         Some(Duration::from_secs(300))
     );
     // What discovery returns is an action set.
-    let action_set = ActionSet::new([mcp], tools).unwrap();
-    assert_eq!(action_set.tools().len(), 8);
+    let action_set = ActionSet::new([mcp], actions).unwrap();
+    assert_eq!(action_set.actions().len(), 8);
 }
 
 async fn a_tool_list_without_end_is_refused() {
@@ -345,20 +345,20 @@ async fn a_tool_list_without_end_is_refused() {
     assert!(started.elapsed() < Duration::from_secs(10));
     assert_eq!(fixture.state().pages, 100);
 
-    // A call checks its tool against the list: it fails at once, for good.
-    let tool = Tool::new(
+    // A call checks its action against the list: it fails at once, for good.
+    let action = Action::new(
         "fx.t0",
-        ToolRoute::Mcp {
+        ActionRoute::Mcp {
             server: "fx".into(),
         },
         json!({ "type": "object" }),
     );
     let failure = failed(
         dispatcher
-            .dispatch(call(&mcp, &tool, json!({})), CallAuth::None)
+            .dispatch(call(&mcp, &action, json!({})), CallAuth::None)
             .await,
     );
-    assert_eq!(failure.kind, ToolFailureKind::Unavailable);
+    assert_eq!(failure.kind, ActionFailureKind::Unavailable);
     assert!(
         failure.message.contains("Rewind reads no further"),
         "{failure:?}"
@@ -369,12 +369,12 @@ async fn content_and_structured_results() {
     let server = fixture::serve_http(Fixture::new(), Auth::default()).await;
     let dispatcher = open();
     let mcp = http_server(&server.url);
-    let tools = pin(&dispatcher, &mcp, ListingAuth::None).await;
+    let actions = pin(&dispatcher, &mcp, ListingAuth::None).await;
 
     let lookup = result(
         dispatcher
             .dispatch(
-                call(&mcp, &tools["lookup"], json!({ "id": "c-7" })),
+                call(&mcp, &actions["lookup"], json!({ "id": "c-7" })),
                 CallAuth::None,
             )
             .await,
@@ -386,7 +386,7 @@ async fn content_and_structured_results() {
     let issue = result(
         dispatcher
             .dispatch(
-                call(&mcp, &tools["get_issue"], json!({ "number": 4 })),
+                call(&mcp, &actions["get_issue"], json!({ "number": 4 })),
                 CallAuth::None,
             )
             .await,
@@ -399,8 +399,8 @@ async fn idempotency_key_and_trace_context_in_meta() {
     let server = fixture::serve_http(fixture.clone(), Auth::default()).await;
     let dispatcher = open();
     let mcp = http_server(&server.url);
-    let tools = pin(&dispatcher, &mcp, ListingAuth::None).await;
-    let mut meta_call = call(&mcp, &tools["meta"], json!({}));
+    let actions = pin(&dispatcher, &mcp, ListingAuth::None).await;
+    let mut meta_call = call(&mcp, &actions["meta"], json!({}));
     meta_call.attempt = 2;
     meta_call.trace_context = Some(TraceContext {
         traceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01".into(),
@@ -427,35 +427,35 @@ async fn errors_are_mapped() {
     let server = fixture::serve_http(Fixture::new(), Auth::default()).await;
     let dispatcher = open();
     let mcp = http_server(&server.url);
-    let tools = pin(&dispatcher, &mcp, ListingAuth::None).await;
+    let actions = pin(&dispatcher, &mcp, ListingAuth::None).await;
 
     let fail = failed(
         dispatcher
-            .dispatch(call(&mcp, &tools["fail"], json!({})), CallAuth::None)
+            .dispatch(call(&mcp, &actions["fail"], json!({})), CallAuth::None)
             .await,
     );
-    assert_eq!(fail.kind, ToolFailureKind::Error);
+    assert_eq!(fail.kind, ActionFailureKind::Error);
     assert_eq!(fail.message, "no such customer");
 
     let invalid = failed(
         dispatcher
-            .dispatch(call(&mcp, &tools["invalid"], json!({})), CallAuth::None)
+            .dispatch(call(&mcp, &actions["invalid"], json!({})), CallAuth::None)
             .await,
     );
-    assert_eq!(invalid.kind, ToolFailureKind::Error);
+    assert_eq!(invalid.kind, ActionFailureKind::Error);
     assert_eq!(invalid.message, "fx answered with an error: bad arguments");
     assert_eq!(invalid.data, Some(json!({ "field": "x" })));
 
     let internal = transient(
         dispatcher
-            .dispatch(call(&mcp, &tools["internal"], json!({})), CallAuth::None)
+            .dispatch(call(&mcp, &actions["internal"], json!({})), CallAuth::None)
             .await,
     );
-    assert_eq!(internal.kind, ToolFailureKind::Unavailable);
+    assert_eq!(internal.kind, ActionFailureKind::Unavailable);
 
     let not_an_object = failed(
         dispatcher
-            .dispatch(call(&mcp, &tools["lookup"], json!([1])), CallAuth::None)
+            .dispatch(call(&mcp, &actions["lookup"], json!([1])), CallAuth::None)
             .await,
     );
     assert_eq!(
@@ -486,8 +486,8 @@ async fn headers_reach_the_server_and_a_401_parks(challenge: bool) {
         "{refused:?}"
     );
 
-    let tools = pin(&dispatcher, &mcp, ListingAuth::Secret(Secret::new("first"))).await;
-    let lookup = call(&mcp, &tools["lookup"], json!({ "id": "c-1" }));
+    let actions = pin(&dispatcher, &mcp, ListingAuth::Secret(Secret::new("first"))).await;
+    let lookup = call(&mcp, &actions["lookup"], json!({ "id": "c-1" }));
     result(dispatcher.dispatch(lookup.clone(), bearer("first")).await);
 
     // Without its secret, or with another, a call is parked.
@@ -526,14 +526,14 @@ async fn a_secret_goes_into_its_header() {
         format: Some("Bearer {secret}".into()),
         encoding: rewind_core::SecretEncoding::Base64,
     };
-    mcp.auth = ToolAuth::Secret(placement.clone());
-    let tools = pin(
+    mcp.auth = ActionAuth::Secret(placement.clone());
+    let actions = pin(
         &dispatcher,
         &mcp,
         ListingAuth::Secret(Secret::new("ada:s3cret")),
     )
     .await;
-    let lookup = call(&mcp, &tools["lookup"], json!({ "id": "c-2" }));
+    let lookup = call(&mcp, &actions["lookup"], json!({ "id": "c-2" }));
     let found = result(
         dispatcher
             .dispatch(
@@ -579,10 +579,10 @@ async fn signed_sessions_sign_every_request() {
     let server = fixture::serve_http(fixture.clone(), auth).await;
     let dispatcher = open();
     let mut mcp = http_server(&server.url);
-    mcp.auth = ToolAuth::Rewind;
+    mcp.auth = ActionAuth::Rewind;
 
     // The listing at registration: the reduced set, on every request of its session.
-    let tools = pin(
+    let actions = pin(
         &dispatcher,
         &mcp,
         ListingAuth::Signed {
@@ -623,7 +623,7 @@ async fn signed_sessions_sign_every_request() {
     let sessions = fixture.state().sessions;
 
     // A call: its `tools/call` carries the call's claims.
-    let mut lookup = call(&mcp, &tools["lookup"], json!({ "id": "c-3" }));
+    let mut lookup = call(&mcp, &actions["lookup"], json!({ "id": "c-3" }));
     lookup.labels = BTreeMap::from([("env".into(), "prod".into())]);
     lookup.attempt = 2;
     let auth = CallAuth::Signed {
@@ -694,12 +694,12 @@ async fn a_stdio_server_gets_its_secret_in_its_variable() {
     let placement = SecretPlacement::Env {
         variable: "FIXTURE_TOKEN".into(),
     };
-    mcp.auth = ToolAuth::Secret(placement.clone());
-    let tools = pin(&dispatcher, &mcp, ListingAuth::Secret(Secret::new("s-1"))).await;
+    mcp.auth = ActionAuth::Secret(placement.clone());
+    let actions = pin(&dispatcher, &mcp, ListingAuth::Secret(Secret::new("s-1"))).await;
     let env = result(
         dispatcher
             .dispatch(
-                call(&mcp, &tools["env"], json!({})),
+                call(&mcp, &actions["env"], json!({})),
                 CallAuth::Secret {
                     value: Secret::new("s-2"),
                     placement,
@@ -717,8 +717,8 @@ async fn the_execution_timeout_cancels_the_call() {
     let server = fixture::serve_http(fixture.clone(), Auth::default()).await;
     let dispatcher = open();
     let mcp = http_server(&server.url);
-    let tools = pin(&dispatcher, &mcp, ListingAuth::None).await;
-    let mut slow = tools["slow"].clone();
+    let actions = pin(&dispatcher, &mcp, ListingAuth::None).await;
+    let mut slow = actions["slow"].clone();
     slow.policy.execution_timeout = Some(Duration::from_millis(300));
     let started = Instant::now();
     let timed_out = transient(
@@ -726,7 +726,7 @@ async fn the_execution_timeout_cancels_the_call() {
             .dispatch(call(&mcp, &slow, json!({ "ms": 10_000 })), CallAuth::None)
             .await,
     );
-    assert_eq!(timed_out.kind, ToolFailureKind::Timeout);
+    assert_eq!(timed_out.kind, ActionFailureKind::Timeout);
     assert_eq!(timed_out.message, "fx.slow did not answer within 300ms");
     assert!(started.elapsed() < Duration::from_secs(5));
     // The server learns that the call was abandoned (`notifications/cancelled`).
@@ -743,14 +743,14 @@ async fn the_execution_timeout_cancels_the_call() {
 async fn a_schema_change_parks_the_call() {
     let fixture = Fixture::new();
     let server = fixture::serve_http(fixture.clone(), Auth::default()).await;
-    // The tool list is listed again before each call.
+    // The action list is listed again before each call.
     let dispatcher = McpDispatcher::new(McpConfig {
         tools_ttl: Duration::ZERO,
         ..open_config()
     });
     let mcp = http_server(&server.url);
-    let tools = pin(&dispatcher, &mcp, ListingAuth::None).await;
-    let lookup = call(&mcp, &tools["lookup"], json!({ "id": "c-1" }));
+    let actions = pin(&dispatcher, &mcp, ListingAuth::None).await;
+    let lookup = call(&mcp, &actions["lookup"], json!({ "id": "c-1" }));
 
     // A new optional property: the call still fits.
     fixture.state().tools[0] = fixture::tool(
@@ -787,7 +787,7 @@ async fn a_schema_change_parks_the_call() {
     result(dispatcher.dispatch(approved, CallAuth::None).await);
     assert_eq!(fixture.state().calls.len(), calls + 1);
 
-    // A changed output schema, and a removed tool.
+    // A changed output schema, and a removed action.
     fixture.state().tools[1] = fixture::tool(
         "get_issue",
         "Get one issue.",
@@ -796,7 +796,7 @@ async fn a_schema_change_parks_the_call() {
     );
     let Dispatched::Park(parked) = dispatcher
         .dispatch(
-            call(&mcp, &tools["get_issue"], json!({ "number": 1 })),
+            call(&mcp, &actions["get_issue"], json!({ "number": 1 })),
             CallAuth::None,
         )
         .await
@@ -810,11 +810,11 @@ async fn a_schema_change_parks_the_call() {
     );
     fixture.state().tools.remove(0);
     let Dispatched::Park(parked) = dispatcher.dispatch(lookup, CallAuth::None).await else {
-        panic!("a removed tool parks the call");
+        panic!("a removed action parks the call");
     };
     assert_eq!(
         parked.message,
-        "fx.lookup changed on its server: the server no longer lists the tool \"lookup\""
+        "fx.lookup changed on its server: the server no longer lists the action \"lookup\""
     );
 }
 
@@ -824,8 +824,8 @@ async fn connections_are_shared_and_replaced() {
     let server = fixture::serve_http(fixture.clone(), auth).await;
     let dispatcher = open();
     let mcp = http_server(&server.url);
-    let tools = pin(&dispatcher, &mcp, ListingAuth::None).await;
-    let lookup = call(&mcp, &tools["lookup"], json!({ "id": "c-1" }));
+    let actions = pin(&dispatcher, &mcp, ListingAuth::None).await;
+    let lookup = call(&mcp, &actions["lookup"], json!({ "id": "c-1" }));
 
     // Concurrent calls share the session discovery opened.
     let calls: Vec<_> = (0..4)
@@ -869,19 +869,19 @@ async fn an_unreachable_server_is_transient() {
         .await
         .unwrap_err();
     assert!(matches!(error, McpError::Unreachable { .. }), "{error:?}");
-    let tool = Tool::new(
+    let action = Action::new(
         "fx.lookup",
-        rewind_core::ToolRoute::Mcp {
+        rewind_core::ActionRoute::Mcp {
             server: "fx".into(),
         },
         json!({}),
     );
     let unreachable = transient(
         dispatcher
-            .dispatch(call(&mcp, &tool, json!({})), CallAuth::None)
+            .dispatch(call(&mcp, &action, json!({})), CallAuth::None)
             .await,
     );
-    assert_eq!(unreachable.kind, ToolFailureKind::Unavailable);
+    assert_eq!(unreachable.kind, ActionFailureKind::Unavailable);
     assert!(
         unreachable.message.starts_with("fx could not be reached"),
         "{}",
@@ -898,11 +898,11 @@ async fn a_stdio_server_gets_its_own_environment_only() {
     );
     let dispatcher = McpDispatcher::default();
     let mcp = stdio_server(&[("MODE", "test")]);
-    let tools = pin(&dispatcher, &mcp, ListingAuth::None).await;
-    assert_eq!(tools.len(), 8);
+    let actions = pin(&dispatcher, &mcp, ListingAuth::None).await;
+    assert_eq!(actions.len(), 8);
     let env = result(
         dispatcher
-            .dispatch(call(&mcp, &tools["env"], json!({})), CallAuth::None)
+            .dispatch(call(&mcp, &actions["env"], json!({})), CallAuth::None)
             .await,
     );
     assert_eq!(
@@ -912,7 +912,7 @@ async fn a_stdio_server_gets_its_own_environment_only() {
     let issue = result(
         dispatcher
             .dispatch(
-                call(&mcp, &tools["get_issue"], json!({ "number": 9 })),
+                call(&mcp, &actions["get_issue"], json!({ "number": 9 })),
                 CallAuth::None,
             )
             .await,
@@ -931,19 +931,19 @@ async fn a_missing_stdio_command_fails_for_good() {
             env: BTreeMap::new(),
         },
     );
-    let tool = Tool::new(
+    let action = Action::new(
         "fx.lookup",
-        rewind_core::ToolRoute::Mcp {
+        rewind_core::ActionRoute::Mcp {
             server: "fx".into(),
         },
         json!({}),
     );
     let failure = failed(
         dispatcher
-            .dispatch(call(&mcp, &tool, json!({})), CallAuth::None)
+            .dispatch(call(&mcp, &action, json!({})), CallAuth::None)
             .await,
     );
-    assert_eq!(failure.kind, ToolFailureKind::Unavailable);
+    assert_eq!(failure.kind, ActionFailureKind::Unavailable);
     assert!(
         failure
             .message
@@ -971,10 +971,10 @@ async fn reference_server(command_line: Option<String>) {
         connect_timeout: Duration::from_secs(120),
         ..McpConfig::default()
     });
-    let tools = pin(&dispatcher, &mcp, ListingAuth::None).await;
-    let echo = tools
+    let actions = pin(&dispatcher, &mcp, ListingAuth::None).await;
+    let echo = actions
         .get("echo")
-        .expect("the reference server has an echo tool");
+        .expect("the reference server has an echo action");
     let echoed = result(
         dispatcher
             .dispatch(

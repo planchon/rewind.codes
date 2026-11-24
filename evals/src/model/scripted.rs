@@ -179,7 +179,7 @@ fn handle_at(text: &str) -> Option<(usize, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{ToolCall, ToolResult};
+    use crate::model::{Call, ToolResult};
     use serde_json::json;
 
     #[test]
@@ -189,7 +189,7 @@ mod tests {
             vec![
                 AssistantTurn {
                     text: String::new(),
-                    calls: vec![ToolCall {
+                    calls: vec![Call {
                         id: "1".into(),
                         name: "run_script".into(),
                         input: json!({ "code": "x" }),
@@ -198,7 +198,7 @@ mod tests {
                 },
                 AssistantTurn {
                     text: String::new(),
-                    calls: vec![ToolCall {
+                    calls: vec![Call {
                         id: "2".into(),
                         name: "get_run".into(),
                         input: json!({ "run_id": "{{run_id}}" }),

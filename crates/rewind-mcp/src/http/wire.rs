@@ -1,4 +1,4 @@
-//! The args and the result of the `http` tool: what the runtime's `fetch` sends and reads.
+//! The args and the result of the `http` action: what the runtime's `fetch` sends and reads.
 //!
 //! Args:
 //!
@@ -56,7 +56,7 @@ const FORBIDDEN_HEADERS: &[&str] = &[
 /// The request of a call's args, or why they are not one (written for the model).
 pub(crate) fn request(args: &Value) -> Result<Request, String> {
     let Value::Object(args) = args else {
-        return Err("the http tool expects an object: { url, method?, headers?, body? }".into());
+        return Err("the http action expects an object: { url, method?, headers?, body? }".into());
     };
     if let Some(unknown) = args.keys().find(|key| {
         !matches!(
@@ -65,12 +65,12 @@ pub(crate) fn request(args: &Value) -> Result<Request, String> {
         )
     }) {
         return Err(format!(
-            "the http tool does not know the argument {unknown:?}"
+            "the http action does not know the argument {unknown:?}"
         ));
     }
     let url = match args.get("url") {
         Some(Value::String(url)) => url.clone(),
-        _ => return Err("the http tool needs a url, as a string".into()),
+        _ => return Err("the http action needs a url, as a string".into()),
     };
 
     let method = match args.get("method") {
@@ -194,7 +194,7 @@ fn header_pairs() -> Value {
     })
 }
 
-/// The input schema of the `http` tool, as an action set pins it.
+/// The input schema of the `http` action, as an action set pins it.
 pub fn http_input_schema() -> Value {
     json!({
         "type": "object",
@@ -210,7 +210,7 @@ pub fn http_input_schema() -> Value {
     })
 }
 
-/// The output schema of the `http` tool, as an action set pins it.
+/// The output schema of the `http` action, as an action set pins it.
 pub fn http_output_schema() -> Value {
     json!({
         "type": "object",
@@ -275,9 +275,12 @@ mod tests {
         );
         assert_eq!(
             refused(json!({ "url": "https://a", "redirect": "manual" })),
-            "the http tool does not know the argument \"redirect\""
+            "the http action does not know the argument \"redirect\""
         );
-        assert_eq!(refused(json!({})), "the http tool needs a url, as a string");
+        assert_eq!(
+            refused(json!({})),
+            "the http action needs a url, as a string"
+        );
     }
 
     #[test]

@@ -10,7 +10,7 @@
 //! | `trace_id` | 32 hex digits | The span belongs to this trace: the run's. |
 //! | `span_id` | 16 hex digits | The span's own id, when it is derived, such as an activation's `H(run, fence)`. |
 //! | `parent_span_id` | 16 hex digits | The span's parent in that trace, such as the run span `H(run, "run")`. |
-//! | `traceparent` | a W3C `traceparent` | The span is a child of that span, in that trace: a tool call's trace context. |
+//! | `traceparent` | a W3C `traceparent` | The span is a child of that span, in that trace: a call's trace context. |
 //!
 //! A span without these fields belongs to the trace of the span it is nested in, under it; a
 //! span nested in none starts a trace of its own. A span that names a trace but no parent sits
@@ -80,7 +80,7 @@ const UNEXPORTED_TARGETS: &[&str] = &[
 
 /// What logs the messages it carries: `rmcp` writes the MCP messages of a session into its
 /// events (a server's notifications at `info`, every request and result at `debug` and
-/// `trace`), and those hold tool arguments and results. Payloads never reach OpenTelemetry
+/// `trace`), and those hold action arguments and results. Payloads never reach OpenTelemetry
 /// (`archi/05-testing-and-observability.md`, "Span model"); these stay on stderr only.
 const PAYLOAD_TARGETS: &[&str] = &["rmcp"];
 
@@ -167,7 +167,7 @@ impl ServiceTelemetry {
 
     /// The `tracing` layer that feeds this pipeline: spans, log records and metrics. It leaves
     /// out what the export itself goes through (the OpenTelemetry SDK, the HTTP and gRPC
-    /// clients), and the MCP client's own logs, which hold tool arguments and results.
+    /// clients), and the MCP client's own logs, which hold action arguments and results.
     pub fn layer<S>(&self) -> impl Layer<S> + Send + Sync
     where
         S: Subscriber + for<'a> LookupSpan<'a>,
@@ -808,7 +808,7 @@ mod tests {
     }
 
     #[test]
-    fn a_traceparent_makes_a_span_the_child_of_a_tool_call() {
+    fn a_traceparent_makes_a_span_the_child_of_a_call() {
         let backend = Backend::new(TelemetryConfig::default());
         let call = derived(run(), SpanKey::Command(rewind_core::Seq(3)));
         let traceparent = format!("00-0af7651916cd43dd8448eb211c80319c-{call}-01");

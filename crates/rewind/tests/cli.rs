@@ -8,7 +8,7 @@
 //! - `kill -9` of the embedded server in the middle of an activation: the next command starts a
 //!   new server, and the run finishes once its lease expires.
 //! - The e2e corpus driven through the CLI: every committed journal replays with `rewind replay`,
-//!   the red replays fail as specified, and the cases without tools run live on the embedded
+//!   the red replays fail as specified, and the cases without actions run live on the embedded
 //!   server, in virtual time.
 //! - `rewind test` on a cassette recorded from a run of the embedded server.
 //! - `rewind fork` of a failed run, which reuses its recorded calls.
@@ -364,7 +364,7 @@ fn slow_registration_server() -> (
                 (
                     "201 Created",
                     format!(
-                        r#"{{"id":"{id}","servers":[],"tools":[],"declarations":{{"dts":"","prompt":""}}}}"#
+                        r#"{{"id":"{id}","servers":[],"actions":[],"declarations":{{"dts":"","prompt":""}}}}"#
                     ),
                 )
             } else {
@@ -486,7 +486,7 @@ fn the_corpus_journals_replay_through_the_binary() {
 }
 
 /// The corpus cases run live on the embedded server, in virtual time, through `rewind run`, when
-/// their tools are host tools this test can answer as the harness's worker (values, echoed
+/// their actions are host tools this test can answer as the harness's worker (values, echoed
 /// arguments, failures, sequences of them) and they take no steps: their status, output,
 /// error, abort or refused start are the corpus's.
 #[test]
@@ -517,14 +517,14 @@ fn the_corpus_runs_live_on_the_embedded_server() {
     let mut other_outputs = Vec::new();
     for (name, case) in cases() {
         let scenario = scenario(&case);
-        let tools = scenario["tools"].as_object().cloned().unwrap_or_default();
+        let actions = scenario["actions"].as_object().cloned().unwrap_or_default();
         let simple = scenario
             .as_object()
             .unwrap()
             .keys()
-            .all(|key| ["description", "input", "expect", "tools"].contains(&key.as_str()))
-            && tools.iter().all(|(tool, response)| {
-                !matches!(tool.as_str(), "http" | "webhook") && answerable(response)
+            .all(|key| ["description", "input", "expect", "actions"].contains(&key.as_str()))
+            && actions.iter().all(|(action, response)| {
+                !matches!(action.as_str(), "http" | "webhook") && answerable(response)
             });
         // Its action set lacks the `webhook` built-in, which every action set of a server pins.
         if !simple || name == "red/webhook_without_the_built_in" {
@@ -551,10 +551,10 @@ fn the_corpus_runs_live_on_the_embedded_server() {
             wait.to_owned(),
             "--no-check".to_owned(),
         ];
-        let action_set = (!tools.is_empty()).then(|| {
-            let host: Vec<Value> = tools
+        let action_set = (!actions.is_empty()).then(|| {
+            let host: Vec<Value> = actions
                 .keys()
-                .map(|tool| json!({ "name": tool, "description": tool, "inputSchema": {} }))
+                .map(|action| json!({ "name": action, "description": action, "inputSchema": {} }))
                 .collect();
             let file = project.write(
                 &format!("{}.action_set.json", name.replace('/', "_")),
@@ -575,7 +575,7 @@ fn the_corpus_runs_live_on_the_embedded_server() {
             .spawn()
             .unwrap();
         let ran = match &action_set {
-            Some(action_set) => work(&project, action_set, &tools, child),
+            Some(action_set) => work(&project, action_set, &actions, child),
             None => Ran::from(child.wait_with_output().unwrap()),
         };
 
@@ -671,7 +671,7 @@ fn answerable(response: &Value) -> bool {
 fn work(
     project: &Project,
     action_set: &str,
-    tools: &serde_json::Map<String, Value>,
+    actions: &serde_json::Map<String, Value>,
     mut child: Child,
 ) -> Ran {
     let socket = project.state().join("server.sock");
@@ -701,15 +701,15 @@ fn work(
             }
             handed.sort_by_key(|task| task["seq"].as_u64());
             for task in handed {
-                let tool = task["tool"].as_str().unwrap().to_owned();
+                let action = task["action"].as_str().unwrap().to_owned();
                 let token = task["token"].as_str().unwrap();
-                let count = answered.entry(tool.clone()).or_default();
-                let mut response = tools[&tool].clone();
+                let count = answered.entry(action.clone()).or_default();
+                let mut response = actions[&action].clone();
                 if let Some(Value::Array(sequence)) = response.get("$sequence") {
                     response = sequence
                         .get(*count)
                         .cloned()
-                        .unwrap_or(json!({ "$error": format!("{tool} has no response left") }));
+                        .unwrap_or(json!({ "$error": format!("{action} has no response left") }));
                 }
                 *count += 1;
                 let (path, body) = if response.get("$echo").is_some() {
@@ -755,11 +755,11 @@ fn a_recorded_run_is_tested_and_its_failure_forked() {
     );
     project.write(
         "failing.ts",
-        "import { github } from \"rewind:tools\";\nexport default async function main() {\n  const issues = await github.list_issues({ repo: \"acme/api\" });\n  return issues[0].title.toUpperCase();\n}\n",
+        "import { github } from \"rewind:actions\";\nexport default async function main() {\n  const issues = await github.list_issues({ repo: \"acme/api\" });\n  return issues[0].title.toUpperCase();\n}\n",
     );
     project.write(
         "fixed.ts",
-        "import { github } from \"rewind:tools\";\nexport default async function main() {\n  const issues = await github.list_issues({ repo: \"acme/api\" });\n  return issues.length;\n}\n",
+        "import { github } from \"rewind:actions\";\nexport default async function main() {\n  const issues = await github.list_issues({ repo: \"acme/api\" });\n  return issues.length;\n}\n",
     );
     let (code, run) = project.json(&[
         "run",
@@ -772,7 +772,7 @@ fn a_recorded_run_is_tested_and_its_failure_forked() {
     ]);
     assert_eq!(code, 4, "the call waits for the harness's worker: {run}");
     let id = run["id"].as_str().unwrap().to_owned();
-    assert_eq!(run["waitingFor"][0]["kind"], "tool_call", "{run}");
+    assert_eq!(run["waitingFor"][0]["kind"], "call", "{run}");
 
     // The harness's worker answers through the API: claim the task and complete it.
     complete_host_task(
@@ -802,7 +802,7 @@ fn a_recorded_run_is_tested_and_its_failure_forked() {
             "expect": {
                 "status": "completed",
                 "output": 1,
-                "calls": [{ "tool": "github.list_issues", "times": 1 }]
+                "calls": [{ "action": "github.list_issues", "times": 1 }]
             }
         }])
         .to_string(),

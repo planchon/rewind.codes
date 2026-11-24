@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 use rewind_agent_tools::{
     AgentError, AgentOptions, AgentTools, Api, ApiError, HandleOptions, ScriptVerdict,
 };
-use rewind_api::action_sets::{ActionSet, CreateActionSet, SearchQuery, ToolSearchResults};
+use rewind_api::action_sets::{ActionSearchResults, ActionSet, CreateActionSet, SearchQuery};
 use rewind_api::common::Duration;
 use rewind_api::events::Entry;
 use rewind_api::headers::IdempotencyKey;
@@ -258,23 +258,25 @@ impl Api for Fake {
         *count += 1;
         Ok(serde_json::from_value(json!({
             "id": format!("derived-{count}"),
-            "servers": [], "tools": [],
+            "servers": [], "actions": [],
             "declarations": { "dts": "", "prompt": "" }
         }))
         .unwrap())
     }
 
-    async fn search_tools(
+    async fn search_actions(
         &self,
         action_set: &str,
         query: &SearchQuery,
-    ) -> Result<ToolSearchResults, ApiError> {
+    ) -> Result<ActionSearchResults, ApiError> {
         self.saw(
-            "search_tools",
+            "search_actions",
             json!({ "action_set": action_set, "query": query.query }),
             None,
         );
-        Ok(ToolSearchResults { tools: Vec::new() })
+        Ok(ActionSearchResults {
+            actions: Vec::new(),
+        })
     }
 
     async fn create_workflow(&self, workflow: &CreateWorkflow) -> Result<Workflow, ApiError> {
@@ -551,7 +553,7 @@ async fn each_saved_workflow_derives_the_action_set_the_next_calls_use() {
         .unwrap();
     assert_eq!(tools.action_set().as_deref(), Some("derived-2"));
     tools
-        .handle("search_tools", &json!({ "query": "triage" }), &call("c3"))
+        .handle("search_actions", &json!({ "query": "triage" }), &call("c3"))
         .await
         .unwrap();
     let seen = fake.seen();
@@ -600,12 +602,12 @@ async fn the_tools_are_those_given_and_some_need_an_action_set() {
     let needs = AgentTools::new(
         Fake::default(),
         AgentOptions {
-            tools: Some(vec!["search_tools".into()]),
+            tools: Some(vec!["search_actions".into()]),
             ..AgentOptions::default()
         },
     )
     .unwrap_err();
-    assert_eq!(needs.to_string(), "search_tools needs an action set");
+    assert_eq!(needs.to_string(), "search_actions needs an action set");
     let unknown = AgentTools::new(
         Fake::default(),
         AgentOptions {

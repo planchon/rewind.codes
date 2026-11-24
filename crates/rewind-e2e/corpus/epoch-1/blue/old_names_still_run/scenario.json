@@ -1,0 +1,25 @@
+{
+  "description": "Code written before actions were named still runs: \"rewind:tools\" resolves to \"rewind:actions\", and ToolError is ActionError, with the action's name as its tool (archi/08-decisions.md, R1).",
+  "actions": {
+    "payments.charge": {
+      "$error": "connection reset",
+      "$kind": "outcome_unknown"
+    },
+    "payments.status": {
+      "charged": true
+    }
+  },
+  "expect": {
+    "status": "completed",
+    "output": {
+      "charged": true,
+      "checked": true,
+      "tool": "payments.charge",
+      "same": true
+    },
+    "calls": {
+      "payments.charge": 1,
+      "payments.status": 1
+    }
+  }
+}

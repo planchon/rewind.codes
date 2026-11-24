@@ -16,7 +16,7 @@ use crate::world::{ProductionRun, WorkflowReport, WorldSpec};
 
 /// Buys a label per order, and assumes every label has a tracking number: an order collected
 /// in store fails the run, after every label was bought.
-pub const SHIP_ORDERS: &str = r##"import { shipping } from "rewind:tools";
+pub const SHIP_ORDERS: &str = r##"import { shipping } from "rewind:actions";
 
 export default async function main(input: { orders: string[] }) {
   const labels = await Promise.all(
@@ -86,7 +86,7 @@ fn ship_orders() -> SetupWorkflow {
             json!({
                 "name": SHIP_ORDERS_TESTS[0],
                 "input": { "orders": ["A-1", "A-2"] },
-                "world": { "tools": { "shipping.create_label": [
+                "world": { "actions": { "shipping.create_label": [
                     { "args": { "order_id": "A-1" }, "returns": label("A-1", "1Z0001") },
                     { "args": { "order_id": "A-2" }, "returns": label("A-2", "1Z0002") }
                 ] } },
@@ -96,7 +96,7 @@ fn ship_orders() -> SetupWorkflow {
                         { "order": "A-1", "tracking": "1Z0001" },
                         { "order": "A-2", "tracking": "1Z0002" }
                     ] },
-                    "calls": [{ "tool": "shipping.create_label", "times": 2 }]
+                    "calls": [{ "action": "shipping.create_label", "times": 2 }]
                 }
             }),
             json!({
@@ -105,18 +105,18 @@ fn ship_orders() -> SetupWorkflow {
                 "expect": {
                     "status": "completed",
                     "output": { "shipped": [] },
-                    "calls": [{ "tool": "shipping.create_label", "times": 0 }]
+                    "calls": [{ "action": "shipping.create_label", "times": 0 }]
                 }
             }),
             json!({
                 "name": SHIP_ORDERS_TESTS[2],
                 "input": { "orders": ["A-1"] },
-                "world": { "tools": { "shipping.create_label": {
+                "world": { "actions": { "shipping.create_label": {
                     "error": { "message": "address_invalid: the address has no street" }
                 } } },
                 "expect": {
                     "status": "failed",
-                    "error": { "name": "ToolError", "message": "address_invalid" }
+                    "error": { "name": "ActionError", "message": "address_invalid" }
                 }
             }),
         ],
@@ -129,11 +129,11 @@ fn orders(orders: &[&str]) -> Value {
 }
 
 // -------------------------------------------------------------------------------------------
-// An upgrade: the tracker's server changed its tools
+// An upgrade: the tracker's server changed its actions
 
 /// Posts the open bugs of a repository, written for the tracker as it was before its upgrade:
 /// `list_issues` took `labels` and returned at most `limit` issues, saying when there were more.
-pub const BUG_DIGEST: &str = r##"import { chat, tracker } from "rewind:tools";
+pub const BUG_DIGEST: &str = r##"import { chat, tracker } from "rewind:actions";
 
 export default async function main(input: { repo: string }) {
   const { issues, truncated } = await tracker.list_issues({
@@ -167,14 +167,14 @@ const BUG_DIGEST_TESTS: [&str; 3] = [
 /// The tracker's `list_issues` before its upgrade: `labels` rather than `label`, no cursor but
 /// a `truncated` flag, and issues without their reporter.
 fn tracker_before_upgrade(action_set: &ActionSet) -> Result<ActionSet, String> {
-    let tools: Vec<rewind_core::Tool> = action_set
-        .tools()
+    let actions: Vec<rewind_core::Action> = action_set
+        .actions()
         .iter()
-        .map(|tool| {
-            if tool.name != "tracker.list_issues" {
-                return tool.clone();
+        .map(|action| {
+            if action.name != "tracker.list_issues" {
+                return action.clone();
             }
-            let mut old = tool.clone();
+            let mut old = action.clone();
             old.description = Some(
                 "List the issues of a repository, most recently created first, up to `limit`; `truncated` is true when more issues match."
                     .into(),
@@ -209,7 +209,7 @@ fn tracker_before_upgrade(action_set: &ActionSet) -> Result<ActionSet, String> {
             old
         })
         .collect();
-    ActionSet::new(action_set.servers().to_vec(), tools).map_err(|error| error.to_string())
+    ActionSet::new(action_set.servers().to_vec(), actions).map_err(|error| error.to_string())
 }
 
 fn old_issue(number: u64, title: &str) -> Value {
@@ -241,7 +241,7 @@ fn bug_digest() -> SetupWorkflow {
             json!({
                 "name": BUG_DIGEST_TESTS[0],
                 "input": { "repo": "acme/api" },
-                "world": { "tools": {
+                "world": { "actions": {
                     "tracker.list_issues": {
                         "args": { "repo": "acme/api", "labels": "bug" },
                         "returns": { "issues": [
@@ -254,25 +254,25 @@ fn bug_digest() -> SetupWorkflow {
                 "expect": {
                     "status": "completed",
                     "output": { "posted": 2 },
-                    "calls": [{ "tool": "chat.post_message", "args": { "channel": "#bugs" }, "times": 1 }]
+                    "calls": [{ "action": "chat.post_message", "args": { "channel": "#bugs" }, "times": 1 }]
                 }
             }),
             json!({
                 "name": BUG_DIGEST_TESTS[1],
                 "input": { "repo": "acme/web" },
-                "world": { "tools": {
+                "world": { "actions": {
                     "tracker.list_issues": { "args": { "labels": "bug" }, "returns": { "issues": [] } }
                 } },
                 "expect": {
                     "status": "completed",
                     "output": { "posted": 0 },
-                    "calls": [{ "tool": "chat.post_message", "times": 0 }]
+                    "calls": [{ "action": "chat.post_message", "times": 0 }]
                 }
             }),
             json!({
                 "name": BUG_DIGEST_TESTS[2],
                 "input": { "repo": "acme/api" },
-                "world": { "tools": {
+                "world": { "actions": {
                     "tracker.list_issues": {
                         "args": { "labels": "bug" },
                         "returns": { "issues": [old_issue(3, "Login fails with SSO (3)")], "truncated": true }
@@ -436,8 +436,8 @@ fn check_upgrade(outcome: &Outcome) -> Result<(), String> {
         .history
         .iter()
         .filter_map(|entry| match &entry.event {
-            Event::Command(Command::ScheduleToolCall { tool, args, .. })
-                if tool == "chat.post_message" =>
+            Event::Command(Command::ScheduleCall { action, args, .. })
+                if action == "chat.post_message" =>
             {
                 args.value()
             }
@@ -515,7 +515,7 @@ pub(super) fn tasks() -> Vec<Task> {
             },
             setup: &[Setup::Workflow(bug_digest)],
             prompt: |_| {
-                "The tracker's MCP server was upgraded overnight, and some of its tools changed. \
+                "The tracker's MCP server was upgraded overnight, and some of its actions changed. \
                  The workflow bug_digest posts the open bugs of a repository to #bugs; its next \
                  run, for acme/api tomorrow morning, will call the new server. Make sure that \
                  run works, and keep the behaviors its tests check."

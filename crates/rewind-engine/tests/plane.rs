@@ -14,8 +14,8 @@ use std::time::Duration;
 
 use rewind_core::PartitionId;
 use rewind_core::{
-    AbortKind, ActionSet, CancelReason, Completion, Event, Interruption, Lifecycle, RunStatus, Seq,
-    Timestamp, ToolFailure, ToolFailureKind, ToolPolicy,
+    AbortKind, ActionFailure, ActionFailureKind, ActionPolicy, ActionSet, CancelReason, Completion,
+    Event, Interruption, Lifecycle, RunStatus, Seq, Timestamp,
 };
 use rewind_engine::edge::EdgeError;
 use rewind_engine::plane::HostTools;
@@ -67,8 +67,8 @@ fn one_call() -> FakeExecutor {
             run.call("a", json!({ "x": 1 }));
         },
         |run, delivery| match delivery {
-            Delivery::ToolCallCompleted { result, .. } => run.complete(result.clone()),
-            Delivery::ToolCallFailed { error, .. } => run.fail("ToolError", &error.message),
+            Delivery::CallCompleted { result, .. } => run.complete(result.clone()),
+            Delivery::CallFailed { error, .. } => run.fail("ActionError", &error.message),
             Delivery::CancelRequested { .. } => run.fail("CancelledError", "cancelled"),
             other => panic!("unexpected {other:?}"),
         },
@@ -78,20 +78,20 @@ fn one_call() -> FakeExecutor {
 /// The action set of `request`, with `a` under `policy`.
 fn with_policy(
     mut request: rewind_engine::StartRun,
-    policy: ToolPolicy,
+    policy: ActionPolicy,
 ) -> rewind_engine::StartRun {
-    let mut tools: Vec<rewind_core::Tool> = request.action_set.tools().to_vec();
-    for tool in &mut tools {
-        if tool.name == "a" {
-            tool.policy = policy;
+    let mut actions: Vec<rewind_core::Action> = request.action_set.actions().to_vec();
+    for action in &mut actions {
+        if action.name == "a" {
+            action.policy = policy;
         }
     }
-    request.action_set = ActionSet::new(Vec::new(), tools).unwrap();
+    request.action_set = ActionSet::new(Vec::new(), actions).unwrap();
     request
 }
 
 #[tokio::test]
-async fn a_run_calls_its_tools_ends_and_is_sealed() {
+async fn a_run_calls_its_actions_ends_and_is_sealed() {
     let mut world = World::new(chain(), RecordingDispatcher::echo()).await;
     let run = world.run(request("chain", json!({}))).await;
     let view = world.view(&run).await;
@@ -100,12 +100,12 @@ async fn a_run_calls_its_tools_ends_and_is_sealed() {
         world.events(&run).await,
         vec![
             "run_started",
-            "schedule_tool_call",
-            "tool_call_completed",
-            "schedule_tool_call",
-            "tool_call_completed",
-            "schedule_tool_call",
-            "tool_call_completed",
+            "schedule_call",
+            "call_completed",
+            "schedule_call",
+            "call_completed",
+            "schedule_call",
+            "call_completed",
             "complete_run",
         ]
     );
@@ -121,7 +121,7 @@ async fn a_run_calls_its_tools_ends_and_is_sealed() {
     assert_eq!(sealed.entries.len(), 8);
     let summary = view.summary.unwrap();
     assert_eq!(summary.status, RunStatus::Completed);
-    assert_eq!(summary.tool_calls, 3);
+    assert_eq!(summary.calls, 3);
     // Every call carried `{run}/{seq}`.
     let keys: Vec<String> = world
         .plane
@@ -467,10 +467,7 @@ async fn a_replay_mismatch_quarantines_the_run_and_commits_nothing() {
     let mut world = World::with(non_deterministic(), RecordingDispatcher::echo(), 1, &[node]).await;
     let run = world.run(request("flaky_platform", json!({}))).await;
     // The second activation replays, diverges, and commits nothing.
-    assert_eq!(
-        world.events(&run).await,
-        ["run_started", "schedule_tool_call"]
-    );
+    assert_eq!(world.events(&run).await, ["run_started", "schedule_call"]);
     let view = world.view(&run).await;
     assert_eq!(
         view.head.status,
@@ -481,7 +478,7 @@ async fn a_replay_mismatch_quarantines_the_run_and_commits_nothing() {
     assert_eq!(quarantine.kind, QuarantineKind::NonDeterminism);
     assert_eq!(
         quarantine.reason,
-        "history entry 1 is tool call #1 a({\"n\":0}), but the script emitted tool call #1 a({\"n\":1})"
+        "history entry 1 is call #1 a({\"n\":0}), but the script emitted call #1 a({\"n\":1})"
     );
     assert!(
         view.summary.unwrap().quarantine.is_some(),
@@ -563,7 +560,7 @@ async fn failing_activations_are_tried_again_by_a_timer_then_quarantined() {
 #[tokio::test]
 async fn a_call_under_approval_waits_for_the_harness() {
     let mut world = World::new(one_call(), RecordingDispatcher::echo()).await;
-    let mut policy = ToolPolicy::default_for(&rewind_core::ToolRoute::Host { group: None });
+    let mut policy = ActionPolicy::default_for(&rewind_core::ActionRoute::Host { group: None });
     policy.approval = true;
     let approved = world
         .run(with_policy(request("one_call", json!({})), policy))
@@ -598,7 +595,7 @@ async fn a_call_under_approval_waits_for_the_harness() {
     world.reject(&task, "not today").await.unwrap();
     world.idle().await;
     let history = world.history(&rejected).await;
-    let Event::Completion(Completion::ToolCallFailed { error, .. }) = &history[2].event else {
+    let Event::Completion(Completion::CallFailed { error, .. }) = &history[2].event else {
         panic!("{history:?}")
     };
     assert_eq!(error.message, "not today");
@@ -616,8 +613,8 @@ async fn transient_failures_are_retried_with_backoff_under_retry_only() {
     let counted = Arc::clone(&attempts);
     let dispatcher = RecordingDispatcher::dispatching(move |call, _| {
         if counted.fetch_add(1, Ordering::SeqCst) < 2 {
-            return Dispatched::Transient(ToolFailure {
-                kind: ToolFailureKind::Unavailable,
+            return Dispatched::Transient(ActionFailure {
+                kind: ActionFailureKind::Unavailable,
                 message: "busy".into(),
                 data: None,
             });
@@ -646,14 +643,14 @@ async fn transient_failures_are_retried_with_backoff_under_retry_only() {
     let counted = Arc::clone(&attempts);
     let dispatcher = RecordingDispatcher::dispatching(move |_, _| {
         counted.fetch_add(1, Ordering::SeqCst);
-        Dispatched::Transient(ToolFailure {
-            kind: ToolFailureKind::Unavailable,
+        Dispatched::Transient(ActionFailure {
+            kind: ActionFailureKind::Unavailable,
             message: "busy".into(),
             data: None,
         })
     });
     let mut world = World::new(one_call(), dispatcher).await;
-    let mut policy = ToolPolicy::default_for(&rewind_core::ToolRoute::Host { group: None });
+    let mut policy = ActionPolicy::default_for(&rewind_core::ActionRoute::Host { group: None });
     policy.on_interruption = Interruption::AtMostOnce;
     let run = world
         .run(with_policy(request("one_call", json!({})), policy))
@@ -688,7 +685,7 @@ async fn a_deferred_call_is_answered_through_its_token_or_times_out() {
 
     // A deferred call that nobody answers fails at its deadline, bounded by its execution
     // timeout.
-    let mut policy = ToolPolicy::default_for(&rewind_core::ToolRoute::Host { group: None });
+    let mut policy = ActionPolicy::default_for(&rewind_core::ActionRoute::Host { group: None });
     policy.execution_timeout = Some(Duration::from_secs(60));
     let late = world
         .run(with_policy(request("one_call", json!({})), policy))
@@ -697,10 +694,10 @@ async fn a_deferred_call_is_answered_through_its_token_or_times_out() {
     world.advance(61_000);
     world.settle().await;
     let history = world.history(&late).await;
-    let Event::Completion(Completion::ToolCallFailed { error, .. }) = &history[2].event else {
+    let Event::Completion(Completion::CallFailed { error, .. }) = &history[2].event else {
         panic!("{history:?}")
     };
-    assert_eq!(error.kind, ToolFailureKind::Timeout);
+    assert_eq!(error.kind, ActionFailureKind::Timeout);
 }
 
 /// The organization actor of a tenant lives in its home partition's owner: when the partition
@@ -732,7 +729,7 @@ async fn a_stream_attached_before_its_home_partition_is_opened_again_is_still_ha
                 namespace: None,
                 labels: BTreeMap::new(),
                 action_set: None,
-                tools: Default::default(),
+                actions: Default::default(),
                 slots: 4,
             },
         )
@@ -780,7 +777,7 @@ async fn host_tasks_are_handed_to_sdk_streams_and_answered_through_their_token()
                 namespace: None,
                 labels: BTreeMap::new(),
                 action_set: None,
-                tools: Default::default(),
+                actions: Default::default(),
                 slots: 4,
             },
         )
@@ -789,7 +786,7 @@ async fn host_tasks_are_handed_to_sdk_streams_and_answered_through_their_token()
     let handed = support::plane::handed(&mut stream);
     assert_eq!(handed.len(), 1);
     let task = &handed[0];
-    assert_eq!(task.tool, "a");
+    assert_eq!(task.action, "a");
     assert_eq!(task.attempt, 1);
     assert_eq!(task.idempotency_key, format!("{}/1", run.id));
     assert!(
@@ -871,7 +868,7 @@ async fn tasks_in_flight_read_claimed() {
                 namespace: None,
                 labels: BTreeMap::new(),
                 action_set: None,
-                tools: Default::default(),
+                actions: Default::default(),
                 slots: 1,
             },
         )
@@ -1340,7 +1337,7 @@ async fn searches_and_statistics_read_the_partitions_of_the_scope() {
     assert_eq!(counters.created, 3);
     assert_eq!(counters.runs.started, 3);
     assert_eq!(counters.runs.ended[&RunStatus::Completed], 3);
-    assert_eq!(counters.tools["a"].calls, 3);
+    assert_eq!(counters.actions["a"].calls, 3);
     assert!(
         counters.cpu > Duration::ZERO,
         "the CPU of the calls that executed is counted"
@@ -1590,7 +1587,7 @@ async fn a_call_parked_by_a_schema_change_is_sent_once_the_harness_approves_it()
             .webhooks
             .deliveries()
             .iter()
-            .any(|(_, event)| event.kind.event_type().as_str() == "tool.schema_changed"),
+            .any(|(_, event)| event.kind.event_type().as_str() == "action.schema_changed"),
         "the harness is told"
     );
 
@@ -1601,7 +1598,7 @@ async fn a_call_parked_by_a_schema_change_is_sent_once_the_harness_approves_it()
     assert!(!calls[0].schema_change_approved);
     assert!(
         calls[1].schema_change_approved,
-        "sent against the tool's current schema"
+        "sent against the action's current schema"
     );
     let view = world.view(&run).await;
     assert_eq!(view.head.status, RunStatus::Completed);

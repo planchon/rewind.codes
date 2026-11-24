@@ -1,4 +1,4 @@
-import { ops } from "rewind:tools";
+import { ops } from "rewind:actions";
 
 export default async function main() {
   const services = ["api", "web", "worker"] as const;

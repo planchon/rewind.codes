@@ -1,4 +1,4 @@
-import { payments } from "rewind:tools";
+import { payments } from "rewind:actions";
 
 export default async function main(input: { order: string; amount: number }) {
   const refund = await payments.refund({ order: input.order, amount: input.amount });

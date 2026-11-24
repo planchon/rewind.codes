@@ -19,8 +19,8 @@ use rewind_engine::node::runtime::NodeHandle;
 use rewind_engine::plane::{NodeConfig, Plane, Wiring};
 use rewind_engine::ports::link::{RunView, SubscriptionKey};
 use rewind_engine::ports::{
-    CatalogStore, Clock, ControlPlaneChange, PartitionMap, Quotas, Retention, RunRef,
-    StoredActionSet, Tenant, TenantId, ToolDeclarations,
+    ActionDeclarations, CatalogStore, Clock, ControlPlaneChange, PartitionMap, Quotas, Retention,
+    RunRef, StoredActionSet, Tenant, TenantId,
 };
 use rewind_store_slatedb::SlatePartitions;
 use rewind_workos::CookieSeal;
@@ -34,6 +34,7 @@ use crate::link::SharedMembership;
 use crate::oauth::OAuthServer;
 use crate::titles::{ScriptTexts, Title};
 use crate::views::Views;
+use crate::wiring::actions::{Actions, Dispatcher};
 use crate::wiring::bucket::{Archive, Blobs};
 use crate::wiring::checker::Checker;
 use crate::wiring::clock::ServerClock;
@@ -42,7 +43,6 @@ use crate::wiring::executor::Executor;
 use crate::wiring::identity::Identity;
 use crate::wiring::link::ServerLink;
 use crate::wiring::telemetry::Exporter;
-use crate::wiring::tools::{Dispatcher, Tools};
 use crate::wiring::webhooks::{HttpWebhooks, ServerRender, WebhookEgress};
 
 /// The sender of lifecycle webhooks: one attempt per delivery, the next a timer of the owner.
@@ -105,7 +105,7 @@ pub(crate) struct App {
     /// The changes of the control plane, to every stream and cache of the process.
     pub(crate) control: broadcast::Sender<Control>,
     pub(crate) checker: Checker,
-    pub(crate) tools: Tools,
+    pub(crate) actions: Actions,
     pub(crate) settings: Settings,
     pub(crate) idle: Idle,
     /// Set to stop the server.
@@ -151,7 +151,7 @@ pub(crate) struct Parts {
     pub(crate) map: watch::Receiver<PartitionMap>,
     pub(crate) control: broadcast::Sender<Control>,
     pub(crate) checker: Checker,
-    pub(crate) tools: Tools,
+    pub(crate) actions: Actions,
     pub(crate) settings: Settings,
     pub(crate) idle: Idle,
     pub(crate) sign_in: Option<SignIn>,
@@ -171,7 +171,7 @@ impl App {
             map: parts.map,
             control: parts.control,
             checker: parts.checker,
-            tools: parts.tools,
+            actions: parts.actions,
             settings: parts.settings,
             idle: parts.idle,
             stop: watch::Sender::new(false),
@@ -348,15 +348,15 @@ impl App {
         tenant: &TenantId,
     ) -> Result<StoredActionSet, ApiError> {
         let action_set =
-            ActionSet::new([], [self.tools.webhook_tool()]).map_err(ApiError::internal)?;
+            ActionSet::new([], [self.actions.webhook_action()]).map_err(ApiError::internal)?;
         let catalog = self.catalog();
         if let Some(stored) = catalog.get_action_set(tenant, action_set.digest()).await? {
             return Ok(stored);
         }
         let generated = self
-            .tools
+            .actions
             .declarations(&action_set, &std::collections::BTreeMap::new());
-        let declarations = ToolDeclarations {
+        let declarations = ActionDeclarations {
             typescript: generated.typescript,
             prompt: generated.prompt,
         };

@@ -1,7 +1,7 @@
 {"v":1,"matching":"sequential","calls":[
-{"tool":"github.list_issues","args":{"repo":"acme/api","state":"open"},"outcome":{"result":[{"number":4,"title":"Crash"}]}},
-{"tool":"slack.post_message","args":{"channel":"#triage","text":"1 stale issue"},"outcome":{"error":{"kind":"unavailable","message":"rate limited","data":{"retry_after":30}}}},
-{"tool":"github.close_issue","args":{"number":4},"outcome":{"error":{"kind":"outcome_unknown","message":"connection reset"}}}
+{"action":"github.list_issues","args":{"repo":"acme/api","state":"open"},"outcome":{"result":[{"number":4,"title":"Crash"}]}},
+{"action":"slack.post_message","args":{"channel":"#triage","text":"1 stale issue"},"outcome":{"error":{"kind":"unavailable","message":"rate limited","data":{"retry_after":30}}}},
+{"action":"github.close_issue","args":{"number":4},"outcome":{"error":{"kind":"outcome_unknown","message":"connection reset"}}}
 ],"signals":[
 {"name":"approval","payload":{"close":true},"elapsed_ms":3600000}
 ]}

@@ -18,7 +18,7 @@ use crate::ports::tenancy::{RunRef, TenantId};
 pub enum TimerKind {
     /// A script's `start_timer`: `timer_fired { seq }` when it fires.
     Script { run: RunRef, seq: Seq },
-    /// A call's timeout: `tool_call_failed { timeout }`.
+    /// A call's timeout: `call_failed { timeout }`.
     CallTimeout { run: RunRef, seq: Seq },
     /// The deadline of a deferred task: it ends with its timeout failure.
     DeferredDeadline { run: RunRef, seq: Seq },

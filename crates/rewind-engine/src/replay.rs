@@ -2,7 +2,7 @@
 //!
 //! Replay creates a fresh instance, runs `main(input)`, and walks the history with the
 //! domain's [`ReplayCursor`]: recorded completions are delivered, and every command the
-//! script emits must match the history. No tool is called and nothing is written: annotations
+//! script emits must match the history. No action is called and nothing is written: annotations
 //! the script emits are already recorded, so they are dropped, and nothing about the script is
 //! emitted as telemetry. The replay itself is a span of service telemetry, timed as
 //! `rewind.replay.duration`.

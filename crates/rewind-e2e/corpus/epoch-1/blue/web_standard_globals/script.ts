@@ -1,4 +1,4 @@
-import { audit } from "rewind:tools";
+import { audit } from "rewind:actions";
 
 export default async function main() {
   const url = new URL("../items?q=1#top", "https://API.example.com/v1/x");

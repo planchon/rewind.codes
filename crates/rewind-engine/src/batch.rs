@@ -29,9 +29,9 @@ pub enum EngineError {
     Store(#[from] StoreError),
     #[error(transparent)]
     Blob(#[from] BlobError),
-    /// A command names a tool its run's action set does not have.
-    #[error("run {run_id} called {tool}, which its action set does not have")]
-    UnknownTool { run_id: RunId, tool: String },
+    /// A command names an action its run's action set does not have.
+    #[error("run {run_id} called {action}, which its action set does not have")]
+    UnknownAction { run_id: RunId, action: String },
     #[error(transparent)]
     Secret(#[from] SecretError),
     /// A text to store holds a NUL character.

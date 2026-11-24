@@ -15,7 +15,7 @@
 //! ```
 //!
 //! The owner keeps in memory what it needs of the runs it touches (their heads, their inbox
-//! ids, their tool tasks, the calls in flight), loaded once from the partition and kept up to
+//! ids, their call tasks, the calls in flight), loaded once from the partition and kept up to
 //! date by its own batches, since it is their only writer. A message is never the only trace of
 //! anything: an owner that opens the partition after another rebuilds the messages from the
 //! records ([`recovery`]).
@@ -297,7 +297,7 @@ impl<P: Plane> RunSlot<P> {
 /// Where a call of the owner's runs is, in memory: what the records never say.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Flight {
-    /// Waits for the run's own limit of calls of the tool in flight.
+    /// Waits for the run's own limit of calls of the action in flight.
     Waiting,
     /// Waits for a slot of its server, asked of the organization actor.
     Asked { server: String },

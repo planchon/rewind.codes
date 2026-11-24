@@ -1,0 +1,16 @@
+{
+  "description": "Without the built-in http action there is no fetch: the global does not exist.",
+  "actions": {
+    "audit.record": {
+      "ok": true
+    }
+  },
+  "expect": {
+    "status": "failed",
+    "error": {
+      "name": "ReferenceError",
+      "message": "fetch is not defined"
+    },
+    "events": ["run_started", "fail_run"]
+  }
+}

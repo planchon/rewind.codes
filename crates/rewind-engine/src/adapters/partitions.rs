@@ -576,10 +576,10 @@ impl PartitionState {
             CounterDelta::Shape {
                 tenant,
                 namespace,
-                tool,
+                action,
                 shape,
             } => {
-                let slot = self.shapes.entry((tenant, namespace, tool));
+                let slot = self.shapes.entry((tenant, namespace, action));
                 match slot {
                     std::collections::btree_map::Entry::Occupied(mut known) => {
                         let merged = known.get().clone().merge(shape);
@@ -928,22 +928,22 @@ impl PartitionLog for MemoryPartitionLog {
         &self,
         tenant: &TenantId,
         namespace: Option<&NamespaceName>,
-        tools: &[String],
+        actions: &[String],
     ) -> Result<BTreeMap<String, Shape>, PartitionError> {
         self.read(|state| {
             let mut shapes: BTreeMap<String, Shape> = BTreeMap::new();
-            for ((of, name, tool), shape) in &state.shapes {
+            for ((of, name, action), shape) in &state.shapes {
                 if of != tenant
                     || namespace.is_some_and(|only| only != name)
-                    || !tools.contains(tool)
+                    || !actions.contains(action)
                 {
                     continue;
                 }
-                let merged = match shapes.remove(tool) {
+                let merged = match shapes.remove(action) {
                     Some(known) => known.merge(shape.clone()),
                     None => shape.clone(),
                 };
-                shapes.insert(tool.clone(), merged);
+                shapes.insert(action.clone(), merged);
             }
             shapes
         })

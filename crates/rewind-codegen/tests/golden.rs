@@ -1,6 +1,6 @@
 //! Golden tests: each directory of `tests/golden/` holds an action set (`action_set.json`) and what
-//! codegen must generate from it, byte for byte: `rewind-tools.d.ts`, `prompt.txt`, and
-//! `tools.txt` (each tool on its own). `REWIND_CODEGEN_BLESS=1` writes the outputs again.
+//! codegen must generate from it, byte for byte: `rewind-actions.d.ts`, `prompt.txt`, and
+//! `actions.txt` (each action on its own). `REWIND_CODEGEN_BLESS=1` writes the outputs again.
 //!
 //! `action_set.json` describes the action set in a form of this test's own (codegen does not read the
 //! stored format):
@@ -8,7 +8,7 @@
 //! ```json
 //! {
 //!   "servers": ["github"],
-//!   "tools": [
+//!   "actions": [
 //!     { "name": "github.list_issues", "route": "mcp", "description": "…", "input": {…}, "output": {…} },
 //!     { "name": "ask_user", "route": "host", "input": {…} },
 //!     { "name": "http", "route": "http", "hosts": ["api.example.com"] },
@@ -25,8 +25,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use deno_ast::{MediaType, ModuleSpecifier, ParseParams};
-use rewind_codegen::{Declarations, HTTP_TOOL_REFERENCE, generate};
-use rewind_core::{ActionSet, Builtin, McpServer, McpTransport, Shape, Tool, ToolRoute};
+use rewind_codegen::{Declarations, HTTP_ACTION_REFERENCE, generate};
+use rewind_core::{Action, ActionRoute, ActionSet, Builtin, McpServer, McpTransport, Shape};
 use serde_json::Value;
 
 fn golden_dir() -> PathBuf {
@@ -57,41 +57,49 @@ fn load(case: &Path) -> (ActionSet, BTreeMap<String, Shape>) {
             },
         )
     });
-    let tools = document["tools"].as_array().unwrap().iter().map(|tool| {
-        let name = tool["name"].as_str().unwrap();
-        let route = match tool["route"].as_str().unwrap() {
-            "mcp" => ToolRoute::Mcp {
-                server: name.split_once('.').unwrap().0.to_owned(),
-            },
-            "host" => ToolRoute::Host {
-                group: name.split_once('.').map(|(group, _)| group.to_owned()),
-            },
-            "http" => ToolRoute::Builtin(Builtin::Http {
-                allowed_hosts: serde_json::from_value(tool["hosts"].clone()).unwrap(),
-            }),
-            "webhook" => ToolRoute::Builtin(Builtin::Webhook),
-            other => panic!("unknown route {other}"),
-        };
-        let mut pinned = Tool::new(name, route, tool.get("input").cloned().unwrap_or_default());
-        pinned.description = tool["description"].as_str().map(str::to_owned);
-        pinned.output_schema = tool.get("output").cloned();
-        pinned
-    });
-    let action_set = ActionSet::new(servers, tools).unwrap();
+    let actions = document["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|action| {
+            let name = action["name"].as_str().unwrap();
+            let route = match action["route"].as_str().unwrap() {
+                "mcp" => ActionRoute::Mcp {
+                    server: name.split_once('.').unwrap().0.to_owned(),
+                },
+                "host" => ActionRoute::Host {
+                    group: name.split_once('.').map(|(group, _)| group.to_owned()),
+                },
+                "http" => ActionRoute::Builtin(Builtin::Http {
+                    allowed_hosts: serde_json::from_value(action["hosts"].clone()).unwrap(),
+                }),
+                "webhook" => ActionRoute::Builtin(Builtin::Webhook),
+                other => panic!("unknown route {other}"),
+            };
+            let mut pinned = Action::new(
+                name,
+                route,
+                action.get("input").cloned().unwrap_or_default(),
+            );
+            pinned.description = action["description"].as_str().map(str::to_owned);
+            pinned.output_schema = action.get("output").cloned();
+            pinned
+        });
+    let action_set = ActionSet::new(servers, actions).unwrap();
     let observed = document
         .get("observed")
         .and_then(Value::as_object)
         .map(|observed| {
             observed
                 .iter()
-                .map(|(tool, results)| {
+                .map(|(action, results)| {
                     let shape = results
                         .as_array()
                         .unwrap()
                         .iter()
                         .map(Shape::of)
                         .fold(Shape::Unknown, Shape::merge);
-                    (tool.clone(), shape)
+                    (action.clone(), shape)
                 })
                 .collect()
         })
@@ -100,15 +108,20 @@ fn load(case: &Path) -> (ActionSet, BTreeMap<String, Shape>) {
 }
 
 fn outputs(declarations: &Declarations) -> Vec<(&'static str, String)> {
-    let tools: Vec<String> = declarations
-        .tools
+    let actions: Vec<String> = declarations
+        .actions
         .iter()
-        .map(|tool| format!("== {}\n{}\n\n{}", tool.name, tool.prompt, tool.typescript))
+        .map(|action| {
+            format!(
+                "== {}\n{}\n\n{}",
+                action.name, action.prompt, action.typescript
+            )
+        })
         .collect();
     vec![
-        ("rewind-tools.d.ts", declarations.typescript.clone()),
+        ("rewind-actions.d.ts", declarations.typescript.clone()),
         ("prompt.txt", declarations.prompt.clone()),
-        ("tools.txt", tools.join("\n")),
+        ("actions.txt", actions.join("\n")),
     ]
 }
 
@@ -158,9 +171,9 @@ fn generated_declarations_are_valid_typescript() {
     for case in cases() {
         let (action_set, observed) = load(&case);
         let declarations = generate(&action_set, &observed);
-        parse("rewind-tools.d.ts", &declarations.typescript);
-        for tool in &declarations.tools {
-            parse(&format!("{}.d.ts", tool.name), &tool.typescript);
+        parse("rewind-actions.d.ts", &declarations.typescript);
+        for action in &declarations.actions {
+            parse(&format!("{}.d.ts", action.name), &action.typescript);
         }
     }
 }
@@ -173,13 +186,13 @@ fn generation_is_deterministic_whatever_the_order_of_keys() {
         assert_eq!(first, generate(&action_set, &observed));
 
         // The same action set, every object's keys reversed.
-        let reversed_tools = action_set.tools().iter().rev().map(|tool| {
-            let mut tool = tool.clone();
-            tool.input_schema = reverse_keys(&tool.input_schema);
-            tool.output_schema = tool.output_schema.as_ref().map(reverse_keys);
-            tool
+        let reversed_actions = action_set.actions().iter().rev().map(|action| {
+            let mut action = action.clone();
+            action.input_schema = reverse_keys(&action.input_schema);
+            action.output_schema = action.output_schema.as_ref().map(reverse_keys);
+            action
         });
-        let reversed = ActionSet::new(action_set.servers().to_vec(), reversed_tools).unwrap();
+        let reversed = ActionSet::new(action_set.servers().to_vec(), reversed_actions).unwrap();
         assert_eq!(first, generate(&reversed, &observed), "{}", case.display());
     }
 }
@@ -202,24 +215,24 @@ fn reverse_keys(value: &Value) -> Value {
 }
 
 #[test]
-fn the_declarations_of_an_action_set_with_the_http_tool_start_with_its_reference() {
+fn the_declarations_of_an_action_set_with_the_http_action_start_with_its_reference() {
     for case in cases() {
         let (action_set, observed) = load(&case);
         let typescript = generate(&action_set, &observed).typescript;
-        let http_tool = action_set.tool("http").is_some();
+        let http_action = action_set.action("http").is_some();
         assert_eq!(
-            typescript.starts_with(&format!("{HTTP_TOOL_REFERENCE}\n")),
-            http_tool,
+            typescript.starts_with(&format!("{HTTP_ACTION_REFERENCE}\n")),
+            http_action,
             "{}",
             case.display()
         );
         assert_eq!(
-            typescript.matches(HTTP_TOOL_REFERENCE).count(),
-            usize::from(http_tool)
+            typescript.matches(HTTP_ACTION_REFERENCE).count(),
+            usize::from(http_action)
         );
         // Every action set declares the module, the empty one included.
         assert!(
-            typescript.contains("\ndeclare module \"rewind:tools\" {\n"),
+            typescript.contains("\ndeclare module \"rewind:actions\" {\n"),
             "{}",
             case.display()
         );
@@ -229,7 +242,7 @@ fn the_declarations_of_an_action_set_with_the_http_tool_start_with_its_reference
 /// The type-checker learns that a script has `fetch` from this line only; `rewind-check` holds the
 /// same literal and records it in the spec, which both crates are checked against.
 #[test]
-fn the_http_tool_reference_is_the_one_the_spec_records() {
+fn the_http_action_reference_is_the_one_the_spec_records() {
     let spec = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../archi/04-tools.md");
     let spec = fs::read_to_string(spec).unwrap();
     let row = spec
@@ -238,12 +251,12 @@ fn the_http_tool_reference_is_the_one_the_spec_records() {
         .expect("04 lists what tsgo sees");
     assert!(
         row.contains(&format!(
-            "`rewind-tools.d.ts` then starts with `{HTTP_TOOL_REFERENCE}`"
+            "`rewind-actions.d.ts` then starts with `{HTTP_ACTION_REFERENCE}`"
         )),
-        "archi/04-tools.md does not record {HTTP_TOOL_REFERENCE:?}: {row}"
+        "archi/04-tools.md does not record {HTTP_ACTION_REFERENCE:?}: {row}"
     );
     assert_eq!(
-        HTTP_TOOL_REFERENCE,
+        HTTP_ACTION_REFERENCE,
         r#"/// <reference path="fetch.d.ts" />"#
     );
 }

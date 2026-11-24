@@ -7,10 +7,11 @@ use rewind_core::{ActionSet, Digest, PartitionId, RunId, Script, Timestamp, Work
 use crate::adapters::ControlPlaneChanges;
 use crate::ports::catalog::{NamespaceFilter, NamespacePage};
 use crate::ports::{
-    CatalogError, CatalogStore, CompiledScript, ControlPlaneChange, DeleteNamespace, DisplayName,
-    DropNamespace, Namespace, NamespaceName, NamespaceWrite, Quotas, RunRef, ScriptTitle,
-    StoredActionSet, StoredScript, StoredWorkflow, Subscription, TEST_DELETION_TIMEOUT, TEST_GRACE,
-    Tenant, TenantId, TestRecord, ToolDeclarations, WorkflowFilter, namespace_partition,
+    ActionDeclarations, CatalogError, CatalogStore, CompiledScript, ControlPlaneChange,
+    DeleteNamespace, DisplayName, DropNamespace, Namespace, NamespaceName, NamespaceWrite, Quotas,
+    RunRef, ScriptTitle, StoredActionSet, StoredScript, StoredWorkflow, Subscription,
+    TEST_DELETION_TIMEOUT, TEST_GRACE, Tenant, TenantId, TestRecord, WorkflowFilter,
+    namespace_partition,
 };
 
 /// `CatalogStore` in memory: engine tests and mock mode. Every write sends its change through
@@ -210,7 +211,7 @@ impl CatalogStore for MemoryCatalog {
         &self,
         tenant: &TenantId,
         action_set: &ActionSet,
-        declarations: &ToolDeclarations,
+        declarations: &ActionDeclarations,
     ) -> Result<(), CatalogError> {
         let mut state = self.lock()?;
         state

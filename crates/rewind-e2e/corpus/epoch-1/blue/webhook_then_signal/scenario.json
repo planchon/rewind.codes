@@ -1,9 +1,9 @@
 {
-  "description": "webhook(name) is a journaled call of the built-in webhook tool, returning { url }; what is posted to that URL arrives as the signal of that name.",
+  "description": "webhook(name) is a journaled call of the built-in webhook action, returning { url }; what is posted to that URL arrives as the signal of that name.",
   "input": {
     "repo": "acme/api"
   },
-  "tools": {
+  "actions": {
     "webhook": {
       "url": "https://rewind.example.com/hooks/whk_8f3a"
     },

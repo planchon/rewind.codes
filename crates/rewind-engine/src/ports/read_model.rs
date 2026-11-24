@@ -7,7 +7,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Bound;
 
-use rewind_core::{Callsite, Digest, RunId, RunMode, RunStatus, Seq, Timestamp, ToolFailureKind};
+use rewind_core::{ActionFailureKind, Callsite, Digest, RunId, RunMode, RunStatus, Seq, Timestamp};
 
 use crate::ports::journal::{Quarantine, QuarantineKind};
 use crate::ports::namespaces::NamespaceName;
@@ -35,15 +35,15 @@ pub struct Wait {
     pub kind: WaitKind,
     /// The timer's or the call's seq; for a signal, its timeout timer's, if it has one.
     pub seq: Option<Seq>,
-    /// The signal's name, or the call's tool; `None` for a timer.
+    /// The signal's name, or the call's action; `None` for a timer.
     pub name: Option<String>,
     /// `recorded_at` of the entry that opened the wait (`signal_awaited`, `start_timer`,
-    /// `schedule_tool_call`).
+    /// `schedule_call`).
     pub since: Timestamp,
     /// When the wait ends by itself: a timer's due time, a signal's timeout.
     pub until: Option<Timestamp>,
     pub callsite: Option<Callsite>,
-    /// For a call, the phase of its task, as the owner's tool tasks have it when the summary
+    /// For a call, the phase of its task, as the owner's call tasks have it when the summary
     /// is written.
     pub task: Option<TaskPhase>,
 }
@@ -70,7 +70,7 @@ pub enum WaitKind {
     Signal,
     /// A durable timer: `sleep`, `setTimeout`, `setInterval`.
     Timer,
-    /// A tool call Rewind sends itself (MCP tools, built-ins).
+    /// A call Rewind sends itself (MCP actions, built-ins).
     Call,
     /// A host tool's call, answered by an SDK worker through its stream.
     Host,
@@ -118,7 +118,7 @@ impl WaitingFor {
 /// How a run that failed, was cancelled or was aborted ended.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Ending {
-    /// The script error's name (`ToolError`, `TypeError`, `CancelledError`…), or the abort's
+    /// The script error's name (`ActionError`, `TypeError`, `CancelledError`…), or the abort's
     /// kind (`limit_exceeded`…).
     pub error: String,
     pub message: String,
@@ -191,9 +191,9 @@ pub struct RunSummary {
     pub ended_at: Option<Timestamp>,
     /// `recorded_at` of the last entry; the run's creation before its first.
     pub last_activity_at: Timestamp,
-    /// The `schedule_tool_call` entries of its history.
-    pub tool_calls: u64,
-    /// The `tool_call_failed` entries of its history.
+    /// The `schedule_call` entries of its history.
+    pub calls: u64,
+    /// The `call_failed` entries of its history.
     pub errors: u64,
     /// The entries of its history.
     pub history_len: u64,
@@ -224,7 +224,7 @@ impl RunSummary {
                 RunOrder::Activity => Some(self.last_activity_at.0),
                 RunOrder::Wakes => self.wakes_at.map(|at| at.0),
                 RunOrder::Duration => self.duration(),
-                RunOrder::Calls => Some(self.tool_calls),
+                RunOrder::Calls => Some(self.calls),
             },
             run: self.run.id,
         }
@@ -302,13 +302,13 @@ pub enum Predicate {
     Script(Vec<String>),
     /// The action set's digest, in lowercase hexadecimal, starts with one of these.
     ActionSet(Vec<String>),
-    /// The run scheduled at least one call to a tool one of these matches.
-    Tool(Vec<TextMatch>),
+    /// The run scheduled at least one call to an action one of these matches.
+    Action(Vec<TextMatch>),
     /// The run ended with an error (or abort kind) named in `names`, or at least one of its
     /// calls failed with a kind in `kinds`.
     Error {
         names: BTreeSet<String>,
-        kinds: BTreeSet<ToolFailureKind>,
+        kinds: BTreeSet<ActionFailureKind>,
     },
     /// The run waits (status `active`, at least one wait) for one of these; empty: for
     /// anything.
@@ -321,9 +321,9 @@ pub enum Predicate {
     Activity(Range<Timestamp>),
     /// From start to end, in milliseconds: ended runs only.
     Duration(Range<u64>),
-    /// Tool calls scheduled.
+    /// Calls scheduled.
     Calls(Range<u64>),
-    /// Tool calls failed.
+    /// Calls failed.
     Errors(Range<u64>),
     /// Forks of this run.
     Parent(RunId),
@@ -398,7 +398,7 @@ pub enum RunOrder {
     /// Longest [`RunSummary::duration`] first, then newest run id first; the runs that have not
     /// ended last, newest run id first.
     Duration,
-    /// Most `tool_calls` first, then newest run id first.
+    /// Most `calls` first, then newest run id first.
     Calls,
 }
 
@@ -423,7 +423,7 @@ pub struct SearchCursor {
     pub run: RunId,
 }
 
-/// Latency of calls with an outcome: logical time from `schedule_tool_call` to the completion.
+/// Latency of calls with an outcome: logical time from `schedule_call` to the completion.
 /// Percentiles are nearest-rank: the p-th percentile of n sorted latencies is the one at
 /// position `ceil(p × n / 100)`, counting from 1.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

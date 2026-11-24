@@ -1,10 +1,10 @@
 //! The HTTP client of a tenant's servers: where it may connect, and which redirects it follows
 //! (`archi/04-tools.md`, "Where MCP servers and APIs may be").
 //!
-//! | [`ToolEgress`] | Used by | Reaches |
+//! | [`ActionEgress`] | Used by | Reaches |
 //! | --- | --- | --- |
 //! | open | The embedded server and the CLI, for one local developer, who may start stdio servers too | Any address |
-//! | checked | A deployed server, whose tenants name the URLs | The addresses the egress checks let through ([`Egress`]), and the internal hosts and networks of the operator's [`InternalAllowList`] (`--allow-internal-tools`) |
+//! | checked | A deployed server, whose tenants name the URLs | The addresses the egress checks let through ([`Egress`]), and the internal hosts and networks of the operator's [`InternalAllowList`] (`--allow-internal-addresses`) |
 //!
 //! Each client is checked when it is built and at each TCP connection it makes. A client that
 //! reached an address only the allow-list lets through notes it ([`Reached`]): its caller then
@@ -29,19 +29,19 @@ use url::Url;
 
 use crate::egress::{Egress, InternalAllowList, NameResolver, Reach, Refused, SystemResolver};
 
-/// Redirects followed at most, as the `http` tool.
+/// Redirects followed at most, as the `http` action.
 pub const MAX_REDIRECTS: usize = 5;
 
 /// How a refusal of the checks ends.
 const REFUSAL: &str = "MCP servers and APIs are not reached there unless the operator allows it";
 
-/// Where a tenant's MCP servers and APIs may be: anywhere ([`ToolEgress::open`]), or with the
-/// egress checks of a deployment ([`ToolEgress::checked`], the default). Stdio servers are
+/// Where a tenant's MCP servers and APIs may be: anywhere ([`ActionEgress::open`]), or with the
+/// egress checks of a deployment ([`ActionEgress::checked`], the default). Stdio servers are
 /// processes the dispatcher starts: whether a deployment accepts them is its own setting.
 #[derive(Debug, Clone)]
-pub struct ToolEgress(Option<Egress>);
+pub struct ActionEgress(Option<Egress>);
 
-impl ToolEgress {
+impl ActionEgress {
     /// Any address: for the embedded server and the CLI, where one developer names the
     /// servers of their own machine and network.
     pub fn open() -> Self {
@@ -54,7 +54,7 @@ impl ToolEgress {
         Self::checked_with(Arc::new(SystemResolver), internal)
     }
 
-    /// [`ToolEgress::checked`], resolving names with `resolver`.
+    /// [`ActionEgress::checked`], resolving names with `resolver`.
     pub fn checked_with(resolver: Arc<dyn NameResolver>, internal: InternalAllowList) -> Self {
         Self(Some(Egress::new(resolver, REFUSAL).allowing(internal)))
     }
@@ -100,7 +100,7 @@ impl ToolEgress {
     }
 }
 
-impl Default for ToolEgress {
+impl Default for ActionEgress {
     /// The checks, without internal hosts.
     fn default() -> Self {
         Self::checked(InternalAllowList::default())
@@ -228,7 +228,7 @@ mod tests {
     }
 
     /// Why the client refused to follow the redirect of a `POST` to the server on `port`.
-    async fn refusal(egress: &ToolEgress, redirects: Redirects, port: u16) -> String {
+    async fn refusal(egress: &ActionEgress, redirects: Redirects, port: u16) -> String {
         let url = Url::parse(&format!("http://127.0.0.1:{port}/mcp")).unwrap();
         let (client, _) = egress
             .client(&url, redirects, reqwest::Client::builder())
@@ -246,7 +246,7 @@ mod tests {
 
     #[tokio::test]
     async fn redirects_are_followed_only_with_307_and_308_within_the_origin() {
-        let open = ToolEgress::open();
+        let open = ActionEgress::open();
         let elsewhere = redirecting(307, "http://127.0.0.2:9/mcp").await;
         assert_eq!(
             refusal(&open, Redirects::WithinOrigin, elsewhere).await,
@@ -290,7 +290,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_checked_redirect_to_an_internal_address_is_refused() {
-        let checked = ToolEgress::with(Egress::with_policy(Arc::new(Local), test_policy, "no"));
+        let checked = ActionEgress::with(Egress::with_policy(Arc::new(Local), test_policy, "no"));
         let metadata = redirecting(302, "http://169.254.169.254/latest").await;
         assert_eq!(
             refusal(&checked, Redirects::Checked, metadata).await,
@@ -309,7 +309,7 @@ mod tests {
     #[test]
     fn only_http_urls_are_reached_and_internal_ones_are_noted() {
         let url = |text: &str| Url::parse(text).unwrap();
-        let refused = |egress: &ToolEgress, text: &str| {
+        let refused = |egress: &ActionEgress, text: &str| {
             egress
                 .client(
                     &url(text),
@@ -319,7 +319,7 @@ mod tests {
                 .map(drop)
                 .unwrap_err()
         };
-        let checked = ToolEgress::checked(InternalAllowList::parse(&["10.0.0.0/8"]).unwrap());
+        let checked = ActionEgress::checked(InternalAllowList::parse(&["10.0.0.0/8"]).unwrap());
         for text in ["ftp://mcp.example.com/", "file:///etc/passwd"] {
             assert!(
                 refused(&checked, text).contains("is not an http:// or https:// URL"),
@@ -348,6 +348,6 @@ mod tests {
             )
             .unwrap();
         assert!(!public.internal());
-        assert!(ToolEgress::open().is_open() && !ToolEgress::default().is_open());
+        assert!(ActionEgress::open().is_open() && !ActionEgress::default().is_open());
     }
 }

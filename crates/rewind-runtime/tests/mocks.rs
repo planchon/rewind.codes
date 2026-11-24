@@ -1,5 +1,5 @@
-//! TypeScript mock handlers (`archi/05-testing-and-observability.md`, "Testing and mocks"): a
-//! `ToolDispatcher` for mock mode, running the handlers in an isolate of their own.
+//! TypeScript mock handlers (`archi/05-testing-and-observability.md`, "Testing and mocks"): an
+//! `ActionDispatcher` for mock mode, running the handlers in an isolate of their own.
 
 #![allow(clippy::unwrap_used)]
 
@@ -7,12 +7,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use rewind_core::{
-    ActionSet, RunId, RunMode, RunOutcome, RunState, Script, Seq, Timestamp, Tool, ToolFailure,
-    ToolFailureKind, ToolRoute,
+    Action, ActionFailure, ActionFailureKind, ActionRoute, ActionSet, RunId, RunMode, RunOutcome,
+    RunState, Script, Seq, Timestamp,
 };
 use rewind_engine::ports::{
-    CallAuth, Clock, Dispatched, NamespaceName, RunRef, TaskToken, TenantId, ToolCall,
-    ToolDispatcher,
+    ActionDispatcher, Call, CallAuth, Clock, Dispatched, NamespaceName, RunRef, TaskToken, TenantId,
 };
 use rewind_engine::{ReplayVerdict, StartRun};
 use rewind_runtime::{MockError, SandboxLimits, TsMocks, V8Executor};
@@ -23,7 +22,7 @@ mod support;
 use support::{T0, World};
 
 const MOCKS: &str = r#"
-type Call = { tool: string; runId: string; seq: number; attempt: number; idempotencyKey: string };
+type Call = { action: string; runId: string; seq: number; attempt: number; idempotencyKey: string };
 
 let closed = 0;
 
@@ -70,14 +69,14 @@ async fn mocks(source: &str) -> Result<TsMocks, MockError> {
     TsMocks::new(&Script::new(source), clock(), SandboxLimits::default()).await
 }
 
-fn call(tool: &str, args: Value) -> ToolCall {
+fn call(action: &str, args: Value) -> Call {
     let run = RunId::from_u128(7);
-    ToolCall {
+    Call {
         run: RunRef::new(TenantId::local(), run),
         namespace: NamespaceName::new(NamespaceName::LOCAL).unwrap(),
         labels: Default::default(),
         seq: Seq(3),
-        tool: Tool::new(tool, ToolRoute::Host { group: None }, json!({})),
+        action: Action::new(action, ActionRoute::Host { group: None }, json!({})),
         server: None,
         api: None,
         args,
@@ -89,11 +88,11 @@ fn call(tool: &str, args: Value) -> ToolCall {
     }
 }
 
-async fn dispatch(mocks: &TsMocks, tool: &str, args: Value) -> Dispatched {
-    mocks.dispatch(call(tool, args), CallAuth::None).await
+async fn dispatch(mocks: &TsMocks, action: &str, args: Value) -> Dispatched {
+    mocks.dispatch(call(action, args), CallAuth::None).await
 }
 
-fn failure(dispatched: Dispatched) -> ToolFailure {
+fn failure(dispatched: Dispatched) -> ActionFailure {
     match dispatched {
         Dispatched::Failed(failure) => failure,
         other => panic!("expected a failure, got {other:?}"),
@@ -101,11 +100,11 @@ fn failure(dispatched: Dispatched) -> ToolFailure {
 }
 
 #[tokio::test]
-async fn handlers_answer_by_tool_name_or_namespace() {
+async fn handlers_answer_by_action_name_or_namespace() {
     let mocks = mocks(MOCKS).await.unwrap();
-    let tools: Vec<&str> = mocks.tools().iter().map(String::as_str).collect();
+    let actions: Vec<&str> = mocks.actions().iter().map(String::as_str).collect();
     assert_eq!(
-        tools,
+        actions,
         [
             "clock",
             "fails",
@@ -148,28 +147,28 @@ async fn failures_carry_their_kind_message_and_data() {
     let mocks = mocks(MOCKS).await.unwrap();
     assert_eq!(
         failure(dispatch(&mocks, "fails", json!({})).await),
-        ToolFailure {
-            kind: ToolFailureKind::Unavailable,
+        ActionFailure {
+            kind: ActionFailureKind::Unavailable,
             message: "rate limited".into(),
             data: Some(json!({ "retryAfter": 3 })),
         }
     );
     assert_eq!(
         failure(dispatch(&mocks, "rejects", json!({})).await),
-        ToolFailure {
-            kind: ToolFailureKind::Error,
+        ActionFailure {
+            kind: ActionFailureKind::Error,
             message: "plain failure".into(),
             data: None,
         }
     );
     let missing = failure(dispatch(&mocks, "slack.post", json!({})).await);
-    assert_eq!(missing.kind, ToolFailureKind::Unavailable);
+    assert_eq!(missing.kind, ActionFailureKind::Unavailable);
     assert_eq!(missing.message, "no mock handler for slack.post");
     let waits = failure(dispatch(&mocks, "waits", json!({})).await);
     assert_eq!(
         waits.message,
         "the mock handler of waits did not settle: mock handlers cannot wait for timers, \
-         signals or tools"
+         signals or actions"
     );
 }
 
@@ -277,7 +276,7 @@ async fn a_run_in_mock_mode_is_answered_by_the_handlers_and_replays() {
     let mut request = StartRun::new(
         Script::new(
             r#"
-import { github, fails } from "rewind:tools";
+import { github, fails } from "rewind:actions";
 
 export default async function main() {
   const issue = await github.get_issue({ number: 4 });

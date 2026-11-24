@@ -1,6 +1,6 @@
 //! Host-tool tasks: the harness's SDK worker holds a task stream open and is handed the tasks as
 //! they become ready, and the harness answers the tasks that wait for it (`archi/04-tools.md`,
-//! "Tool task lifecycle").
+//! "Call lifecycle").
 //!
 //! Two identifiers: a task handed to a worker has a **token**, which only that worker knows
 //! (`/v1/tasks/{token}/defer`, `/complete`, `/fail`); every task has an **id**, listed in the
@@ -22,15 +22,15 @@ use crate::namespaces::NamespaceName;
 ///
 /// The open stream is the liveness of every task handed on it: nothing is written or asked
 /// while a task is in flight. When the stream closes, its tasks wait for the worker to open a
-/// stream again with the same `worker`, for the tool's grace (60 s by default); after it, each is
+/// stream again with the same `worker`, for the action's grace (60 s by default); after it, each is
 /// handed to another worker with its attempt + 1, or fails with `outcomeUnknown` under
-/// `at_most_once` (`archi/04-tools.md`, "Tool task lifecycle").
+/// `at_most_once` (`archi/04-tools.md`, "Call lifecycle").
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, IntoParams)]
 #[into_params(parameter_in = Query)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskStreamQuery {
     /// The action set whose host tools this worker executes: only the tasks of runs of this action set.
-    /// Without it, the tasks of the tools named in `tools`, whatever the action set of their run (a
+    /// Without it, the tasks of the actions named in `actions`, whatever the action set of their run (an
     /// action set derived from another, as saving a workflow does, keeps its host tools' names).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub action_set: Option<String>,
@@ -40,10 +40,10 @@ pub struct TaskStreamQuery {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[param(value_type = Option<String>)]
     pub namespace: Option<NamespaceName>,
-    /// Only these tools. Repeat for several. All the host tools of `actionSet` when absent, every
+    /// Only these actions. Repeat for several. All the host tools of `actionSet` when absent, every
     /// host tool without `actionSet` either.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub tools: Vec<String>,
+    pub actions: Vec<String>,
     /// At most this many tasks in flight on this stream: handed, and neither completed, failed,
     /// deferred (by whichever process answers) nor gone. 1 by default, 100 at most. With 0, none
     /// is handed: a worker that stops opens its stream again with 0 slots and its `worker`, which
@@ -73,8 +73,8 @@ pub struct HandedTask {
     /// The namespace of the run: the end user the handler acts for.
     pub namespace: NamespaceName,
     pub seq: u32,
-    pub tool: String,
-    /// The arguments, validated against the tool's input schema.
+    pub action: String,
+    /// The arguments, validated against the action's input schema.
     pub args: Value,
     /// `{run_id}/{seq}` (a fork's call made again keeps its parent's), the same on every
     /// attempt: the handler uses it to recognize a call it already made.
@@ -82,13 +82,13 @@ pub struct HandedTask {
     /// From 1. Above 1, an earlier attempt was interrupted: the stream it was handed on closed
     /// and did not come back within its grace.
     pub attempt: u32,
-    /// The tool's execution timeout, in milliseconds: past it, the call is not waited for any
-    /// more. Absent when the tool has none, the default of host tools: the run's TTL bounds it.
+    /// The action's execution timeout, in milliseconds: past it, the call is not waited for any
+    /// more. Absent when the action has none, the default of host tools: the run's TTL bounds it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout_ms: Option<u64>,
     /// The run's labels.
     pub labels: Labels,
-    /// W3C trace context, with the tool call's span as parent.
+    /// W3C trace context, with the call's span as parent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub traceparent: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -152,22 +152,22 @@ pub struct DeferTask {
     pub timeout: Option<Duration>,
 }
 
-/// `POST /v1/tasks/{token}/complete`: the tool's result, delivered to the script.
+/// `POST /v1/tasks/{token}/complete`: the action's result, delivered to the script.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CompleteTask {
     pub result: Value,
 }
 
-/// `POST /v1/tasks/{token}/fail`: the tool failed. The script gets a `ToolError`, unless the
-/// failure is retryable and the tool's policy is `retry`: the call is then made again, with
+/// `POST /v1/tasks/{token}/fail`: the action failed. The script gets an `ActionError`, unless the
+/// failure is retryable and the action's policy is `retry`: the call is then made again, with
 /// backoff.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct FailTask {
-    /// The message of the `ToolError`, written for the model.
+    /// The message of the `ActionError`, written for the model.
     pub message: String,
-    /// `ToolError.data`.
+    /// `ActionError.data`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub data: Option<Value>,
     /// A transient failure: call again later.
@@ -175,7 +175,7 @@ pub struct FailTask {
     pub retryable: bool,
 }
 
-/// `POST /v1/tasks/{id}/reject`: the call fails with a `ToolError` carrying this message.
+/// `POST /v1/tasks/{id}/reject`: the call fails with an `ActionError` carrying this message.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RejectTask {
@@ -184,7 +184,7 @@ pub struct RejectTask {
     pub message: Option<String>,
 }
 
-/// The state of a tool task.
+/// The state of a call's task.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskState {
@@ -196,7 +196,7 @@ pub enum TaskState {
     Claimed,
     /// A host tool's handler will answer later.
     Deferred,
-    /// Waits for the harness: the tool's schema changed, its server refused the call, or the
+    /// Waits for the harness: the action's schema changed, its server refused the call, or the
     /// secret the run attached no longer exists.
     Parked,
     /// Its outcome is in the run's inbox.
@@ -207,8 +207,8 @@ pub enum TaskState {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ParkedReason {
-    /// The server's schema of the tool no longer matches the pinned one (webhook
-    /// `tool.schema_changed`): approve to continue against the new schema, or reject.
+    /// The server's schema of the action no longer matches the pinned one (webhook
+    /// `action.schema_changed`): approve to continue against the new schema, or reject.
     SchemaChanged,
     /// The server answered 401 to the secret or to the signature (webhook
     /// `credentials.expired`, reason `refused`): put the secret again, or approve once the
@@ -233,7 +233,7 @@ mod tests {
             "runId": "0193a5c4-0000-8000-8000-000000000001",
             "namespace": "alice",
             "seq": 3,
-            "tool": "ask_user",
+            "action": "ask_user",
             "args": { "question": "ok?" },
             "idempotencyKey": "0193a5c4-0000-8000-8000-000000000001/3",
             "attempt": 1,
@@ -273,16 +273,16 @@ mod tests {
     }
 
     #[test]
-    fn the_stream_query_names_its_tools_and_slots() {
+    fn the_stream_query_names_its_actions_and_slots() {
         let query: TaskStreamQuery = serde_json::from_value(json!({
             "actionSet": "ab",
-            "tools": ["ask_user"],
+            "actions": ["ask_user"],
             "slots": 4,
             "worker": "w-1"
         }))
         .unwrap();
         assert_eq!(query.action_set.as_deref(), Some("ab"));
-        assert_eq!(query.tools, ["ask_user"]);
+        assert_eq!(query.actions, ["ask_user"]);
         assert_eq!(query.slots, Some(4));
         assert_eq!(
             serde_json::from_value::<TaskStreamQuery>(json!({})).unwrap(),

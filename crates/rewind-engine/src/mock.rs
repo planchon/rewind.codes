@@ -4,13 +4,13 @@
 //! virtual clock, and a dispatcher that answers from mocks. A call is answered by the first
 //! source that has an answer:
 //!
-//! 1. the **rules** a test writes per tool ([`RulesDispatcher`]), matched by args;
-//! 2. **mock handlers** ([`Mocks`]): any [`ToolDispatcher`], for the tools it handles. The
+//! 1. the **rules** a test writes per action ([`RulesDispatcher`]), matched by args;
+//! 2. **mock handlers** ([`Mocks`]): any [`ActionDispatcher`], for the actions it handles. The
 //!    TypeScript mock handlers run in a separate isolate, behind that port (`rewind-runtime`);
 //! 3. a **cassette** recorded from a real run ([`CassetteDispatcher`]): `sequential` hands the
-//!    recorded calls out in order, `by_args` by tool and canonical args;
-//! 4. **static responses** per tool, as `rewind.tools.json` holds them;
-//! 5. otherwise the call fails with "no recorded response for `tool({…})`", and is listed in
+//!    recorded calls out in order, `by_args` by action and canonical args;
+//! 4. **static responses** per action, as `rewind.actions.json` holds them;
+//! 5. otherwise the call fails with "no recorded response for `action({…})`", and is listed in
 //!    the dispatcher's [`UnansweredCalls`]: a test fails on it.
 //!
 //! Running a test with these sources is [`crate::testing`].
@@ -19,34 +19,34 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use rewind_core::{
-    Cassette, JsonValue, Matching, Payload, RecordedCall, RunId, Seq, ToolFailure, ToolFailureKind,
-    ToolOutcome, ToolRule,
+    ActionFailure, ActionFailureKind, ActionOutcome, ActionRule, Cassette, JsonValue, Matching,
+    Payload, RecordedCall, RunId, Seq,
 };
 
 use crate::adapters::{StaticDispatcher, StaticResponsesError};
-use crate::ports::{CallAuth, Dispatched, ToolCall, ToolDispatcher};
+use crate::ports::{ActionDispatcher, Call, CallAuth, Dispatched};
 
 /// Characters of the args shown when no source answers a call.
 const ARGS_CHARS: usize = 80;
 
-/// Answers calls from the rules of a test: for each tool, the first rule whose args the call
+/// Answers calls from the rules of a test: for each action, the first rule whose args the call
 /// contains and that has answered fewer than its `times` calls.
 #[derive(Debug)]
 pub struct RulesDispatcher {
-    rules: BTreeMap<String, Vec<ToolRule>>,
+    rules: BTreeMap<String, Vec<ActionRule>>,
     state: Mutex<RulesState>,
 }
 
 #[derive(Debug, Default)]
 struct RulesState {
-    /// Calls answered by each rule, by tool and position.
+    /// Calls answered by each rule, by action and position.
     used: BTreeMap<(String, usize), u32>,
     /// A call answered once gets the same answer again (an attempt after an interrupted one).
-    answered: BTreeMap<(RunId, Seq), ToolOutcome>,
+    answered: BTreeMap<(RunId, Seq), ActionOutcome>,
 }
 
 impl RulesDispatcher {
-    pub fn new(rules: BTreeMap<String, Vec<ToolRule>>) -> Self {
+    pub fn new(rules: BTreeMap<String, Vec<ActionRule>>) -> Self {
         Self {
             rules,
             state: Mutex::new(RulesState::default()),
@@ -54,20 +54,20 @@ impl RulesDispatcher {
     }
 
     /// The answer of the first rule that takes the call, if one does.
-    pub fn answer(&self, call: &ToolCall) -> Option<ToolOutcome> {
+    pub fn answer(&self, call: &Call) -> Option<ActionOutcome> {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         let key = (call.run.id, call.seq);
         if let Some(outcome) = state.answered.get(&key) {
             return Some(outcome.clone());
         }
-        let rules = self.rules.get(&call.tool.name)?;
+        let rules = self.rules.get(&call.action.name)?;
         for (position, rule) in rules.iter().enumerate() {
             if !rule.matches(&call.args) {
                 continue;
             }
             let used = state
                 .used
-                .entry((call.tool.name.clone(), position))
+                .entry((call.action.name.clone(), position))
                 .or_default();
             if rule.times.is_some_and(|times| *used >= times) {
                 continue;
@@ -81,7 +81,7 @@ impl RulesDispatcher {
 }
 
 /// The calls no source answered, shared between a [`MockDispatcher`] and whoever reads them
-/// once the run is over: each once, in the order they came, as `tool({…})`.
+/// once the run is over: each once, in the order they came, as `action({…})`.
 #[derive(Debug, Clone, Default)]
 pub struct UnansweredCalls(Arc<Mutex<Vec<UnansweredCall>>>);
 
@@ -89,7 +89,7 @@ pub struct UnansweredCalls(Arc<Mutex<Vec<UnansweredCall>>>);
 type UnansweredCall = ((RunId, Seq), String);
 
 impl UnansweredCalls {
-    fn push(&self, call: &ToolCall) {
+    fn push(&self, call: &Call) {
         let mut calls = self.0.lock().unwrap_or_else(PoisonError::into_inner);
         let key = (call.run.id, call.seq);
         if !calls.iter().any(|(seen, _)| *seen == key) {
@@ -97,7 +97,7 @@ impl UnansweredCalls {
         }
     }
 
-    /// Each call no source answered, as `tool({…})`.
+    /// Each call no source answered, as `action({…})`.
     pub fn list(&self) -> Vec<String> {
         self.0
             .lock()
@@ -109,10 +109,10 @@ impl UnansweredCalls {
 }
 
 /// `github.close_issue({"number":4})`, the args cut to [`ARGS_CHARS`].
-fn describe(call: &ToolCall) -> String {
+fn describe(call: &Call) -> String {
     format!(
         "{}({})",
-        call.tool.name,
+        call.action.name,
         Payload::Value(call.args.clone()).preview(ARGS_CHARS)
     )
 }
@@ -147,16 +147,16 @@ impl CassetteDispatcher {
     }
 
     /// The recorded outcome for this call, if the cassette has one: under `sequential`, the
-    /// next recorded call if it is to the same tool with the same args; under `by_args`, the
-    /// first unused recorded call to the same tool with the same canonical args.
-    pub fn answer(&self, call: &ToolCall) -> Option<ToolOutcome> {
+    /// next recorded call if it is to the same action with the same args; under `by_args`, the
+    /// first unused recorded call to the same action with the same canonical args.
+    pub fn answer(&self, call: &Call) -> Option<ActionOutcome> {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         let key = (call.run.id, call.seq);
         if let Some(position) = state.answered.get(&key) {
             return Some(self.cassette.calls[*position].outcome.clone());
         }
         let same = |recorded: &RecordedCall| {
-            recorded.tool == call.tool.name
+            recorded.action == call.action.name
                 && Payload::Value(recorded.args.clone()).same_as(&Payload::Value(call.args.clone()))
         };
         let position = match self.cassette.matching {
@@ -184,8 +184,8 @@ impl CassetteDispatcher {
     }
 }
 
-impl ToolDispatcher for CassetteDispatcher {
-    async fn dispatch(&self, call: ToolCall, _auth: CallAuth) -> Dispatched {
+impl ActionDispatcher for CassetteDispatcher {
+    async fn dispatch(&self, call: Call, _auth: CallAuth) -> Dispatched {
         match self.answer(&call) {
             Some(outcome) => dispatched(outcome),
             None => Dispatched::Failed(no_response(&call)),
@@ -193,28 +193,28 @@ impl ToolDispatcher for CassetteDispatcher {
     }
 }
 
-fn dispatched(outcome: ToolOutcome) -> Dispatched {
+fn dispatched(outcome: ActionOutcome) -> Dispatched {
     match outcome {
-        ToolOutcome::Result(result) => Dispatched::Result(result),
-        ToolOutcome::Failure(failure) => Dispatched::Failed(failure),
+        ActionOutcome::Result(result) => Dispatched::Result(result),
+        ActionOutcome::Failure(failure) => Dispatched::Failed(failure),
     }
 }
 
-fn no_response(call: &ToolCall) -> ToolFailure {
-    ToolFailure {
-        kind: ToolFailureKind::Error,
+fn no_response(call: &Call) -> ActionFailure {
+    ActionFailure {
+        kind: ActionFailureKind::Error,
         message: format!("no recorded response for `{}`", describe(call)),
         data: None,
     }
 }
 
-/// Mock handlers: any dispatcher, for the tools it handles. The TypeScript mock handlers of a
+/// Mock handlers: any dispatcher, for the actions it handles. The TypeScript mock handlers of a
 /// test (`rewind-runtime`, in a separate isolate) are one.
 #[derive(Debug)]
 pub struct Mocks<M> {
     pub handlers: M,
-    /// The tools the handlers answer; the others go to the next source.
-    pub tools: BTreeSet<String>,
+    /// The actions the handlers answer; the others go to the next source.
+    pub actions: BTreeSet<String>,
 }
 
 /// The dispatcher of mock mode: rules, then mock handlers, then a cassette, then static
@@ -225,7 +225,7 @@ pub struct MockDispatcher<M> {
     mocks: Option<Mocks<M>>,
     cassette: Option<CassetteDispatcher>,
     statics: StaticDispatcher,
-    static_tools: BTreeSet<String>,
+    static_actions: BTreeSet<String>,
     unanswered: UnansweredCalls,
 }
 
@@ -233,8 +233,8 @@ pub struct MockDispatcher<M> {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NoMocks;
 
-impl ToolDispatcher for NoMocks {
-    async fn dispatch(&self, call: ToolCall, _auth: CallAuth) -> Dispatched {
+impl ActionDispatcher for NoMocks {
+    async fn dispatch(&self, call: Call, _auth: CallAuth) -> Dispatched {
         Dispatched::Failed(no_response(&call))
     }
 }
@@ -260,12 +260,12 @@ impl<M> MockDispatcher<M> {
             mocks: None,
             cassette: None,
             statics: StaticDispatcher::new(),
-            static_tools: BTreeSet::new(),
+            static_actions: BTreeSet::new(),
             unanswered: UnansweredCalls::default(),
         }
     }
 
-    pub fn with_rules(mut self, rules: BTreeMap<String, Vec<ToolRule>>) -> Self {
+    pub fn with_rules(mut self, rules: BTreeMap<String, Vec<ActionRule>>) -> Self {
         if !rules.is_empty() {
             self.rules = Some(RulesDispatcher::new(rules));
         }
@@ -283,21 +283,21 @@ impl<M> MockDispatcher<M> {
             mocks: Some(mocks),
             cassette: self.cassette,
             statics: self.statics,
-            static_tools: self.static_tools,
+            static_actions: self.static_actions,
             unanswered: self.unanswered,
         }
     }
 
-    /// Static responses in the `rewind.tools.json` format: a tool maps to its result, or to
+    /// Static responses in the `rewind.actions.json` format: an action maps to its result, or to
     /// `{"$error": "message"}`.
     pub fn with_static_responses(
         mut self,
         responses: &JsonValue,
     ) -> Result<Self, StaticResponsesError> {
         self.statics = StaticDispatcher::from_json(responses)?;
-        self.static_tools = responses
+        self.static_actions = responses
             .as_object()
-            .map(|tools| tools.keys().cloned().collect())
+            .map(|actions| actions.keys().cloned().collect())
             .unwrap_or_default();
         Ok(self)
     }
@@ -315,13 +315,13 @@ impl<M> MockDispatcher<M> {
     }
 }
 
-impl<M: ToolDispatcher> ToolDispatcher for MockDispatcher<M> {
-    async fn dispatch(&self, call: ToolCall, auth: CallAuth) -> Dispatched {
+impl<M: ActionDispatcher> ActionDispatcher for MockDispatcher<M> {
+    async fn dispatch(&self, call: Call, auth: CallAuth) -> Dispatched {
         if let Some(outcome) = self.rules.as_ref().and_then(|rules| rules.answer(&call)) {
             return dispatched(outcome);
         }
         if let Some(mocks) = &self.mocks
-            && mocks.tools.contains(&call.tool.name)
+            && mocks.actions.contains(&call.action.name)
         {
             return mocks.handlers.dispatch(call, auth).await;
         }
@@ -332,13 +332,13 @@ impl<M: ToolDispatcher> ToolDispatcher for MockDispatcher<M> {
         {
             return dispatched(outcome);
         }
-        if self.static_tools.contains(&call.tool.name) {
+        if self.static_actions.contains(&call.action.name) {
             return self.statics.dispatch(call, auth).await;
         }
         // A signal to a mocked run has nowhere to go: it is accepted (`archi/03-execution.md`,
         // "Workflows across runs").
         if matches!(
-            rewind_core::WorkflowOp::of_tool(&call.tool.name),
+            rewind_core::WorkflowOp::of_action(&call.action.name),
             Some((_, rewind_core::WorkflowOp::Signal))
         ) {
             return Dispatched::Result(serde_json::json!({}));
@@ -350,19 +350,19 @@ impl<M: ToolDispatcher> ToolDispatcher for MockDispatcher<M> {
 
 #[cfg(test)]
 mod tests {
-    use rewind_core::{RecordedSignal, Tool, ToolRoute};
+    use rewind_core::{Action, ActionRoute, RecordedSignal};
     use serde_json::json;
 
     use super::*;
     use crate::ports::{NamespaceName, RunRef, TaskToken, TenantId};
 
-    fn call(seq: u32, tool: &str, args: JsonValue) -> ToolCall {
-        ToolCall {
+    fn call(seq: u32, action: &str, args: JsonValue) -> Call {
+        Call {
             run: RunRef::new(TenantId::local(), RunId::from_u128(1)),
             namespace: NamespaceName::new(NamespaceName::LOCAL).unwrap(),
             labels: Default::default(),
             seq: Seq(seq),
-            tool: Tool::new(tool, ToolRoute::Host { group: None }, json!({})),
+            action: Action::new(action, ActionRoute::Host { group: None }, json!({})),
             server: None,
             api: None,
             args,
@@ -378,14 +378,14 @@ mod tests {
         Cassette {
             calls: vec![
                 RecordedCall {
-                    tool: "a".into(),
+                    action: "a".into(),
                     args: json!({ "n": 1 }),
-                    outcome: ToolOutcome::Result(json!("first")),
+                    outcome: ActionOutcome::Result(json!("first")),
                 },
                 RecordedCall {
-                    tool: "a".into(),
+                    action: "a".into(),
                     args: json!({ "n": 2 }),
-                    outcome: ToolOutcome::Result(json!("second")),
+                    outcome: ActionOutcome::Result(json!("second")),
                 },
             ],
             signals: vec![RecordedSignal {
@@ -404,16 +404,16 @@ mod tests {
         assert_eq!(cassette.answer(&call(1, "a", json!({ "n": 2 }))), None);
         assert_eq!(
             cassette.answer(&call(1, "a", json!({ "n": 1 }))),
-            Some(ToolOutcome::Result(json!("first")))
+            Some(ActionOutcome::Result(json!("first")))
         );
         // The same call again gets the same answer.
         assert_eq!(
             cassette.answer(&call(1, "a", json!({ "n": 1 }))),
-            Some(ToolOutcome::Result(json!("first")))
+            Some(ActionOutcome::Result(json!("first")))
         );
         assert_eq!(
             cassette.answer(&call(2, "a", json!({ "n": 2 }))),
-            Some(ToolOutcome::Result(json!("second")))
+            Some(ActionOutcome::Result(json!("second")))
         );
         assert_eq!(cassette.answer(&call(3, "a", json!({ "n": 1 }))), None);
     }
@@ -423,11 +423,11 @@ mod tests {
         let cassette = CassetteDispatcher::new(cassette(Matching::ByArgs));
         assert_eq!(
             cassette.answer(&call(1, "a", json!({ "n": 2 }))),
-            Some(ToolOutcome::Result(json!("second")))
+            Some(ActionOutcome::Result(json!("second")))
         );
         assert_eq!(
             cassette.answer(&call(2, "a", json!({ "n": 1 }))),
-            Some(ToolOutcome::Result(json!("first")))
+            Some(ActionOutcome::Result(json!("first")))
         );
         // Each recorded call is handed out once.
         assert_eq!(cassette.answer(&call(3, "a", json!({ "n": 1 }))), None);
@@ -438,7 +438,7 @@ mod tests {
     async fn sources_are_tried_in_order() {
         let mocks = Mocks {
             handlers: StaticDispatcher::from_json(&json!({ "b": "from the mocks" })).unwrap(),
-            tools: BTreeSet::from(["b".to_owned()]),
+            actions: BTreeSet::from(["b".to_owned()]),
         };
         let dispatcher = MockDispatcher::new()
             .with_cassette(cassette(Matching::ByArgs))
@@ -464,7 +464,7 @@ mod tests {
         );
         assert!(matches!(
             answer(call(4, "c", json!({}))).await,
-            Dispatched::Failed(ToolFailure { message, .. }) if message == "nope"
+            Dispatched::Failed(ActionFailure { message, .. }) if message == "nope"
         ));
         match answer(call(5, "d", json!({ "x": 1 }))).await {
             Dispatched::Failed(failure) => {
@@ -481,12 +481,12 @@ mod tests {
         let rules = BTreeMap::from([(
             "a".to_owned(),
             vec![
-                ToolRule {
+                ActionRule {
                     args: Some(json!({ "n": 1 })),
-                    answer: ToolOutcome::Result(json!("rule, once")),
+                    answer: ActionOutcome::Result(json!("rule, once")),
                     times: Some(1),
                 },
-                ToolRule::always(ToolOutcome::Result(json!("rule, always"))),
+                ActionRule::always(ActionOutcome::Result(json!("rule, always"))),
             ],
         )]);
         let dispatcher = MockDispatcher::new()

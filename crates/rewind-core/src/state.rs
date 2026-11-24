@@ -83,7 +83,7 @@ pub struct RunState {
     epoch: Option<Epoch>,
     expires_at: Option<Timestamp>,
     mode: Option<RunMode>,
-    pending_tool_calls: BTreeMap<Seq, String>,
+    pending_calls: BTreeMap<Seq, String>,
     pending_timers: BTreeMap<Seq, Timestamp>,
     /// The index of the entry that opened each pending call and timer.
     opened: BTreeMap<Seq, u64>,
@@ -109,7 +109,7 @@ impl RunState {
             epoch: None,
             expires_at: None,
             mode: None,
-            pending_tool_calls: BTreeMap::new(),
+            pending_calls: BTreeMap::new(),
             pending_timers: BTreeMap::new(),
             opened: BTreeMap::new(),
             awaited_signals: Vec::new(),
@@ -166,8 +166,8 @@ impl RunState {
 
     fn apply_command(&mut self, index: u64, command: &Command) {
         match command {
-            Command::ScheduleToolCall { seq, tool, .. } => {
-                self.pending_tool_calls.insert(*seq, tool.clone());
+            Command::ScheduleCall { seq, action, .. } => {
+                self.pending_calls.insert(*seq, action.clone());
                 self.opened.insert(*seq, index);
             }
             Command::StartTimer { seq, fire_at, .. } => {
@@ -203,8 +203,8 @@ impl RunState {
 
     fn apply_completion(&mut self, completion: &Completion) {
         match completion {
-            Completion::ToolCallCompleted { seq, .. } | Completion::ToolCallFailed { seq, .. } => {
-                if self.pending_tool_calls.remove(seq).is_some() {
+            Completion::CallCompleted { seq, .. } | Completion::CallFailed { seq, .. } => {
+                if self.pending_calls.remove(seq).is_some() {
                     self.opened.remove(seq);
                 }
             }
@@ -232,7 +232,7 @@ impl RunState {
     fn end(&mut self, status: RunStatus, outcome: RunOutcome) {
         self.status = status;
         self.outcome = Some(outcome);
-        self.pending_tool_calls.clear();
+        self.pending_calls.clear();
         self.pending_timers.clear();
         self.opened.clear();
         self.awaited_signals.clear();
@@ -260,9 +260,9 @@ impl RunState {
         self.mode
     }
 
-    /// Tool calls scheduled and still without an outcome, by `seq`.
-    pub fn pending_tool_calls(&self) -> &BTreeMap<Seq, String> {
-        &self.pending_tool_calls
+    /// Calls scheduled and still without an outcome, by `seq`.
+    pub fn pending_calls(&self) -> &BTreeMap<Seq, String> {
+        &self.pending_calls
     }
 
     /// Timers started and neither fired nor cancelled, by `seq`, with their `fire_at`.
@@ -271,7 +271,7 @@ impl RunState {
     }
 
     /// The index of the entry that opened the pending call or timer `seq`
-    /// (`schedule_tool_call`, `start_timer`): what is derived from a pending call or timer
+    /// (`schedule_call`, `start_timer`): what is derived from a pending call or timer
     /// reads its opening entry without walking the history.
     pub fn opened_by(&self, seq: Seq) -> Option<u64> {
         self.opened.get(&seq).copied()
@@ -335,9 +335,9 @@ mod tests {
     }
 
     fn call(seq: u32) -> Event {
-        Event::Command(Command::ScheduleToolCall {
+        Event::Command(Command::ScheduleCall {
             seq: Seq(seq),
-            tool: format!("tool_{seq}"),
+            action: format!("action_{seq}"),
             args: json!({}).into(),
             callsite: None,
         })
@@ -385,7 +385,7 @@ mod tests {
             call(1),
             call(2),
             timer(3, 5_000),
-            Event::Completion(Completion::ToolCallCompleted {
+            Event::Completion(Completion::CallCompleted {
                 seq: Seq(2),
                 result: json!(1).into(),
             }),
@@ -398,11 +398,7 @@ mod tests {
         assert_eq!(state.epoch(), Some(Epoch(1)));
         assert_eq!(state.expires_at(), Some(Timestamp(9_999)));
         assert_eq!(
-            state
-                .pending_tool_calls()
-                .keys()
-                .copied()
-                .collect::<Vec<_>>(),
+            state.pending_calls().keys().copied().collect::<Vec<_>>(),
             [Seq(1)]
         );
         assert_eq!(
@@ -454,7 +450,7 @@ mod tests {
         let state = RunState::from_history(&history).unwrap();
         assert_eq!(state.status(), RunStatus::Aborted);
         assert!(state.is_terminal());
-        assert!(state.pending_tool_calls().is_empty());
+        assert!(state.pending_calls().is_empty());
         assert!(state.pending_timers().is_empty());
         assert!(state.awaited_signals().is_empty());
         assert!(matches!(state.outcome(), Some(RunOutcome::Aborted { .. })));

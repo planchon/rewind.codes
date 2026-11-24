@@ -1,4 +1,4 @@
-//! The egress checks (`archi/04-tools.md`, "The http tool and egress" and "Where MCP servers and
+//! The egress checks (`archi/04-tools.md`, "The `http` action and egress" and "Where MCP servers and
 //! APIs may be"; `archi/06-storage-and-scale.md`, "Security"):
 //!
 //! 1. The name is resolved once ([`CheckedResolver`], the only resolver of the client).
@@ -11,9 +11,9 @@
 //! Redirects go through them again ([`crate::client`]).
 //!
 //! [`Egress`] holds them, for every request a deployment sends where a tenant says: the `http`
-//! tool's (whose allow-list `rewind-mcp` checks first), the MCP servers' and the APIs', the
+//! action's (whose allow-list `rewind-mcp` checks first), the MCP servers' and the APIs', the
 //! OpenAPI documents' and the lifecycle webhooks'. For MCP servers and APIs, an operator may let
-//! some internal hosts and networks through ([`InternalAllowList`], `--allow-internal-tools`).
+//! some internal hosts and networks through ([`InternalAllowList`], `--allow-internal-addresses`).
 
 use std::error::Error;
 use std::fmt;
@@ -299,7 +299,7 @@ impl Egress {
 }
 
 /// The internal hosts and networks an operator lets a deployment's MCP servers and APIs be
-/// reached at, despite the egress checks (`--allow-internal-tools`): names
+/// reached at, despite the egress checks (`--allow-internal-addresses`): names
 /// (`mcp.internal.example`), the subdomains of a name (`*.svc.cluster.local`, not the name
 /// itself), addresses (`10.0.0.7`, `fd00::7`) and networks in CIDR notation (`10.20.0.0/16`,
 /// `fd00::/8`). A name lets through every address it resolves to; an address or a network lets

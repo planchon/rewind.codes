@@ -36,7 +36,7 @@ fn call(seq: u64) -> CallIdentity {
             ("goal".to_owned(), "q3-report".to_owned()),
         ]),
         run: RUN.into(),
-        tool: "dax.createMeasure".into(),
+        action: "dax.createMeasure".into(),
         idempotency_key: format!("{RUN}/{seq}"),
         jti: format!("{RUN}/{seq}/1"),
     }

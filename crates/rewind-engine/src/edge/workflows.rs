@@ -252,7 +252,7 @@ impl<P: Plane> Edge<P> {
         if secrets.is_empty() && action_set.taking_secrets().next().is_none() {
             return Ok(());
         }
-        let imports = self.plane.executor().tool_imports(script);
+        let imports = self.plane.executor().action_imports(script);
         let check = AttachmentCheck {
             tenant,
             namespace: None,

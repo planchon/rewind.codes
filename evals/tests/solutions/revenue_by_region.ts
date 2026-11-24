@@ -1,4 +1,4 @@
-import { shop } from "rewind:tools";
+import { shop } from "rewind:actions";
 
 export default async function main() {
   const totals: Record<string, number> = {};

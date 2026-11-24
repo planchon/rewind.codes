@@ -22,7 +22,7 @@ use axum::middleware::{Next, from_fn, from_fn_with_state};
 use axum::response::{IntoResponse, Response};
 use rewind_agent_tools::{Api, ApiError as ToolError, McpApi, Organization};
 use rewind_api::action_sets::{
-    ActionSet, ActionSetList, CreateActionSet, SearchQuery, ToolSearchResults,
+    ActionSearchResults, ActionSet, ActionSetList, CreateActionSet, SearchQuery,
 };
 use rewind_api::common::Duration;
 use rewind_api::events::Entry;
@@ -296,12 +296,12 @@ impl Api for ServerApi {
         Api::create_action_set(&self.local, action_set).await
     }
 
-    async fn search_tools(
+    async fn search_actions(
         &self,
         action_set: &str,
         query: &SearchQuery,
-    ) -> Result<ToolSearchResults, ToolError> {
-        Api::search_tools(&self.local, action_set, query).await
+    ) -> Result<ActionSearchResults, ToolError> {
+        Api::search_actions(&self.local, action_set, query).await
     }
 
     /// The gate runs the version's suite: on a worker.

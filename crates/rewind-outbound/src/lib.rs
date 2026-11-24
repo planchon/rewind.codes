@@ -3,11 +3,11 @@
 //! `archi/06-storage-and-scale.md`, "Security").
 //!
 //! - **The egress checks** ([`Egress`]), one implementation for every request a deployment
-//!   sends where a tenant says (the `http` tool, MCP servers, APIs, OpenAPI documents, lifecycle
+//!   sends where a tenant says (the `http` action, MCP servers, APIs, OpenAPI documents, lifecycle
 //!   webhooks): a name resolved once, private, loopback, link-local and cloud-metadata addresses
-//!   refused unless the operator allows them ([`InternalAllowList`], `--allow-internal-tools`),
+//!   refused unless the operator allows them ([`InternalAllowList`], `--allow-internal-addresses`),
 //!   the connection to the checked address.
-//! - **The HTTP client of a tenant's servers** ([`ToolEgress::client`]), built on them: redirects
+//! - **The HTTP client of a tenant's servers** ([`ActionEgress::client`]), built on them: redirects
 //!   followed only within the server's origin, with a 307 or a 308, up to 5 times, each checked
 //!   again ([`Redirects`]), and whether it reached an internal server, whose answers are never
 //!   quoted to the tenant ([`Reached`]). The MCP client's streamable HTTP transport, the API
@@ -29,7 +29,7 @@ mod egress;
 mod secret;
 mod signing;
 
-pub use client::{MAX_REDIRECTS, Reached, Redirects, ToolEgress};
+pub use client::{ActionEgress, MAX_REDIRECTS, Reached, Redirects};
 pub use egress::{
     AddressPolicy, Egress, InternalAllowList, NameResolver, Reach, Refused, Resolving,
     SystemResolver, domain, forbidden, is_subdomain,

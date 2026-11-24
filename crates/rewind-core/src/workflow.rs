@@ -27,7 +27,8 @@ use crate::action_set::{is_identifier, is_reserved};
 use crate::canonical::canonical_json;
 use crate::digest::Digest;
 use crate::event::{
-    AbortKind, AbortReason, CancelReason, ScriptError, ToolFailure, ToolFailureKind, ToolOutcome,
+    AbortKind, AbortReason, ActionFailure, ActionFailureKind, ActionOutcome, CancelReason,
+    ScriptError,
 };
 use crate::ids::RunId;
 use crate::payload::Payload;
@@ -403,8 +404,8 @@ impl PinnedWorkflow {
     }
 
     /// The name of its built-in: `workflows.<name>.start` or `workflows.<name>.signal`.
-    pub fn tool_name(&self, op: WorkflowOp) -> String {
-        format!("{WORKFLOWS_NAMESPACE}.{}.{}", self.name, op.as_str())
+    pub fn action_name(&self, op: WorkflowOp) -> String {
+        format!("{WORKFLOWS_GROUP}.{}.{}", self.name, op.as_str())
     }
 
     /// Its entry in the pinned action set document v1.
@@ -428,7 +429,7 @@ impl fmt::Display for PinnedWorkflow {
 }
 
 /// The namespace of the workflows' built-ins, reserved in every action set.
-pub const WORKFLOWS_NAMESPACE: &str = "workflows";
+pub const WORKFLOWS_GROUP: &str = "workflows";
 
 /// What a workflow's built-in does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -450,9 +451,9 @@ impl WorkflowOp {
 
     /// The workflow and the operation of a workflow's built-in, by its name:
     /// `workflows.triage.start` is `("triage", Start)`. The namespace is reserved, so no other
-    /// tool has such a name.
-    pub fn of_tool(tool: &str) -> Option<(&str, WorkflowOp)> {
-        let rest = tool.strip_prefix(WORKFLOWS_NAMESPACE)?.strip_prefix('.')?;
+    /// action has such a name.
+    pub fn of_action(action: &str) -> Option<(&str, WorkflowOp)> {
+        let rest = action.strip_prefix(WORKFLOWS_GROUP)?.strip_prefix('.')?;
         let (workflow, op) = rest.rsplit_once('.')?;
         let op = match op {
             "start" => WorkflowOp::Start,
@@ -571,16 +572,16 @@ impl RunEnd {
     /// What a cassette records for the start of a run that ended so, and what mock mode makes
     /// of it again ([`from_mock`](Self::from_mock)): its output, or a failure that says how it
     /// ended.
-    pub fn to_mock(&self) -> ToolOutcome {
+    pub fn to_mock(&self) -> ActionOutcome {
         let failure = |message: String| {
-            ToolOutcome::Failure(ToolFailure {
-                kind: ToolFailureKind::Error,
+            ActionOutcome::Failure(ActionFailure {
+                kind: ActionFailureKind::Error,
                 message,
                 data: None,
             })
         };
         match self {
-            RunEnd::Completed { output } => ToolOutcome::Result(output.clone()),
+            RunEnd::Completed { output } => ActionOutcome::Result(output.clone()),
             RunEnd::Failed { error } => failure(format!("{}: {}", error.name, error.message)),
             RunEnd::Cancelled { error } => {
                 failure(format!("cancelled: {}: {}", error.name, error.message))
@@ -591,10 +592,10 @@ impl RunEnd {
 
     /// The end of a run that mock mode answered in place of starting it: a result is its
     /// output, a failure its error (`archi/03-execution.md`, "Workflows across runs").
-    pub fn from_mock(outcome: ToolOutcome) -> Self {
+    pub fn from_mock(outcome: ActionOutcome) -> Self {
         match outcome {
-            ToolOutcome::Result(output) => RunEnd::Completed { output },
-            ToolOutcome::Failure(failure) => RunEnd::Failed {
+            ActionOutcome::Result(output) => RunEnd::Completed { output },
+            ActionOutcome::Failure(failure) => RunEnd::Failed {
                 error: ScriptError {
                     name: "Error".into(),
                     message: failure.message,
@@ -684,7 +685,7 @@ mod tests {
         let pinned = workflow.pinned();
         assert_eq!(pinned.version, workflow.version());
         assert_eq!(
-            pinned.tool_name(WorkflowOp::Start),
+            pinned.action_name(WorkflowOp::Start),
             "workflows.triage.start"
         );
     }
@@ -810,34 +811,34 @@ mod tests {
     #[test]
     fn builtins_are_found_by_name() {
         assert_eq!(
-            WorkflowOp::of_tool("workflows.triage.start"),
+            WorkflowOp::of_action("workflows.triage.start"),
             Some(("triage", WorkflowOp::Start))
         );
         assert_eq!(
-            WorkflowOp::of_tool("workflows.triage.signal"),
+            WorkflowOp::of_action("workflows.triage.signal"),
             Some(("triage", WorkflowOp::Signal))
         );
-        for tool in [
+        for action in [
             "workflows.triage",
             "workflows.triage.stop",
             "workflows.a.b.start",
             "github.triage.start",
             "workflows..start",
         ] {
-            assert_eq!(WorkflowOp::of_tool(tool), None, "{tool}");
+            assert_eq!(WorkflowOp::of_action(action), None, "{action}");
         }
     }
 
     #[test]
     fn mock_outcomes_are_ends() {
-        let end = RunEnd::from_mock(ToolOutcome::Result(json!({ "closed": 1 })));
+        let end = RunEnd::from_mock(ActionOutcome::Result(json!({ "closed": 1 })));
         assert_eq!(
             end,
             RunEnd::Completed {
                 output: json!({ "closed": 1 })
             }
         );
-        assert_eq!(end.to_mock(), ToolOutcome::Result(json!({ "closed": 1 })));
+        assert_eq!(end.to_mock(), ActionOutcome::Result(json!({ "closed": 1 })));
         let failed = RunEnd::Failed {
             error: ScriptError {
                 name: "TypeError".into(),
@@ -845,12 +846,12 @@ mod tests {
                 stack: None,
             },
         };
-        let ToolOutcome::Failure(failure) = failed.to_mock() else {
+        let ActionOutcome::Failure(failure) = failed.to_mock() else {
             panic!("a failed run is a failure");
         };
         assert_eq!(failure.message, "TypeError: x");
         assert_eq!(
-            RunEnd::from_mock(ToolOutcome::Failure(failure)).status(),
+            RunEnd::from_mock(ActionOutcome::Failure(failure)).status(),
             "failed"
         );
     }

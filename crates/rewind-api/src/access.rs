@@ -178,7 +178,7 @@ impl Permission {
         match self {
             Permission::RunsRead => {
                 "Read runs, their statistics and failure groups, a run's state, trace, entries, \
-                 event stream and journal, the scripts, the tool statistics and payloads."
+                 event stream and journal, the scripts, the action statistics and payloads."
             }
             Permission::RunsStart => {
                 "Start and fork runs, and check and test scripts (`/v1/check`, `/v1/test`)."
@@ -187,7 +187,7 @@ impl Permission {
             Permission::RunsQuarantine => "Release a quarantined run, or give it up.",
             Permission::RunsDelete => "Erase a run, its payloads included.",
             Permission::ActionsRead => {
-                "List action sets and workflows, read their declarations and search their tools."
+                "List action sets and workflows, read their declarations and search their actions."
             }
             Permission::ActionsWrite => "Register an action set, and save a workflow.",
             Permission::ScriptsWrite => {
@@ -518,7 +518,7 @@ pub struct CreateApiKey {
     pub name: String,
     /// A built-in role, a role of the tenant, or `operator` (only from the operator).
     pub role: String,
-    /// The key only sees runs carrying all these labels: an agent's tools see only their own
+    /// The key only sees runs carrying all these labels: an agent's actions see only their own
     /// conversation's runs.
     #[serde(default, skip_serializing_if = "Labels::is_empty")]
     pub allowed_labels: Labels,

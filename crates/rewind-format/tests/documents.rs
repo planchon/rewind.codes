@@ -8,12 +8,12 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use rewind_core::{
-    ActionSet, Api, ApiOperation, ApiParameter, Builtin, CallOrder, Cassette, Digest, Expectations,
-    ExpectedCall, ExpectedError, HttpMethod, Interruption, Matching, McpServer, McpTransport,
-    ParameterLocation, RecordedCall, RecordedSignal, RetiredTest, RunStatus, SecretPlacement,
-    SecretRef, Seed, SignalWhen, Suite, SuiteTest, Test, TestOrigin, TestSignal, Timestamp, Tool,
-    ToolAuth, ToolFailure, ToolFailureKind, ToolOutcome, ToolPolicy, ToolRoute, ToolRule,
-    UpdatedTest, Workflow, WorkflowSchemas, World,
+    Action, ActionAuth, ActionFailure, ActionFailureKind, ActionOutcome, ActionPolicy, ActionRoute,
+    ActionRule, ActionSet, Api, ApiOperation, ApiParameter, Builtin, CallOrder, Cassette, Digest,
+    Expectations, ExpectedCall, ExpectedError, HttpMethod, Interruption, Matching, McpServer,
+    McpTransport, ParameterLocation, RecordedCall, RecordedSignal, RetiredTest, RunStatus,
+    SecretPlacement, SecretRef, Seed, SignalWhen, Suite, SuiteTest, Test, TestOrigin, TestSignal,
+    Timestamp, UpdatedTest, Workflow, WorkflowSchemas, World,
 };
 use rewind_format::{
     FormatError, decode_action_set, decode_cassette, decode_test, decode_workflow,
@@ -32,7 +32,7 @@ fn action_set() -> ActionSet {
             url: "https://mcp.example.com/github".into(),
         },
         concurrency: 4,
-        auth: ToolAuth::None,
+        auth: ActionAuth::None,
     };
     let files = McpServer::new(
         "files",
@@ -42,10 +42,10 @@ fn action_set() -> ActionSet {
             env: BTreeMap::from([("LOG".to_owned(), "warn".to_owned())]),
         },
     );
-    let mcp = |server: &str| ToolRoute::Mcp {
+    let mcp = |server: &str| ActionRoute::Mcp {
         server: server.into(),
     };
-    let mut list_issues = Tool::new(
+    let mut list_issues = Action::new(
         "github.list_issues",
         mcp("github"),
         json!({
@@ -56,36 +56,36 @@ fn action_set() -> ActionSet {
     );
     list_issues.description = Some("List the issues of a repository.".into());
     list_issues.output_schema = Some(json!({ "type": "array" }));
-    let mut close_issue = Tool::new(
+    let mut close_issue = Action::new(
         "github.close_issue",
         mcp("github"),
         json!({ "type": "object" }),
     );
-    close_issue.policy = ToolPolicy {
+    close_issue.policy = ActionPolicy {
         on_interruption: Interruption::AtMostOnce,
         approval: true,
         execution_timeout: Some(Duration::from_secs(30)),
         heartbeat_timeout: Duration::from_secs(20),
         concurrency: 2,
     };
-    let read_file = Tool::new("files.read", mcp("files"), json!({ "type": "object" }));
-    let mut ask_user = Tool::new(
+    let read_file = Action::new("files.read", mcp("files"), json!({ "type": "object" }));
+    let mut ask_user = Action::new(
         "harness.ask_user",
-        ToolRoute::Host {
+        ActionRoute::Host {
             group: Some("harness".into()),
         },
         json!({ "type": "object", "properties": { "question": { "type": "string" } } }),
     );
     ask_user.policy.concurrency = 1;
-    let notify = Tool::new("notify", ToolRoute::Host { group: None }, json!({}));
-    let http = Tool::new(
+    let notify = Action::new("notify", ActionRoute::Host { group: None }, json!({}));
+    let http = Action::new(
         "http",
-        ToolRoute::Builtin(Builtin::Http {
+        ActionRoute::Builtin(Builtin::Http {
             allowed_hosts: vec!["api.example.com".into(), "hooks.example.com".into()],
         }),
         json!({}),
     );
-    let webhook = Tool::new("webhook", ToolRoute::Builtin(Builtin::Webhook), json!({}));
+    let webhook = Action::new("webhook", ActionRoute::Builtin(Builtin::Webhook), json!({}));
     ActionSet::new(
         [github, files],
         [
@@ -105,24 +105,24 @@ fn cassette() -> Cassette {
     Cassette {
         calls: vec![
             RecordedCall {
-                tool: "github.list_issues".into(),
+                action: "github.list_issues".into(),
                 args: json!({ "state": "open", "repo": "acme/api" }),
-                outcome: ToolOutcome::Result(json!([{ "number": 4, "title": "Crash" }])),
+                outcome: ActionOutcome::Result(json!([{ "number": 4, "title": "Crash" }])),
             },
             RecordedCall {
-                tool: "slack.post_message".into(),
+                action: "slack.post_message".into(),
                 args: json!({ "channel": "#triage", "text": "1 stale issue" }),
-                outcome: ToolOutcome::Failure(ToolFailure {
-                    kind: ToolFailureKind::Unavailable,
+                outcome: ActionOutcome::Failure(ActionFailure {
+                    kind: ActionFailureKind::Unavailable,
                     message: "rate limited".into(),
                     data: Some(json!({ "retry_after": 30 })),
                 }),
             },
             RecordedCall {
-                tool: "github.close_issue".into(),
+                action: "github.close_issue".into(),
                 args: json!({ "number": 4 }),
-                outcome: ToolOutcome::Failure(ToolFailure {
-                    kind: ToolFailureKind::OutcomeUnknown,
+                outcome: ActionOutcome::Failure(ActionFailure {
+                    kind: ActionFailureKind::OutcomeUnknown,
                     message: "connection reset".into(),
                     data: None,
                 }),
@@ -166,8 +166,8 @@ fn an_action_set_document_hashes_to_the_action_set_digest() {
 }
 
 #[test]
-fn an_action_set_document_may_list_tools_in_any_order() {
-    let reordered = r#"{"v":1,"tools":[
+fn an_action_set_document_may_list_actions_in_any_order() {
+    let reordered = r#"{"v":1,"actions":[
         {"name":"b","route":{"type":"host"},"schemas":{"input":{}},"policy":{"on_interruption":"retry","approval":false,"heartbeat_timeout_ms":60000,"concurrency":16}},
         {"name":"a","route":{"type":"host"},"schemas":{"input":{}},"policy":{"on_interruption":"retry","approval":false,"heartbeat_timeout_ms":60000,"concurrency":16}}
     ],"servers":[]}"#;
@@ -200,8 +200,8 @@ fn a_hand_written_cassette_decodes() {
       "v": 1,
       "matching": "by_args",
       "calls": [
-        { "tool": "github.get_issue", "args": { "number": 4 }, "outcome": { "result": { "title": "Crash" } } },
-        { "tool": "slack.post", "args": {}, "outcome": { "error": { "kind": "error", "message": "no" } } }
+        { "action": "github.get_issue", "args": { "number": 4 }, "outcome": { "result": { "title": "Crash" } } },
+        { "action": "slack.post", "args": {}, "outcome": { "error": { "kind": "error", "message": "no" } } }
       ],
       "signals": []
     }"#;
@@ -210,32 +210,32 @@ fn a_hand_written_cassette_decodes() {
     assert_eq!(cassette.calls.len(), 2);
     assert_eq!(
         cassette.calls[0].outcome,
-        ToolOutcome::Result(json!({ "title": "Crash" }))
+        ActionOutcome::Result(json!({ "title": "Crash" }))
     );
 }
 
 #[test]
 fn rejects_what_v1_does_not_define() {
     let policy = r#""policy":{"on_interruption":"retry","approval":false,"heartbeat_timeout_ms":60000,"concurrency":16}"#;
-    let tool = |route: &str, extra: &str| {
+    let action = |route: &str, extra: &str| {
         format!(
-            r#"{{"v":1,"servers":[],"tools":[{{"name":"webhook","route":{route},"schemas":{{"input":{{}}}},{policy}{extra}}}]}}"#
+            r#"{{"v":1,"servers":[],"actions":[{{"name":"webhook","route":{route},"schemas":{{"input":{{}}}},{policy}{extra}}}]}}"#
         )
     };
-    assert!(decode_action_set(&tool(r#"{"type":"builtin","builtin":"webhook"}"#, "")).is_ok());
+    assert!(decode_action_set(&action(r#"{"type":"builtin","builtin":"webhook"}"#, "")).is_ok());
 
     let invalid_action_sets = [
-        tool(r#"{"type":"builtin","builtin":"webhook"}"#, r#","extra":1"#),
-        tool(r#"{"type":"builtin","builtin":"ftp"}"#, ""),
-        tool(r#"{"type":"teleport"}"#, ""),
-        tool(r#"{"type":"builtin","builtin":"webhook","allowed_hosts":["a"]}"#, ""),
-        tool(r#"{"type":"builtin","builtin":"http"}"#, ""),
-        tool(r#"{"type":"host","group":"g"}"#, ""),
-        tool(r#"{"type":"mcp","server":"github"}"#, ""),
-        r#"{"v":1,"servers":[],"tools":[],"extra":[]}"#.to_owned(),
+        action(r#"{"type":"builtin","builtin":"webhook"}"#, r#","extra":1"#),
+        action(r#"{"type":"builtin","builtin":"ftp"}"#, ""),
+        action(r#"{"type":"teleport"}"#, ""),
+        action(r#"{"type":"builtin","builtin":"webhook","allowed_hosts":["a"]}"#, ""),
+        action(r#"{"type":"builtin","builtin":"http"}"#, ""),
+        action(r#"{"type":"host","group":"g"}"#, ""),
+        action(r#"{"type":"mcp","server":"github"}"#, ""),
+        r#"{"v":1,"servers":[],"actions":[],"extra":[]}"#.to_owned(),
         r#"{"v":1,"servers":[]}"#.to_owned(),
-        r#"{"v":1,"servers":[{"name":"s","transport":{"type":"ws","url":"x"},"concurrency":1}],"tools":[]}"#.to_owned(),
-        r#"{"v":1,"servers":[{"name":"s","transport":{"type":"http","url":"x"},"concurrency":0}],"tools":[]}"#.to_owned(),
+        r#"{"v":1,"servers":[{"name":"s","transport":{"type":"ws","url":"x"},"concurrency":1}],"actions":[]}"#.to_owned(),
+        r#"{"v":1,"servers":[{"name":"s","transport":{"type":"http","url":"x"},"concurrency":0}],"actions":[]}"#.to_owned(),
     ];
     for json in &invalid_action_sets {
         assert!(
@@ -248,11 +248,11 @@ fn rejects_what_v1_does_not_define() {
         );
     }
     assert_eq!(
-        decode_action_set(r#"{"v":2,"servers":[],"tools":[]}"#),
+        decode_action_set(r#"{"v":2,"servers":[],"actions":[]}"#),
         Err(FormatError::UnsupportedVersion(json!(2)))
     );
     assert_eq!(
-        decode_action_set(r#"{"servers":[],"tools":[]}"#),
+        decode_action_set(r#"{"servers":[],"actions":[]}"#),
         Err(FormatError::MissingVersion)
     );
 
@@ -260,9 +260,9 @@ fn rejects_what_v1_does_not_define() {
         r#"{"v":1,"matching":"sequential","calls":[],"signals":[],"extra":1}"#,
         r#"{"v":1,"matching":"random","calls":[],"signals":[]}"#,
         r#"{"v":1,"calls":[],"signals":[]}"#,
-        r#"{"v":1,"matching":"sequential","calls":[{"tool":"t","args":{},"outcome":{"result":1,"error":{"kind":"error","message":"m"}}}],"signals":[]}"#,
-        r#"{"v":1,"matching":"sequential","calls":[{"tool":"t","args":{}}],"signals":[]}"#,
-        r#"{"v":1,"matching":"sequential","calls":[{"tool":"t","args":{},"outcome":{"error":{"kind":"bad","message":"m"}}}],"signals":[]}"#,
+        r#"{"v":1,"matching":"sequential","calls":[{"action":"t","args":{},"outcome":{"result":1,"error":{"kind":"error","message":"m"}}}],"signals":[]}"#,
+        r#"{"v":1,"matching":"sequential","calls":[{"action":"t","args":{}}],"signals":[]}"#,
+        r#"{"v":1,"matching":"sequential","calls":[{"action":"t","args":{},"outcome":{"error":{"kind":"bad","message":"m"}}}],"signals":[]}"#,
         r#"{"v":1,"matching":"sequential","calls":[],"signals":[{"name":"s","payload":1}]}"#,
     ];
     for json in invalid_cassettes {
@@ -382,7 +382,7 @@ fn the_action_set_with_workflows_fixture_decodes_and_hashes_to_its_digest() {
 const ACTION_SET_WITH_APIS: &str = include_str!("fixtures/action-set-apis.v1.json");
 const WORKFLOW_WITH_SECRETS: &str = include_str!("fixtures/workflow-secrets.v1.json");
 
-/// Every kind of `auth`, an API with every place of a parameter, and an API tool.
+/// Every kind of `auth`, an API with every place of a parameter, and an API action.
 fn action_set_with_apis() -> ActionSet {
     let mut github = McpServer::new(
         "github",
@@ -390,14 +390,14 @@ fn action_set_with_apis() -> ActionSet {
             url: "https://mcp.example.com/github".into(),
         },
     );
-    github.auth = ToolAuth::Secret(SecretPlacement::bearer());
+    github.auth = ActionAuth::Secret(SecretPlacement::bearer());
     let mut crm = McpServer::new(
         "crm",
         McpTransport::Http {
             url: "https://crm.example.com/mcp".into(),
         },
     );
-    crm.auth = ToolAuth::Rewind;
+    crm.auth = ActionAuth::Rewind;
     let mut files = McpServer::new(
         "files",
         McpTransport::Stdio {
@@ -406,21 +406,21 @@ fn action_set_with_apis() -> ActionSet {
             env: BTreeMap::new(),
         },
     );
-    files.auth = ToolAuth::Secret(SecretPlacement::Env {
+    files.auth = ActionAuth::Secret(SecretPlacement::Env {
         variable: "FILES_TOKEN".into(),
     });
     let mut dax = Api::new("dax", "https://api.dax.example.com/v1");
-    dax.auth = ToolAuth::Rewind;
+    dax.auth = ActionAuth::Rewind;
     dax.concurrency = 4;
     let mut zendesk = Api::new("zendesk", "https://acme.zendesk.example.com/api");
-    zendesk.auth = ToolAuth::Secret(SecretPlacement::basic());
+    zendesk.auth = ActionAuth::Secret(SecretPlacement::basic());
     let mut keyed = Api::new("weather", "https://weather.example.com");
-    keyed.auth = ToolAuth::Secret(SecretPlacement::header("X-Api-Key"));
+    keyed.auth = ActionAuth::Secret(SecretPlacement::header("X-Api-Key"));
     let parameter = |name: &str, location| ApiParameter {
         name: name.into(),
         location,
     };
-    let mut create_measure = Tool::api(
+    let mut create_measure = Action::api(
         "dax.createMeasure",
         "dax",
         ApiOperation {
@@ -438,7 +438,7 @@ fn action_set_with_apis() -> ActionSet {
     );
     create_measure.description = Some("Create a measure.".into());
     create_measure.output_schema = Some(json!({ "type": "object" }));
-    let get_ticket = Tool::api(
+    let get_ticket = Action::api(
         "zendesk.get_ticket",
         "zendesk",
         ApiOperation {
@@ -450,10 +450,10 @@ fn action_set_with_apis() -> ActionSet {
         },
         json!({ "type": "object" }),
     );
-    let mcp = |server: &str, tool: &str| {
-        Tool::new(
-            format!("{server}.{tool}"),
-            ToolRoute::Mcp {
+    let mcp = |server: &str, action: &str| {
+        Action::new(
+            format!("{server}.{action}"),
+            ActionRoute::Mcp {
                 server: server.into(),
             },
             json!({}),
@@ -523,14 +523,14 @@ fn the_workflow_with_secrets_fixture_decodes_re_encodes_and_hashes_to_its_versio
 fn rejects_auth_and_apis_v1_does_not_define() {
     let server = |auth: &str| {
         format!(
-            r#"{{"v":1,"servers":[{{"name":"s","transport":{{"type":"http","url":"https://x"}},"concurrency":1,"auth":{auth}}}],"tools":[]}}"#
+            r#"{{"v":1,"servers":[{{"name":"s","transport":{{"type":"http","url":"https://x"}},"concurrency":1,"auth":{auth}}}],"actions":[]}}"#
         )
     };
     assert!(decode_action_set(&server(r#"{"type":"rewind"}"#)).is_ok());
     assert!(decode_action_set(&server(r#"{"type":"secret","header":"X-Key"}"#)).is_ok());
     let api = |fields: &str| {
         format!(
-            r#"{{"v":1,"servers":[],"apis":[{{"name":"a","concurrency":1,{fields}}}],"tools":[]}}"#
+            r#"{{"v":1,"servers":[],"apis":[{{"name":"a","concurrency":1,{fields}}}],"actions":[]}}"#
         )
     };
     assert!(decode_action_set(&api(r#""base_url":"https://x""#)).is_ok());
@@ -545,7 +545,7 @@ fn rejects_auth_and_apis_v1_does_not_define() {
         api(r#""baseUrl":"https://x""#),
         api(r#""base_url":"https://x","extra":1"#),
         api(r#""base_url":"x""#),
-        r#"{"v":1,"servers":[],"tools":[{"name":"a.b","route":{"type":"api","api":"a"},"schemas":{"input":{}},"policy":{"on_interruption":"retry","approval":false,"heartbeat_timeout_ms":60000,"concurrency":16}}]}"#.to_owned(),
+        r#"{"v":1,"servers":[],"actions":[{"name":"a.b","route":{"type":"api","api":"a"},"schemas":{"input":{}},"policy":{"on_interruption":"retry","approval":false,"heartbeat_timeout_ms":60000,"concurrency":16}}]}"#.to_owned(),
     ];
     for json in &invalid {
         assert!(
@@ -608,7 +608,7 @@ fn rejects_workflows_v1_does_not_define() {
         Err(FormatError::UnsupportedVersion(json!(2)))
     );
     let pinned_twice = format!(
-        r#"{{"v":1,"servers":[],"tools":[],"workflows":[{w},{w}]}}"#,
+        r#"{{"v":1,"servers":[],"actions":[],"workflows":[{w},{w}]}}"#,
         w = format_args!(r#"{{"name":"a","version":"{digest}",{schemas}}}"#)
     );
     assert!(matches!(
@@ -655,38 +655,38 @@ fn workflow_with_suite() -> Workflow {
 
 /// Every field and variant of a test.
 fn test_document() -> Test {
-    let mut tools = BTreeMap::new();
-    tools.insert(
+    let mut actions = BTreeMap::new();
+    actions.insert(
         "github.list_issues".to_owned(),
         vec![
-            ToolRule {
+            ActionRule {
                 args: Some(json!({ "state": "open" })),
-                answer: ToolOutcome::Result(json!([{ "number": 4 }])),
+                answer: ActionOutcome::Result(json!([{ "number": 4 }])),
                 times: Some(1),
             },
-            ToolRule {
+            ActionRule {
                 args: None,
-                answer: ToolOutcome::Result(json!(null)),
+                answer: ActionOutcome::Result(json!(null)),
                 times: None,
             },
         ],
     );
-    tools.insert(
+    actions.insert(
         "slack.post_message".to_owned(),
-        vec![ToolRule {
+        vec![ActionRule {
             args: None,
-            answer: ToolOutcome::Failure(ToolFailure {
-                kind: ToolFailureKind::Unavailable,
+            answer: ActionOutcome::Failure(ActionFailure {
+                kind: ActionFailureKind::Unavailable,
                 message: "rate limited".into(),
                 data: Some(json!({ "retryAfter": 30 })),
             }),
             times: None,
         }],
     );
-    tools.insert(
+    actions.insert(
         "workflows.notify.start".to_owned(),
-        vec![ToolRule::always(ToolOutcome::Failure(ToolFailure {
-            kind: ToolFailureKind::Error,
+        vec![ActionRule::always(ActionOutcome::Failure(ActionFailure {
+            kind: ActionFailureKind::Error,
             message: "the child failed".into(),
             data: None,
         }))],
@@ -697,13 +697,13 @@ fn test_document() -> Test {
         start: Some(Timestamp(1_767_225_600_000)),
         seed: Some(Seed::from_bytes([7; 32])),
         world: World {
-            tools,
+            actions,
             mocks: Some("export default {};\n".into()),
             cassette: Some(Cassette {
                 calls: vec![RecordedCall {
-                    tool: "github.close_issue".into(),
+                    action: "github.close_issue".into(),
                     args: json!({ "number": 4 }),
-                    outcome: ToolOutcome::Result(json!({})),
+                    outcome: ActionOutcome::Result(json!({})),
                 }],
                 signals: vec![RecordedSignal {
                     name: "approval".into(),
@@ -729,22 +729,22 @@ fn test_document() -> Test {
             status: Some(RunStatus::Completed),
             output: Some(json!({ "closed": 1 })),
             error: Some(ExpectedError {
-                name: "ToolError".into(),
+                name: "ActionError".into(),
                 message: Some("rate limited".into()),
             }),
             calls: vec![
                 ExpectedCall {
-                    tool: "slack.post_message".into(),
+                    action: "slack.post_message".into(),
                     args: Some(json!({ "channel": "#triage" })),
                     times: Some(1),
                 },
                 ExpectedCall {
-                    tool: "github.delete_repo".into(),
+                    action: "github.delete_repo".into(),
                     args: None,
                     times: Some(0),
                 },
                 ExpectedCall {
-                    tool: "github.close_issue".into(),
+                    action: "github.close_issue".into(),
                     args: None,
                     times: None,
                 },
@@ -791,19 +791,19 @@ fn the_test_fixture_decodes_re_encodes_and_hashes_to_its_digest() {
 fn a_test_is_written_one_way() {
     // A single rule without its array, the default `when`, `order` and input: the same test,
     // written back in one way.
-    let given = r#"{"v":1,"name":"t","input":{},"world":{"tools":{"a.b":{"returns":1}}},
+    let given = r#"{"v":1,"name":"t","input":{},"world":{"actions":{"a.b":{"returns":1}}},
         "signals":[{"name":"go","when":"blocked"}],"expect":{"order":"any"}}"#;
     let decoded = decode_test(given).unwrap();
     assert_eq!(
         encode_test(&decoded),
-        r#"{"name":"t","signals":[{"name":"go"}],"v":1,"world":{"tools":{"a.b":[{"returns":1}]}}}"#
+        r#"{"name":"t","signals":[{"name":"go"}],"v":1,"world":{"actions":{"a.b":[{"returns":1}]}}}"#
     );
     // A result of `null` is a result.
     let null =
-        decode_test(r#"{"v":1,"name":"t","world":{"tools":{"a.b":{"returns":null}}}}"#).unwrap();
+        decode_test(r#"{"v":1,"name":"t","world":{"actions":{"a.b":{"returns":null}}}}"#).unwrap();
     assert_eq!(
-        null.world.tools["a.b"][0].answer,
-        ToolOutcome::Result(json!(null))
+        null.world.actions["a.b"][0].answer,
+        ActionOutcome::Result(json!(null))
     );
 }
 
@@ -814,9 +814,9 @@ fn rejects_tests_v1_does_not_define() {
         r#"{"v":1}"#,
         r#"{"v":1,"name":"t","x":1}"#,
         r#"{"v":1,"name":""}"#,
-        r#"{"v":1,"name":"t","world":{"tools":{"a.b":{}}}}"#,
-        r#"{"v":1,"name":"t","world":{"tools":{"a.b":{"returns":1,"error":{"message":"m"}}}}}"#,
-        r#"{"v":1,"name":"t","world":{"tools":{"a.b":{"returns":1,"times":0}}}}"#,
+        r#"{"v":1,"name":"t","world":{"actions":{"a.b":{}}}}"#,
+        r#"{"v":1,"name":"t","world":{"actions":{"a.b":{"returns":1,"error":{"message":"m"}}}}}"#,
+        r#"{"v":1,"name":"t","world":{"actions":{"a.b":{"returns":1,"times":0}}}}"#,
         r#"{"v":1,"name":"t","world":{"cassette":{"v":1,"matching":"by_args","calls":[],"signals":[]}}}"#,
         r#"{"v":1,"name":"t","signals":[{"name":"rewind:ended:x"}]}"#,
         r#"{"v":1,"name":"t","signals":[{"name":"go","when":"soon"}]}"#,

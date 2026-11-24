@@ -11,12 +11,12 @@
 //! | --- | --- |
 //! | `rewind.d.ts` | The `rewind` module |
 //! | `globals.d.ts` | The sandbox's globals beyond ECMAScript |
-//! | `fetch.d.ts` | `fetch`, only for an action set that enables the `http` tool |
+//! | `fetch.d.ts` | `fetch`, only for an action set that enables the `http` action |
 //! | `tsconfig.json` | tsgo's options: strict, `verbatimModuleSyntax`, ES2025 and the ESNext pieces V8 ships (`Temporal`, explicit resource management…), without shared memory, weak references and decorators, no DOM |
 //! | `globals.json` | The declared global names, the `rewind` exports, and a hint for each absent global models reach for |
 //!
 //! The checker writes the script as `script.ts` next to these files and the action set's
-//! `rewind-tools.d.ts`; `tsconfig.json` includes every `*.ts` of its directory.
+//! `rewind-actions.d.ts`; `tsconfig.json` includes every `*.ts` of its directory.
 
 use std::collections::BTreeSet;
 use std::sync::LazyLock;
@@ -27,21 +27,21 @@ use serde_json::Value;
 pub const REWIND_D_TS: &str = include_str!("../lib/rewind.d.ts");
 /// The sandbox's globals beyond ECMAScript.
 pub const GLOBALS_D_TS: &str = include_str!("../lib/globals.d.ts");
-/// `fetch`: only for an action set that enables the `http` tool.
+/// `fetch`: only for an action set that enables the `http` action.
 pub const FETCH_D_TS: &str = include_str!("../lib/fetch.d.ts");
 /// tsgo's configuration.
 pub const TSCONFIG_JSON: &str = include_str!("../lib/tsconfig.json");
 /// The declared names, machine-readable.
 pub const GLOBALS_JSON: &str = include_str!("../lib/globals.json");
 
-/// The files the checker writes next to `script.ts` and `rewind-tools.d.ts`, by file name.
-pub fn files(http_tool: bool) -> Vec<(&'static str, &'static str)> {
+/// The files the checker writes next to `script.ts` and `rewind-actions.d.ts`, by file name.
+pub fn files(http_action: bool) -> Vec<(&'static str, &'static str)> {
     let mut files = vec![
         ("tsconfig.json", TSCONFIG_JSON),
         ("rewind.d.ts", REWIND_D_TS),
         ("globals.d.ts", GLOBALS_D_TS),
     ];
-    if http_tool {
+    if http_action {
         files.push(("fetch.d.ts", FETCH_D_TS));
     }
     files
@@ -55,8 +55,8 @@ pub struct DeclaredGlobals {
     pub ecmascript: BTreeSet<String>,
     /// The sandbox's own globals (`archi/01-product.md`, "What exists in the sandbox").
     pub sandbox: BTreeSet<String>,
-    /// Globals that exist only when the action set enables the `http` tool.
-    pub http_tool: BTreeSet<String>,
+    /// Globals that exist only when the action set enables the `http` action.
+    pub http_action: BTreeSet<String>,
     /// The names the `rewind` module exports (values, not types).
     pub rewind: BTreeSet<String>,
     /// Globals models reach for by habit but that are absent, with what to use instead.
@@ -72,15 +72,15 @@ pub struct AbsentGlobal {
 
 impl DeclaredGlobals {
     /// Every global name of a script's `globalThis`: what the isolate must have, exactly.
-    pub fn names(&self, http_tool: bool) -> BTreeSet<&str> {
+    pub fn names(&self, http_action: bool) -> BTreeSet<&str> {
         let mut names: BTreeSet<&str> = self
             .ecmascript
             .iter()
             .chain(&self.sandbox)
             .map(String::as_str)
             .collect();
-        if http_tool {
-            names.extend(self.http_tool.iter().map(String::as_str));
+        if http_action {
+            names.extend(self.http_action.iter().map(String::as_str));
         }
         names
     }
@@ -139,7 +139,7 @@ fn parse(json: &str) -> Result<DeclaredGlobals, String> {
     Ok(DeclaredGlobals {
         ecmascript: names("ecmascript")?,
         sandbox: names("sandbox")?,
-        http_tool: names("httpTool")?,
+        http_action: names("httpAction")?,
         rewind: names("rewind")?,
         absent,
     })
@@ -210,8 +210,8 @@ mod tests {
         let declared = declared_globals();
         assert!(declared.ecmascript.len() > 50);
         assert!(declared.ecmascript.is_disjoint(&declared.sandbox));
-        assert!(declared.ecmascript.is_disjoint(&declared.http_tool));
-        assert!(declared.sandbox.is_disjoint(&declared.http_tool));
+        assert!(declared.ecmascript.is_disjoint(&declared.http_action));
+        assert!(declared.sandbox.is_disjoint(&declared.http_action));
         for removed in [
             "SharedArrayBuffer",
             "Atomics",
@@ -224,7 +224,7 @@ mod tests {
         // The four names of the checker's rule "Absent global" (archi/04-tools.md).
         let absent: BTreeSet<String> = declared.absent.iter().map(|a| a.name.clone()).collect();
         assert_eq!(absent, set(&["Buffer", "fetch", "process", "require"]));
-        assert!(declared.hint("fetch").unwrap().contains("http tool"));
+        assert!(declared.hint("fetch").unwrap().contains("http action"));
         for name in &absent {
             assert!(!declared.names(false).contains(name.as_str()), "{name}");
         }
@@ -240,7 +240,10 @@ mod tests {
         let mut sandbox = declared.sandbox.clone();
         assert!(sandbox.remove("Temporal"));
         assert_eq!(global_values("globals.d.ts", GLOBALS_D_TS), sandbox);
-        assert_eq!(global_values("fetch.d.ts", FETCH_D_TS), declared.http_tool);
+        assert_eq!(
+            global_values("fetch.d.ts", FETCH_D_TS),
+            declared.http_action
+        );
         assert!(global_values("rewind.d.ts", REWIND_D_TS).is_empty());
     }
 
@@ -323,7 +326,7 @@ mod tests {
         assert_eq!(options["noEmit"], true);
         assert_eq!(options["target"], "es2025");
         assert_eq!(options["types"], serde_json::json!([]));
-        // The runtime refuses at start an import of a name `rewind:tools` does not export, a type
+        // The runtime refuses at start an import of a name `rewind:actions` does not export, a type
         // included: types are imported with `import type`.
         assert_eq!(options["verbatimModuleSyntax"], true);
         let libs: Vec<&str> = options["lib"]
@@ -364,9 +367,12 @@ mod tests {
     }
 
     #[test]
-    fn the_checker_gets_fetch_only_with_the_http_tool() {
-        let names = |http_tool| -> Vec<&str> {
-            files(http_tool).into_iter().map(|(name, _)| name).collect()
+    fn the_checker_gets_fetch_only_with_the_http_action() {
+        let names = |http_action| -> Vec<&str> {
+            files(http_action)
+                .into_iter()
+                .map(|(name, _)| name)
+                .collect()
         };
         assert_eq!(
             names(false),

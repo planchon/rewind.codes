@@ -4,11 +4,11 @@ use std::future::Future;
 use rewind_core::Script;
 
 /// What `rewind-codegen` generated from a pinned action set, stored with it: the declarations of
-/// `rewind:tools` for the type-checker, and their compact rendering for the model's prompt
+/// `rewind:actions` for the type-checker, and their compact rendering for the model's prompt
 /// (`archi/04-tools.md`, "Action sets and code generation").
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct ToolDeclarations {
-    /// `rewind-tools.d.ts`.
+pub struct ActionDeclarations {
+    /// `rewind-actions.d.ts`.
     pub typescript: String,
     /// The compact prompt rendering: `github.list_issues({ repo, state? }) → Issue[] · …`.
     pub prompt: String,
@@ -104,7 +104,7 @@ pub trait TypeChecker: Send + Sync {
     fn check(
         &self,
         script: &Script,
-        declarations: &ToolDeclarations,
+        declarations: &ActionDeclarations,
     ) -> impl Future<Output = Result<Vec<Diagnostic>, CheckerError>> + Send;
 
     /// Type-checks a workflow's script as [`check`](Self::check) does, with the workflow's own
@@ -113,7 +113,7 @@ pub trait TypeChecker: Send + Sync {
     fn check_workflow(
         &self,
         script: &Script,
-        declarations: &ToolDeclarations,
+        declarations: &ActionDeclarations,
         workflow: &WorkflowDeclarations,
     ) -> impl Future<Output = Result<Vec<Diagnostic>, CheckerError>> + Send;
 }
@@ -139,13 +139,13 @@ mod tests {
         );
         let rule = Diagnostic {
             source: DiagnosticSource::Rule("absent-global".into()),
-            hint: Some("use the http tool".into()),
+            hint: Some("use the http action".into()),
             frame: String::new(),
             ..diagnostic
         };
         assert_eq!(
             rule.to_string(),
-            "script.ts:3:28 error absent-global: Type 'number' is not assignable to type 'string'.\n  hint: use the http tool"
+            "script.ts:3:28 error absent-global: Type 'number' is not assignable to type 'string'.\n  hint: use the http action"
         );
     }
 }

@@ -73,7 +73,7 @@ gives each node what it needs:
 | `REWIND_BIND`, `REWIND_PORT` | `127.0.0.1`, `8080` | Where the edge listens on the host |
 | `REWIND_PUBLIC_URL` | `http://localhost:8080` | The URL clients reach the edge at: `webhook()` URLs start with it |
 | `REWIND_EGRESS_ALLOW` | `loadgen` | The names the nodes may reach: MCP servers, APIs and their OpenAPI documents, hosts of `http` tools, webhook receivers (spaces or commas). A name allows its subdomains |
-| `REWIND_ALLOW_INTERNAL_TOOLS` | `loadgen` | MCP servers and APIs at private addresses the nodes may use (names, `*.domain`, addresses, CIDR networks; commas). Without it a deployed server reaches MCP servers, APIs and OpenAPI documents at public addresses only |
+| `REWIND_ALLOW_INTERNAL_ADDRESSES` | `loadgen` | MCP servers and APIs at private addresses the nodes may use (names, `*.domain`, addresses, CIDR networks; commas). Without it a deployed server reaches MCP servers, APIs and OpenAPI documents at public addresses only |
 | `REWIND_QUOTA_ACTIVE_RUNS` | `10000` | The ceiling of the tenants this deployment creates: their active runs across their namespaces; one more is refused with 429. `REWIND_QUOTA_RUNS_PER_MONTH`, `REWIND_QUOTA_CPU_PER_MONTH`, `REWIND_QUOTA_SCRIPTS`, `REWIND_QUOTA_MAX_TTL` and `REWIND_QUOTA_MAX_SCRIPT_LINES` set the others, none by default |
 | `REWIND_DEFAULT_TTL`, `REWIND_MAX_TTL` | `30d`, `365d` | A run's TTL when the harness gives none, and the most it may ask for |
 | `REWIND_RETENTION` | `365d` | How long an ended run is kept, for the tenants this deployment creates ([retention](#retention)) |
@@ -235,7 +235,7 @@ name, the hosts your toolsets' `http` tools allow, and the receivers of your web
 subscriptions to `REWIND_EGRESS_ALLOW`, then `docker compose up -d egress`: a node lists an MCP
 server's tools and reads an OpenAPI document when a toolset is registered, and calls them for
 runs, through the gateway. An MCP server or an API at a private address must also be in
-`REWIND_ALLOW_INTERNAL_TOOLS`: the nodes check where MCP servers and APIs are, as the `http` tool
+`REWIND_ALLOW_INTERNAL_ADDRESSES`: the nodes check where MCP servers and APIs are, as the `http` action
 does. S3, Postgres, the collector and the other nodes are on the core network here; a managed S3
 or collector outside it must be allowed too.
 

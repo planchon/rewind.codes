@@ -19,9 +19,9 @@ use std::time::SystemTime;
 
 use futures_util::stream::BoxStream;
 use reqwest::header::{HeaderName, HeaderValue};
-use rewind_core::ToolFailureKind;
+use rewind_core::ActionFailureKind;
 use rewind_outbound::{
-    CallIdentity, Reached, Redirects, SignedRequest, Signer, SigningError, ToolEgress,
+    ActionEgress, CallIdentity, Reached, Redirects, SignedRequest, Signer, SigningError,
 };
 use rmcp::model::ClientJsonRpcMessage;
 use rmcp::transport::streamable_http_client::{
@@ -55,12 +55,12 @@ impl Internal {
 pub(crate) fn client(
     server: &str,
     url: &str,
-    egress: &ToolEgress,
+    egress: &ActionEgress,
     redirects: Redirects,
 ) -> Result<(reqwest::Client, Internal), Failure> {
     let refused = |reason: String| {
         Failure::permanent(
-            ToolFailureKind::Unavailable,
+            ActionFailureKind::Unavailable,
             format!("{server} cannot be reached: {reason}"),
             None,
         )
@@ -307,7 +307,7 @@ mod tests {
     fn only_http_urls_are_reached() {
         for url in ["ftp://mcp.example.com/", "not a url", "file:///etc/passwd"] {
             let Err(Failure::Permanent(failure)) =
-                client("fx", url, &ToolEgress::default(), Redirects::WithinOrigin)
+                client("fx", url, &ActionEgress::default(), Redirects::WithinOrigin)
             else {
                 panic!("{url} fails for good");
             };
@@ -316,7 +316,7 @@ mod tests {
                 "{failure:?}"
             );
         }
-        let checked = ToolEgress::checked(
+        let checked = ActionEgress::checked(
             rewind_outbound::InternalAllowList::parse(&["10.0.0.0/8"]).unwrap(),
         );
         let (_, internal) = client(

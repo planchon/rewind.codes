@@ -8,19 +8,19 @@
 //!   "name": "closes the stale issues once approved",
 //!   "input": { "repo": "acme/api" },
 //!   "world": {
-//!     "tools": { "github.close_issue": { "returns": {} } },
+//!     "actions": { "github.close_issue": { "returns": {} } },
 //!     "mocks": "triage.mocks.ts",
 //!     "cassette": "cassettes/triage.json"
 //!   },
 //!   "signals": [{ "name": "approval", "payload": { "close": true } }],
-//!   "expect": { "status": "completed", "calls": [{ "tool": "github.close_issue", "times": 3 }] }
+//!   "expect": { "status": "completed", "calls": [{ "action": "github.close_issue", "times": 3 }] }
 //! }]
 //! ```
 //!
 //! `world.cassette` given as a string, and `world.mocks` as the name of a `.ts` or `.js` file,
-//! are read from files relative to the tests file. The tests run in this process, the tools'
-//! static responses of `rewind.tools.json` tried last, against the action set file `--action-set`
-//! names, or else the tools the tests answer, as host tools. They run on the server (embedded
+//! are read from files relative to the tests file. The tests run in this process, the actions'
+//! static responses of `rewind.actions.json` tried last, against the action set file `--action-set`
+//! names, or else the actions the tests answer, as host tools. They run on the server (embedded
 //! or remote, `POST /v1/test`) when they need what it holds: a workflow's suite (`--workflow`)
 //! or an action set registered there (`--action-set <id>`).
 
@@ -44,7 +44,7 @@ use crate::input::{self, ActionSetRef};
 use crate::output::Console;
 
 /// The static responses read next to the tests.
-pub(crate) const TOOLS_FILE: &str = "rewind.tools.json";
+pub(crate) const ACTIONS_FILE: &str = "rewind.actions.json";
 
 /// The tests file next to a script: `triage.ts` → `triage.tests.json`.
 fn tests_file_of(script: &Path) -> PathBuf {
@@ -104,10 +104,10 @@ pub(super) async fn test(
                 .and_then(Path::parent)
                 .map(Path::to_owned)
                 .unwrap_or_default();
-            let statics = match &args.tools {
+            let statics = match &args.actions {
                 Some(path) => Some(input::read_json::<Value>(path)?),
                 None => {
-                    let path = base.join(TOOLS_FILE);
+                    let path = base.join(ACTIONS_FILE);
                     path.exists()
                         .then(|| input::read_json::<Value>(&path))
                         .transpose()?
@@ -216,11 +216,11 @@ async fn local(
                 .iter()
                 .flat_map(|test| {
                     test.world
-                        .tools
+                        .actions
                         .keys()
                         .cloned()
                         .chain(test.world.cassette.iter().flat_map(|cassette| {
-                            cassette.calls.iter().map(|call| call.tool.clone())
+                            cassette.calls.iter().map(|call| call.action.clone())
                         }))
                         .collect::<Vec<_>>()
                 })
@@ -245,7 +245,7 @@ async fn local(
                             CliError::internal(message)
                         }
                     })?;
-                    answered.extend(mocks.tools);
+                    answered.extend(mocks.actions);
                 }
             }
             action_set::of_mocks(&answered)?

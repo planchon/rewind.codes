@@ -67,19 +67,19 @@ declare module "rewind" {
   };
 
   /**
-   * Thrown by a tool call that failed. Catch it to handle the failure; uncaught, it fails the
-   * run. Only the runtime creates one.
+   * Thrown by a call that failed. Catch it to handle the failure; uncaught, it fails the run.
+   * Only the runtime creates one.
    */
-  export class ToolError extends Error {
+  export class ActionError extends Error {
     private constructor();
-    /** The tool that failed, such as `github.close_issue`. */
-    tool: string;
+    /** The action that failed, such as `github.close_issue`. */
+    action: string;
     /**
      * The call was interrupted and may or may not have taken effect: check before calling the
-     * tool again.
+     * action again.
      */
     outcomeUnknown: boolean;
-    /** What the tool returned with its error, if anything. */
+    /** What the action returned with its error, if anything. */
     data?: unknown;
   }
 
@@ -120,7 +120,7 @@ declare module "rewind" {
     readonly id: string;
     /**
      * Sends one of the workflow's signals to the run. Resolves once the signal is in the run's
-     * mailbox; throws a `ToolError` if the run has ended.
+     * mailbox; throws an `ActionError` if the run has ended.
      */
     signal<K extends keyof S & string>(name: K, payload: S[K]): Promise<void>;
   }

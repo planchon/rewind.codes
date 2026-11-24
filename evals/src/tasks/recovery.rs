@@ -10,7 +10,7 @@ use rewind_core::{RunId, RunStatus};
 
 /// A run that posts and completes, and a run stuck waiting for the signal `go`.
 const POSTED: Setup = Setup::Run(
-    r##"import { chat } from "rewind:tools";
+    r##"import { chat } from "rewind:actions";
 
 export default async function main() {
   await chat.post_message({ channel: "#general", text: "hello" });
@@ -20,7 +20,7 @@ export default async function main() {
 );
 
 const STUCK: Setup = Setup::Run(
-    r##"import { chat } from "rewind:tools";
+    r##"import { chat } from "rewind:actions";
 import { signal } from "rewind";
 
 export default async function main() {
@@ -32,7 +32,7 @@ export default async function main() {
 );
 
 /// Opens one onboarding issue per customer, and fails at `C-1004`, which has no company.
-pub const ONBOARDING: &str = r##"import { crm, tracker } from "rewind:tools";
+pub const ONBOARDING: &str = r##"import { crm, tracker } from "rewind:actions";
 
 export default async function main() {
   const ids = ["C-1001", "C-1002", "C-1003", "C-1004", "C-1005", "C-1006", "C-1007", "C-1008"];
@@ -61,7 +61,7 @@ pub(super) fn tasks() -> Vec<Task> {
         Task {
             id: "ship_orders_with_retries",
             difficulty: Difficulty::Hard,
-            features: &["rate limit", "idempotency", "ToolError.data", "sleep"],
+            features: &["rate limit", "idempotency", "ActionError.data", "sleep"],
             world: || WorldSpec {
                 servers: vec!["shop"],
                 ..WorldSpec::default()

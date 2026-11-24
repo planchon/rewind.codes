@@ -9,14 +9,14 @@ mod support;
 use std::collections::BTreeMap;
 
 use rewind_core::{
-    ActionSet, ERASED_TEST_REASON, Expectations, ExpectedCall, RunStatus, Script, Test, TestOrigin,
-    TestSignal, ToolOutcome, ToolRule, WorkflowSchemas,
+    ActionOutcome, ActionRule, ActionSet, ERASED_TEST_REASON, Expectations, ExpectedCall,
+    RunStatus, Script, Test, TestOrigin, TestSignal, WorkflowSchemas,
 };
 use rewind_engine::adapters::StaticTypeChecker;
 use rewind_engine::edge::{RecordFrom, RecordingError};
 use rewind_engine::ports::BlobStore as _;
 use rewind_engine::ports::{
-    CatalogStore, Delivery, NamespaceName, StoreError, TenantId, ToolDeclarations,
+    ActionDeclarations, CatalogStore, Delivery, NamespaceName, StoreError, TenantId,
     WorkflowDeclarations,
 };
 use rewind_engine::suites::{
@@ -40,8 +40,8 @@ fn programs() -> FakeExecutor {
                 run.call("github.close_issue", json!({ "repo": repo, "number": 4 }));
             },
             |run, delivery| match delivery {
-                Delivery::ToolCallCompleted { .. } => run.complete(json!({ "closed": 1 })),
-                Delivery::ToolCallFailed { error, .. } => run.fail("ToolError", &error.message),
+                Delivery::CallCompleted { .. } => run.complete(json!({ "closed": 1 })),
+                Delivery::CallFailed { error, .. } => run.fail("ActionError", &error.message),
                 _ => run.fail("Error", "unexpected"),
             },
         )
@@ -53,8 +53,8 @@ fn programs() -> FakeExecutor {
             },
             |run, delivery| match delivery {
                 // A regression: it reports nothing closed.
-                Delivery::ToolCallCompleted { .. } => run.complete(json!({ "closed": 0 })),
-                Delivery::ToolCallFailed { error, .. } => run.fail("ToolError", &error.message),
+                Delivery::CallCompleted { .. } => run.complete(json!({ "closed": 0 })),
+                Delivery::CallFailed { error, .. } => run.fail("ActionError", &error.message),
                 _ => run.fail("Error", "unexpected"),
             },
         )
@@ -92,15 +92,15 @@ fn save(script: &str, suite: SuiteChanges) -> RegisterWorkflow {
 fn closes() -> Test {
     let mut test = Test::new("closes one");
     test.input = json!({ "repo": "acme/api" });
-    test.world.tools.insert(
+    test.world.actions.insert(
         "github.close_issue".into(),
-        vec![ToolRule::always(ToolOutcome::Result(json!({})))],
+        vec![ActionRule::always(ActionOutcome::Result(json!({})))],
     );
     test.expect = Expectations {
         status: Some(RunStatus::Completed),
         output: Some(json!({ "closed": 1 })),
         calls: vec![ExpectedCall {
-            tool: "github.close_issue".into(),
+            action: "github.close_issue".into(),
             args: Some(json!({ "number": 4 })),
             times: Some(1),
         }],
@@ -117,7 +117,7 @@ async fn setup() -> World {
         .put_action_set(
             &TenantId::local(),
             &action_set(),
-            &ToolDeclarations::default(),
+            &ActionDeclarations::default(),
         )
         .await
         .unwrap();
@@ -587,7 +587,7 @@ fn closer() -> FakeExecutor {
         },
         |run, delivery| match delivery {
             Delivery::SignalReceived { .. } => run.complete(json!({ "closed": 0 })),
-            Delivery::ToolCallCompleted { seq, .. } if seq.0 >= 2 || run.input["count"] == 1 => {
+            Delivery::CallCompleted { seq, .. } if seq.0 >= 2 || run.input["count"] == 1 => {
                 run.complete(json!({ "closed": run.input["count"].clone() }));
             }
             _ => {}
@@ -644,7 +644,7 @@ async fn recording_keeps_the_newest_run_of_each_path() {
     let _: &[TestSignal] = &test.signals;
 }
 
-/// The workflow `closer`, saved without tests over the tools `a` and `b`.
+/// The workflow `closer`, saved without tests over the actions `a` and `b`.
 async fn closer_workflow(world: &World) -> rewind_engine::ports::StoredWorkflow {
     let action_set = ActionSet::from_host_tools(["a", "b", "cleanup"]).unwrap();
     world
@@ -653,7 +653,7 @@ async fn closer_workflow(world: &World) -> rewind_engine::ports::StoredWorkflow 
         .put_action_set(
             &TenantId::local(),
             &action_set,
-            &ToolDeclarations::default(),
+            &ActionDeclarations::default(),
         )
         .await
         .unwrap();

@@ -8,12 +8,12 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use rewind_core::{
-    ActionSet, Annotation, Command, Completion, Event, HistoryEntry, RunMode, RunOutcome, RunState,
-    RunStatus, Script, ToolFailure, Workflow, WorkflowSchemas,
+    ActionFailure, ActionSet, Annotation, Command, Completion, Event, HistoryEntry, RunMode,
+    RunOutcome, RunState, RunStatus, Script, Workflow, WorkflowSchemas,
 };
 use rewind_engine::ports::{
-    CallAuth, CatalogStore, Dispatched, Predicate, RunRef, ScriptExecutor, TenantId, ToolCall,
-    ToolDeclarations, ToolDispatcher,
+    ActionDeclarations, ActionDispatcher, Call, CallAuth, CatalogStore, Dispatched, Predicate,
+    RunRef, ScriptExecutor, TenantId,
 };
 use rewind_engine::{ReplayVerdict, StartError, StartRun};
 use rewind_runtime::{SandboxLimits, V8Executor};
@@ -23,13 +23,13 @@ mod support;
 
 use support::World;
 
-type Handler = dyn Fn(&ToolCall) -> Result<Value, ToolFailure> + Send + Sync;
+type Handler = dyn Fn(&Call) -> Result<Value, ActionFailure> + Send + Sync;
 
 #[derive(Clone)]
-struct Tools(Arc<Handler>);
+struct Actions(Arc<Handler>);
 
-impl ToolDispatcher for Tools {
-    async fn dispatch(&self, call: ToolCall, _auth: CallAuth) -> Dispatched {
+impl ActionDispatcher for Actions {
+    async fn dispatch(&self, call: Call, _auth: CallAuth) -> Dispatched {
         match (self.0)(&call) {
             Ok(result) => Dispatched::Result(result),
             Err(failure) => Dispatched::Failed(failure),
@@ -41,7 +41,7 @@ impl ToolDispatcher for Tools {
 /// return what its output schema refuses.
 const TRIAGE: &str = r#"
 import { signal } from "rewind";
-import { notify } from "rewind:tools";
+import { notify } from "rewind:actions";
 
 export default async function main(input: { repo: string; fail?: boolean; bad?: boolean }) {
   if (input.fail) throw new TypeError(`cannot triage ${input.repo}`);
@@ -80,7 +80,7 @@ fn schemas() -> WorkflowSchemas {
 }
 
 struct Harness {
-    world: World<Tools>,
+    world: World<Actions>,
     /// The action set that pins `triage`.
     action_set: ActionSet,
 }
@@ -90,11 +90,11 @@ async fn harness() -> Harness {
 }
 
 async fn harness_with(
-    tools: impl Fn(&ToolCall) -> Result<Value, ToolFailure> + Send + Sync + 'static,
+    actions: impl Fn(&Call) -> Result<Value, ActionFailure> + Send + Sync + 'static,
 ) -> Harness {
     let world = World::new(
         V8Executor::new(SandboxLimits::default()).expect("TZ=UTC"),
-        Tools(Arc::new(tools)),
+        Actions(Arc::new(actions)),
         7,
         |_| {},
     )
@@ -104,7 +104,7 @@ async fn harness_with(
     let catalog = &world.plane.catalog;
     let child_action_set = ActionSet::from_host_tools(["notify"]).unwrap();
     catalog
-        .put_action_set(&tenant, &child_action_set, &ToolDeclarations::default())
+        .put_action_set(&tenant, &child_action_set, &ActionDeclarations::default())
         .await
         .unwrap();
     let script = Script::new(TRIAGE);
@@ -206,7 +206,7 @@ impl Harness {
             .history
             .iter()
             .find_map(|entry| match &entry.event {
-                Event::Completion(Completion::ToolCallCompleted { result, .. }) => result
+                Event::Completion(Completion::CallCompleted { result, .. }) => result
                     .value()
                     .and_then(|result| result.get("runId"))
                     .and_then(Value::as_str)
@@ -421,17 +421,16 @@ export default async function main() {
     );
     // Nothing was recorded for the refused calls.
     assert!(
-        !run.history.iter().any(|entry| matches!(
-            entry.event,
-            Event::Command(Command::ScheduleToolCall { .. })
-        )),
+        !run.history
+            .iter()
+            .any(|entry| matches!(entry.event, Event::Command(Command::ScheduleCall { .. }))),
         "{:?}",
         run.events()
     );
 }
 
 #[tokio::test]
-async fn a_signal_to_a_run_that_has_ended_is_a_tool_error_and_result_can_time_out() {
+async fn a_signal_to_a_run_that_has_ended_is_an_action_error_and_result_can_time_out() {
     let harness = harness().await;
     let run = harness
         .run(
@@ -460,7 +459,7 @@ export default async function main() {
         &json!({
             "early": null,
             "done": { "closed": 3, "repo": "acme/api" },
-            "late": "ToolError: workflows.triage.signal failed: run <id> has ended",
+            "late": "ActionError: workflows.triage.signal failed: run <id> has ended",
         })
     );
     harness.assert_replays(&run).await;
@@ -491,7 +490,7 @@ async fn importing_a_workflow_the_action_set_does_not_pin_is_refused_at_start() 
 
 #[tokio::test]
 async fn in_mock_mode_the_mocks_answer_with_the_end_of_the_run() {
-    let harness = harness_with(|call| match call.tool.name.as_str() {
+    let harness = harness_with(|call| match call.action.name.as_str() {
         "workflows.triage.start" => {
             Ok(json!({ "closed": call.args["input"]["repo"].as_str().unwrap().len() }))
         }

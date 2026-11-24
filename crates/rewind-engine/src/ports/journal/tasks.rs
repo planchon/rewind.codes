@@ -1,4 +1,4 @@
-//! Tool tasks (`archi/04-tools.md`, "Tool task lifecycle").
+//! Call tasks (`archi/04-tools.md`, "Call lifecycle").
 //!
 //! ```text
 //!               approve            sent or handed out          answer, failure
@@ -22,12 +22,12 @@
 use std::fmt;
 
 use rewind_core::{
-    Digest, Payload, Seq, Timestamp, ToolFailure, ToolFailureKind, ToolPolicy, ToolRoute,
+    ActionFailure, ActionFailureKind, ActionPolicy, ActionRoute, Digest, Payload, Seq, Timestamp,
 };
 
 use crate::ports::tenancy::RunRef;
 
-/// A tool task: the call `seq` of a run.
+/// A call's task: the call `seq` of a run.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TaskRef {
     pub run: RunRef,
@@ -95,7 +95,7 @@ pub struct ParkReason {
 /// Stored as `schema_changed`, `credentials_refused` and `secret_missing`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ParkKind {
-    /// The tool's current schema no longer matches the call (`tool.schema_changed`). Approved,
+    /// The action's current schema no longer matches the call (`action.schema_changed`). Approved,
     /// the call is sent against the new schema: the task's `schema_change_approved` is set.
     SchemaChanged,
     /// The server answered 401 to the attached secret or to the signature
@@ -126,20 +126,20 @@ impl ParkKind {
 
 /// A task as the store keeps it.
 #[derive(Debug, Clone, PartialEq)]
-pub struct ToolTask {
+pub struct CallTask {
     pub task: TaskRef,
     /// The action set of the task's run.
     pub action_set: Digest,
-    pub tool: String,
-    pub route: ToolRoute,
+    pub action: String,
+    pub route: ActionRoute,
     pub args: Payload,
-    pub policy: ToolPolicy,
+    pub policy: ActionPolicy,
     pub state: TaskState,
     /// The attempt the task is at, from 1: one more after each transient failure or
     /// interruption retried.
     pub attempt: u32,
     /// The harness approved the task while it was parked by
-    /// [`SchemaChanged`](ParkKind::SchemaChanged): the call goes on against the tool's current
+    /// [`SchemaChanged`](ParkKind::SchemaChanged): the call goes on against the action's current
     /// schema, and the dispatcher no longer checks it. It stays set for the task's life.
     pub schema_change_approved: bool,
     pub created_at: Timestamp,
@@ -147,10 +147,10 @@ pub struct ToolTask {
 
 /// The failure a deferred task ends with when no answer came before its deadline. Every store
 /// writes this one, so that scripts see the same failure whatever the backend.
-pub fn deferred_timeout_failure() -> ToolFailure {
-    ToolFailure {
-        kind: ToolFailureKind::Timeout,
-        message: "the tool did not answer before its deadline".into(),
+pub fn deferred_timeout_failure() -> ActionFailure {
+    ActionFailure {
+        kind: ActionFailureKind::Timeout,
+        message: "the action did not answer before its deadline".into(),
         data: None,
     }
 }

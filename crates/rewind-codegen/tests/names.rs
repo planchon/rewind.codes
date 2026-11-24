@@ -1,4 +1,4 @@
-//! Names that become identifiers of `rewind:tools`: a server, a host-tool group and a host tool
+//! Names that become identifiers of `rewind:actions`: a server, a host-tool group and a host tool
 //! without a group are declared as `export const`, `export namespace` and `export function`.
 //! Every such name an action set accepts must give declarations that parse; the reserved words of
 //! JavaScript, which would not, are refused by the action set itself (`rewind_core::RESERVED_WORDS`).
@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 
 use deno_ast::{MediaType, ModuleSpecifier, ParseParams};
 use rewind_codegen::generate;
-use rewind_core::{ActionSet, McpServer, McpTransport, RESERVED_WORDS, Tool, ToolRoute};
+use rewind_core::{Action, ActionRoute, ActionSet, McpServer, McpTransport, RESERVED_WORDS};
 use serde_json::json;
 
 /// Names worth trying besides the reserved words: the contextual keywords of JavaScript and
@@ -56,7 +56,7 @@ const OTHER_NAMES: &[&str] = &[
     "using",
     "ContentBlock",
     "Promise",
-    "ToolContent",
+    "ActionContent",
     "$",
     "_",
     "$default",
@@ -66,7 +66,7 @@ const OTHER_NAMES: &[&str] = &[
 ];
 
 /// An action set in which `name` is declared as a server, as a host-tool group, or as a host tool
-/// without a group; each tool takes a string and returns an object.
+/// without a group; each action takes a string and returns an object.
 fn action_sets(name: &str) -> [Result<ActionSet, rewind_core::ActionSetError>; 3] {
     let input = json!({
         "type": "object",
@@ -74,11 +74,11 @@ fn action_sets(name: &str) -> [Result<ActionSet, rewind_core::ActionSetError>; 3
         "required": ["q"]
     });
     let output = json!({ "type": "object", "properties": { "id": { "type": "string" } } });
-    let tool = |name: String, route: ToolRoute| {
-        let mut tool = Tool::new(name, route, input.clone());
-        tool.output_schema = Some(output.clone());
-        tool.description = Some("Finds things.".into());
-        tool
+    let action = |name: String, route: ActionRoute| {
+        let mut action = Action::new(name, route, input.clone());
+        action.output_schema = Some(output.clone());
+        action.description = Some("Finds things.".into());
+        action
     };
     let server = McpServer::new(
         name,
@@ -89,23 +89,26 @@ fn action_sets(name: &str) -> [Result<ActionSet, rewind_core::ActionSetError>; 3
     [
         ActionSet::new(
             [server],
-            [tool(
+            [action(
                 format!("{name}.find"),
-                ToolRoute::Mcp {
+                ActionRoute::Mcp {
                     server: name.to_owned(),
                 },
             )],
         ),
         ActionSet::new(
             [],
-            [tool(
+            [action(
                 format!("{name}.ask"),
-                ToolRoute::Host {
+                ActionRoute::Host {
                     group: Some(name.to_owned()),
                 },
             )],
         ),
-        ActionSet::new([], [tool(name.to_owned(), ToolRoute::Host { group: None })]),
+        ActionSet::new(
+            [],
+            [action(name.to_owned(), ActionRoute::Host { group: None })],
+        ),
     ]
 }
 
@@ -113,7 +116,7 @@ fn action_sets(name: &str) -> [Result<ActionSet, rewind_core::ActionSetError>; 3
 /// from (strict mode's rules among them).
 fn parse(text: &str) -> Result<(), String> {
     let parsed = deno_ast::parse_program(ParseParams {
-        specifier: ModuleSpecifier::parse("file:///rewind-tools.d.ts").unwrap(),
+        specifier: ModuleSpecifier::parse("file:///rewind-actions.d.ts").unwrap(),
         text: text.into(),
         media_type: MediaType::Dts,
         capture_tokens: false,
@@ -145,9 +148,9 @@ fn the_declarations_of_every_accepted_name_parse() {
                     declarations.typescript
                 );
             }
-            for tool in &declarations.tools {
-                if let Err(error) = parse(&tool.typescript) {
-                    panic!("{name}: {} does not parse: {error}", tool.name);
+            for action in &declarations.actions {
+                if let Err(error) = parse(&action.typescript) {
+                    panic!("{name}: {} does not parse: {error}", action.name);
                 }
             }
             accepted += 1;
@@ -166,12 +169,12 @@ fn reserved_words_are_refused_before_they_reach_the_declarations() {
         for action_set in action_sets(word) {
             assert!(action_set.is_err(), "{word} is refused");
         }
-        // Declared by an ES module, as `rewind:tools` declares its exports, the name does not
+        // Declared by an ES module, as `rewind:actions` declares its exports, the name does not
         // parse. (The parser of `.d.ts` files lets some through, such as `eval` and `static`;
         // tsgo refuses them.)
         let module = format!("export const {word} = {{}};\n");
         let parsed = deno_ast::parse_program(ParseParams {
-            specifier: ModuleSpecifier::parse("file:///rewind-tools.mjs").unwrap(),
+            specifier: ModuleSpecifier::parse("file:///rewind-actions.mjs").unwrap(),
             text: module.into(),
             media_type: MediaType::Mjs,
             capture_tokens: false,

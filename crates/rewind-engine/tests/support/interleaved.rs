@@ -220,9 +220,9 @@ impl PartitionLog for InterleavedLog {
         &self,
         tenant: &TenantId,
         namespace: Option<&NamespaceName>,
-        tools: &[String],
+        actions: &[String],
     ) -> Result<BTreeMap<String, Shape>, PartitionError> {
-        self.inner.shapes(tenant, namespace, tools).await
+        self.inner.shapes(tenant, namespace, actions).await
     }
 
     async fn organization(

@@ -7,7 +7,7 @@
 use std::collections::BTreeSet;
 
 use rewind_api::access::Permission;
-use rewind_api::action_sets::ToolMatch;
+use rewind_api::action_sets::ActionMatch;
 use rewind_api::common::{Callsite, Payload, RunStatus};
 use rewind_api::runs::{FailedCall, Run, RunError, RunSummary, Waiting};
 use rewind_api::scripts::{CheckResult, Diagnostic, Severity};
@@ -276,10 +276,10 @@ fn abort_kind(kind: rewind_api::common::AbortKind) -> &'static str {
     }
 }
 
-/// Waiting for something other than tool calls in flight: a signal, a timer, the harness.
+/// Waiting for something other than calls in flight: a signal, a timer, the harness.
 pub fn is_suspended(run: &Run) -> bool {
     run.waiting_for.iter().any(|waiting| match waiting {
-        Waiting::ToolCall { state, .. } => !matches!(
+        Waiting::Call { state, .. } => !matches!(
             state,
             TaskState::Ready | TaskState::Claimed | TaskState::Done
         ),
@@ -321,16 +321,16 @@ fn describe_waiting(waiting: &Waiting) -> String {
         Waiting::Timer {
             fire_at, callsite, ..
         } => format!("a timer{}, firing at {fire_at}", at(callsite.as_ref())),
-        Waiting::ToolCall {
+        Waiting::Call {
             seq,
-            tool,
+            action,
             state,
             parked,
             attempt,
             callsite,
             ..
         } => {
-            let call = format!("the call {seq} to {tool}{}", at(callsite.as_ref()));
+            let call = format!("the call {seq} to {action}{}", at(callsite.as_ref()));
             let attempt = if *attempt > 1 {
                 format!(" (attempt {attempt})")
             } else {
@@ -349,7 +349,7 @@ fn describe_waiting(waiting: &Waiting) -> String {
                         )
                     } else {
                         format!(
-                            "{call}: parked, the tool changed since the action set was pinned; the harness decides whether it goes on"
+                            "{call}: parked, the action changed since the action set was pinned; the harness decides whether it goes on"
                         )
                     }
                 }
@@ -411,7 +411,7 @@ fn failed_call_section(call: &FailedCall, limits: &Limits) -> Vec<String> {
     vec![
         format!(
             "The call that failed: {} (call {}{}) with {}",
-            call.tool,
+            call.action,
             call.seq,
             at(call.callsite.as_ref()),
             payload_text(&call.args, limits.value)
@@ -424,12 +424,12 @@ fn failed_call_section(call: &FailedCall, limits: &Limits) -> Vec<String> {
     ]
 }
 
-fn failure_kind(kind: rewind_api::common::ToolFailureKind) -> &'static str {
+fn failure_kind(kind: rewind_api::common::ActionFailureKind) -> &'static str {
     match kind {
-        rewind_api::common::ToolFailureKind::Error => "error",
-        rewind_api::common::ToolFailureKind::Unavailable => "unavailable",
-        rewind_api::common::ToolFailureKind::Timeout => "timeout",
-        rewind_api::common::ToolFailureKind::OutcomeUnknown => "outcome_unknown",
+        rewind_api::common::ActionFailureKind::Error => "error",
+        rewind_api::common::ActionFailureKind::Unavailable => "unavailable",
+        rewind_api::common::ActionFailureKind::Timeout => "timeout",
+        rewind_api::common::ActionFailureKind::OutcomeUnknown => "outcome_unknown",
     }
 }
 
@@ -624,12 +624,12 @@ pub fn describe_test_results(results: &[TestResult], limits: &Limits) -> String 
             ));
         }
         if result.calls.is_empty() {
-            lines.push("  No tool was called.".to_owned());
+            lines.push("  No action was called.".to_owned());
         } else {
             let calls: Vec<String> = result
                 .calls
                 .iter()
-                .map(|(tool, count)| format!("{tool} ×{count}"))
+                .map(|(action, count)| format!("{action} ×{count}"))
                 .collect();
             lines.push(format!("  Calls: {}", calls.join(", ")));
         }
@@ -653,7 +653,7 @@ fn problem_name(problem: TestProblem) -> &'static str {
 fn problem_phrase(problem: TestProblem) -> &'static str {
     match problem {
         TestProblem::Stale => {
-            "it names tools, answers or args the action set no longer has; it was not run."
+            "it names actions, answers or args the action set no longer has; it was not run."
         }
         TestProblem::Incompatible => {
             "the workflow's input or signal schemas refuse its input or its signals; it was not run."
@@ -930,18 +930,18 @@ pub fn cassette_summary(cassette: &Value) -> String {
         .as_str()
         .map(|matching| format!(" matched {matching}"))
         .unwrap_or_default();
-    // In the order each tool is first called, as a JavaScript `Map` keeps them.
-    let mut by_tool: Vec<(String, usize)> = Vec::new();
+    // In the order each action is first called, as a JavaScript `Map` keeps them.
+    let mut by_action: Vec<(String, usize)> = Vec::new();
     for call in &calls {
-        let tool = call["tool"].as_str().unwrap_or("?");
-        match by_tool.iter_mut().find(|(known, _)| known == tool) {
+        let action = call["action"].as_str().unwrap_or("?");
+        match by_action.iter_mut().find(|(known, _)| known == action) {
             Some((_, count)) => *count += 1,
-            None => by_tool.push((tool.to_owned(), 1)),
+            None => by_action.push((action.to_owned(), 1)),
         }
     }
-    let tools = by_tool
+    let actions = by_action
         .iter()
-        .map(|(tool, count)| format!("{tool} ×{count}"))
+        .map(|(action, count)| format!("{action} ×{count}"))
         .collect::<Vec<_>>()
         .join(", ");
     let mut seen = BTreeSet::new();
@@ -953,10 +953,10 @@ pub fn cassette_summary(cassette: &Value) -> String {
     format!(
         "{}{matching}{}, {}{}",
         plural(calls.len(), "recorded call"),
-        if tools.is_empty() {
+        if actions.is_empty() {
             String::new()
         } else {
-            format!(" ({tools})")
+            format!(" ({actions})")
         },
         plural(signals.len(), "signal"),
         if names.is_empty() {
@@ -1034,10 +1034,7 @@ pub fn describe_runs(runs: &[RunSummary], more: bool, status: Option<RunStatus>)
             parts.push("quarantined".to_owned());
         }
         parts.push(format!("started {}", run.started_at));
-        parts.push(plural(
-            usize::try_from(run.tool_calls).unwrap_or(0),
-            "tool call",
-        ));
+        parts.push(plural(usize::try_from(run.calls).unwrap_or(0), "call"));
         if run.errors > 0 {
             parts.push(format!("{} failed", run.errors));
         }
@@ -1058,14 +1055,14 @@ pub fn describe_runs(runs: &[RunSummary], more: bool, status: Option<RunStatus>)
     lines.join("\n")
 }
 
-/// The tools matching a search.
-pub fn describe_matches(query: &str, matches: &[ToolMatch]) -> String {
+/// The actions matching a search.
+pub fn describe_matches(query: &str, matches: &[ActionMatch]) -> String {
     if matches.is_empty() {
-        return format!("No tool matches {}.", quoted(query));
+        return format!("No action matches {}.", quoted(query));
     }
     let mut parts = vec![format!(
         "{} {} {}:",
-        plural(matches.len(), "tool"),
+        plural(matches.len(), "action"),
         if matches.len() == 1 {
             "matches"
         } else {
@@ -1290,10 +1287,10 @@ pub fn describe_namespaces(
     lines.join("\n")
 }
 
-/// Tool names `list_action_sets` shows per action set; `search_tools` gives the rest.
-const LISTED_TOOLS: usize = 20;
+/// Action names `list_action_sets` shows per action set; `search_actions` gives the rest.
+const LISTED_ACTIONS: usize = 20;
 
-/// `list_action_sets`: each action set's id, servers, tools and workflows.
+/// `list_action_sets`: each action set's id, servers, actions and workflows.
 pub fn describe_action_sets(list: &rewind_api::action_sets::ActionSetList) -> String {
     if list.action_sets.is_empty() {
         return "No action set in this organization: a script can only use the built-in `webhook`. An action set is registered with POST /v1/action-sets, outside these tools.".to_owned();
@@ -1312,25 +1309,25 @@ pub fn describe_action_sets(list: &rewind_api::action_sets::ActionSetList) -> St
                     format!(
                         "{} ({})",
                         server.name,
-                        plural(server.tools as usize, "tool")
+                        plural(server.actions as usize, "action")
                     )
                 })
                 .collect();
             lines.push(format!("  servers: {}", servers.join(", ")));
         }
-        if !action_set.tools.is_empty() {
+        if !action_set.actions.is_empty() {
             let shown: Vec<&str> = action_set
-                .tools
+                .actions
                 .iter()
-                .take(LISTED_TOOLS)
+                .take(LISTED_ACTIONS)
                 .map(String::as_str)
                 .collect();
-            let more = action_set.tools.len().saturating_sub(LISTED_TOOLS);
+            let more = action_set.actions.len().saturating_sub(LISTED_ACTIONS);
             lines.push(format!(
-                "  tools: {}{}",
+                "  actions: {}{}",
                 shown.join(", "),
                 if more > 0 {
-                    format!(", and {more} more: find them with search_tools")
+                    format!(", and {more} more: find them with search_actions")
                 } else {
                     String::new()
                 }
@@ -1341,7 +1338,7 @@ pub fn describe_action_sets(list: &rewind_api::action_sets::ActionSetList) -> St
         }
     }
     lines.push(
-        "Read the declarations of the tools you need with search_tools before you write a script."
+        "Read the declarations of the actions you need with search_actions before you write a script."
             .to_owned(),
     );
     lines.join("\n")
@@ -1382,17 +1379,17 @@ mod tests {
         let action_sets: rewind_api::action_sets::ActionSetList = serde_json::from_value(json!({
             "actionSets": [{
                 "id": "ab".repeat(32),
-                "servers": [{ "name": "github", "transport": "http", "tools": 25 }],
-                "tools": (0..25).map(|n| format!("github.tool_{n}")).collect::<Vec<_>>(),
+                "servers": [{ "name": "github", "transport": "http", "actions": 25 }],
+                "actions": (0..25).map(|n| format!("github.action_{n}")).collect::<Vec<_>>(),
                 "workflows": ["triage"]
             }]
         }))
         .unwrap();
         let text = describe_action_sets(&action_sets);
-        assert!(text.starts_with(&format!("1 action set: give one's id as `action_set`.\n- {}\n  servers: github (25 tools)\n  tools: github.tool_0, ", "ab".repeat(32))), "{text}");
+        assert!(text.starts_with(&format!("1 action set: give one's id as `action_set`.\n- {}\n  servers: github (25 actions)\n  actions: github.action_0, ", "ab".repeat(32))), "{text}");
         assert!(
             text.contains(
-                "github.tool_19, and 5 more: find them with search_tools\n  workflows: triage\n"
+                "github.action_19, and 5 more: find them with search_actions\n  workflows: triage\n"
             ),
             "{text}"
         );
@@ -1449,7 +1446,7 @@ mod tests {
             "error": {
                 "name": long, "message": long, "frame": long,
                 "failedCall": {
-                    "seq": 1, "tool": "crm.find", "args": { "value": {}, "digest": "d", "bytes": 2, "preview": "{}" },
+                    "seq": 1, "action": "crm.find", "args": { "value": {}, "digest": "d", "bytes": 2, "preview": "{}" },
                     "error": { "kind": "error", "message": long }
                 }
             }
@@ -1559,11 +1556,11 @@ mod tests {
                     "name": format!("recorded {RUN_ID}"), "passed": false, "problem": "failed", "status": "completed",
                     "output": { "closed": 2 }, "calls": { "github.close_issue": 2, "github.list_issues": 1 },
                     "failures": ["the output's closed is 2, expected 3", "github.delete_repo has no recorded response"],
-                    "trace": "#0 run_started\n#1 tool github.list_issues"
+                    "trace": "#0 run_started\n#1 call github.list_issues"
                 },
                 {
                     "name": "posts to slack", "passed": false, "problem": "stale", "calls": {},
-                    "failures": ["slack.post_message is not one of the tools"], "trace": ""
+                    "failures": ["slack.post_message is not one of the actions"], "trace": ""
                 },
                 {
                     "name": "refuses a bad repo", "passed": false, "problem": "incompatible", "calls": {},
@@ -1571,10 +1568,10 @@ mod tests {
                 },
                 {
                     "name": "fails when GitHub is down", "passed": false, "problem": "failed", "status": "failed",
-                    "error": { "name": "ToolError", "message": "GitHub is down" },
+                    "error": { "name": "ActionError", "message": "GitHub is down" },
                     "calls": { "github.list_issues": 1 },
-                    "failures": ["the run failed with ToolError, expected completed"],
-                    "trace": "#0 run_started\n#1 tool github.list_issues → error"
+                    "failures": ["the run failed with ActionError, expected completed"],
+                    "trace": "#0 run_started\n#1 call github.list_issues → error"
                 }
             ])),
             &limits,
@@ -1591,18 +1588,18 @@ mod tests {
                 "  Output: {\"closed\":2}",
                 "  Calls: github.close_issue ×2, github.list_issues ×1",
                 "  Trace:",
-                "#0 run_started\n#1 tool github.list_issues",
-                "FAIL \"posts to slack\" (stale): it names tools, answers or args the action set no longer has; it was not run.",
-                "  - slack.post_message is not one of the tools",
+                "#0 run_started\n#1 call github.list_issues",
+                "FAIL \"posts to slack\" (stale): it names actions, answers or args the action set no longer has; it was not run.",
+                "  - slack.post_message is not one of the actions",
                 "FAIL \"refuses a bad repo\" (incompatible): the workflow's input or signal schemas refuse its input or its signals; it was not run.",
                 "  - the input does not match the input schema of triage: repo must be a string",
                 "FAIL \"fails when GitHub is down\" (failed): it ran, and expectations do not hold:",
-                "  - the run failed with ToolError, expected completed",
+                "  - the run failed with ActionError, expected completed",
                 "  The run failed.",
-                "  ToolError: GitHub is down",
+                "  ActionError: GitHub is down",
                 "  Calls: github.list_issues ×1",
                 "  Trace:",
-                "#0 run_started\n#1 tool github.list_issues → error",
+                "#0 run_started\n#1 call github.list_issues → error",
             ]
             .join("\n")
         );
@@ -1657,7 +1654,7 @@ mod tests {
                 "name": "closes nothing without approval", "passed": false, "problem": "failed",
                 "status": "completed", "output": { "closed": 1 }, "calls": { "github.close_issue": 1 },
                 "failures": ["github.close_issue was called 1 time, expected 0"],
-                "trace": "#0 run_started\n#1 signal approval\n#2 tool github.close_issue"
+                "trace": "#0 run_started\n#1 signal approval\n#2 call github.close_issue"
             },
             { "name": "closes once approved", "passed": true, "status": "completed", "calls": {}, "failures": [], "trace": "#0" }
         ]));
@@ -1677,7 +1674,7 @@ mod tests {
                 "  Output: {\"closed\":1}",
                 "  Calls: github.close_issue ×1",
                 "  Trace:",
-                "#0 run_started\n#1 signal approval\n#2 tool github.close_issue",
+                "#0 run_started\n#1 signal approval\n#2 call github.close_issue",
                 "PASS \"closes once approved\"",
                 "Every test must pass: there is no way around it. If the script is wrong, fix it, and check it with test_script({\"code\":\"…\",\"workflow\":\"triage\"}) before you save it again. If a test pins a behavior you change on purpose, retire it in `retire` (the behavior is deprecated) or update it in `update` (its state or its expected result is out of date), with a reason.",
             ]
@@ -1691,7 +1688,7 @@ mod tests {
                 "status": "completed", "output": { "closed": 1 },
                 "calls": { "github.close_issue": 1, "github.list_issues": 1 },
                 "failures": ["github.close_issue was called 1 time, expected 0"],
-                "trace": "#0 run_started\n#1 tool github.close_issue"
+                "trace": "#0 run_started\n#1 call github.close_issue"
             }
         ]));
         let workflow = workflow_ref("triage", VERSION);
@@ -1713,7 +1710,7 @@ mod tests {
                 "  Output: {\"closed\":1}",
                 "  Calls: github.close_issue ×1, github.list_issues ×1",
                 "  Trace:",
-                "#0 run_started\n#1 tool github.close_issue",
+                "#0 run_started\n#1 call github.close_issue",
                 "A fix must keep every behavior the suite of triage@4be1c07a9d3e pins: there is no way around it. Fix the script, and check it with test_script({\"code\":\"…\",\"workflow\":\"triage@4be1c07a9d3e\"}) before you try again. If a behavior must change on purpose, save a new version of the workflow with save_workflow, retiring or updating its tests with a reason, and start a new run of it.",
             ]
             .join("\n")
@@ -1779,9 +1776,9 @@ mod tests {
         let inline = json!({
             "name": "closes nothing without approval",
             "input": { "repo": "acme/api" },
-            "world": { "tools": { "github.list_issues": [{ "returns": [{ "number": 4 }] }] } },
+            "world": { "actions": { "github.list_issues": [{ "returns": [{ "number": 4 }] }] } },
             "signals": [{ "name": "approval", "payload": { "close": false } }],
-            "expect": { "output": { "closed": 0 }, "calls": [{ "tool": "github.close_issue", "times": 0 }] }
+            "expect": { "output": { "closed": 0 }, "calls": [{ "action": "github.close_issue", "times": 0 }] }
         });
         let recorded = json!({
             "name": format!("recorded {RUN_ID}"),
@@ -1791,9 +1788,9 @@ mod tests {
                 "v": 1,
                 "matching": "by_args",
                 "calls": [
-                    { "tool": "github.list_issues", "args": { "repo": "acme/api" }, "outcome": { "result": [] } },
-                    { "tool": "github.close_issue", "args": { "number": 4 }, "outcome": { "result": {} } },
-                    { "tool": "github.close_issue", "args": { "number": 5 }, "outcome": { "result": {} } }
+                    { "action": "github.list_issues", "args": { "repo": "acme/api" }, "outcome": { "result": [] } },
+                    { "action": "github.close_issue", "args": { "number": 4 }, "outcome": { "result": {} } },
+                    { "action": "github.close_issue", "args": { "number": 5 }, "outcome": { "result": {} } }
                 ],
                 "signals": [{ "name": "approval", "payload": { "close": true }, "elapsed_ms": 3_600_000 }]
             } },
@@ -1843,7 +1840,7 @@ mod tests {
                 "Its suite, 3 tests, which every version derived from it must pass (give a digest in save_workflow's `tests` or `update` to reuse a test):".to_owned(),
                 format!("Test \"closes nothing without approval\" ({inline_digest}):"),
                 // `JSON.stringify` keeps the order the server writes a test's fields in.
-                "{\"name\":\"closes nothing without approval\",\"input\":{\"repo\":\"acme/api\"},\"world\":{\"tools\":{\"github.list_issues\":[{\"returns\":[{\"number\":4}]}]}},\"signals\":[{\"name\":\"approval\",\"payload\":{\"close\":false}}],\"expect\":{\"output\":{\"closed\":0},\"calls\":[{\"tool\":\"github.close_issue\",\"times\":0}]}}".to_owned(),
+                "{\"name\":\"closes nothing without approval\",\"input\":{\"repo\":\"acme/api\"},\"world\":{\"actions\":{\"github.list_issues\":[{\"returns\":[{\"number\":4}]}]}},\"signals\":[{\"name\":\"approval\",\"payload\":{\"close\":false}}],\"expect\":{\"output\":{\"closed\":0},\"calls\":[{\"action\":\"github.close_issue\",\"times\":0}]}}".to_owned(),
                 format!(
                     "Test \"recorded {RUN_ID}\" ({recorded_digest}), recorded from run {RUN_ID} of triage@{}:",
                     short(&parent_version)
@@ -1935,7 +1932,7 @@ mod tests {
             "id": "r2", "handle": "user_2fQ81/triage/06bqx3k9f2mv", "namespace": "user_2fQ81",
             "status": "active", "quarantined": false, "script": "s",
             "headline": "", "actionSet": "t", "labels": {}, "startedAt": "2026-11-12T10:00:00Z",
-            "lastActivityAt": "2026-11-12T10:00:00Z", "toolCalls": 1, "errors": 0, "historyLen": 3,
+            "lastActivityAt": "2026-11-12T10:00:00Z", "calls": 1, "errors": 0, "historyLen": 3,
             "waitingFor": [], "workflow": "triage", "startedBy": "r1"
         }))
         .unwrap();
@@ -1943,7 +1940,7 @@ mod tests {
             describe_runs(&[summary], false, None),
             [
                 "1 run, most recent first:",
-                "- user_2fQ81/triage/06bqx3k9f2mv: active, started 2026-11-12T10:00:00Z, 1 tool call, a run of the workflow triage, started by r1",
+                "- user_2fQ81/triage/06bqx3k9f2mv: active, started 2026-11-12T10:00:00Z, 1 call, a run of the workflow triage, started by r1",
             ]
             .join("\n")
         );

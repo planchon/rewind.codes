@@ -1,7 +1,7 @@
 //! Action sets with APIs read from OpenAPI documents, and MCP servers listed with Rewind's signature
-//! (`archi/04-tools.md`, "API tools" and "Signed calls"). The servers of these tests listen on
+//! (`archi/04-tools.md`, "API actions" and "Signed calls"). The servers of these tests listen on
 //! 127.0.0.1: the embedded server reaches them, calls included; a deployed server reaches them
-//! only through `--allow-internal-tools`, and calls APIs over https only.
+//! only through `--allow-internal-addresses`, and calls APIs over https only.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -18,7 +18,7 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use clap::Parser;
 use rewind_api::access::BuiltInRole;
 use rewind_api::action_sets::{
-    Api, Auth, CreateActionSet, McpServer, OnInterruption, OpenApiDocument, ToolPolicy,
+    ActionPolicy, Api, Auth, CreateActionSet, McpServer, OnInterruption, OpenApiDocument,
 };
 use rewind_api::common::RunStatus;
 use rewind_api::runs::StartRun;
@@ -130,9 +130,9 @@ fn api(document: OpenApiDocument, base_url: Option<String>) -> CreateActionSet {
             concurrency: None,
             policies: [(
                 "getMeasure".to_owned(),
-                ToolPolicy {
+                ActionPolicy {
                     approval: Some(false),
-                    ..ToolPolicy::default()
+                    ..ActionPolicy::default()
                 },
             )]
             .into(),
@@ -148,7 +148,7 @@ fn problem(error: rewind_api::Error) -> rewind_api::Problem {
         .unwrap_or_else(|| panic!("not a problem: {error}"))
 }
 
-const SCRIPT: &str = r#"import { dax } from "rewind:tools";
+const SCRIPT: &str = r#"import { dax } from "rewind:actions";
 
 export default async function () {
   const measure = await dax.getMeasure({ id: "m-1" });
@@ -183,14 +183,14 @@ async fn the_embedded_server_reads_an_api_and_calls_it() {
         .await
         .unwrap();
     let names: Vec<&str> = registered
-        .tools
+        .actions
         .iter()
-        .map(|tool| tool.name.as_str())
+        .map(|action| action.name.as_str())
         .collect();
     assert_eq!(names, ["dax.createMeasure", "dax.getMeasure", "webhook"]);
     assert_eq!(registered.apis.len(), 1);
     assert_eq!(registered.apis[0].base_url, base);
-    assert_eq!(registered.apis[0].tools, 2);
+    assert_eq!(registered.apis[0].actions, 2);
     assert_eq!(registered.skipped.len(), 1);
     assert_eq!(registered.skipped[0].path, "/measures/{id}");
     assert_eq!(registered.skipped[0].method, "put");
@@ -199,9 +199,9 @@ async fn the_embedded_server_reads_an_api_and_calls_it() {
         "its body is text/csv, and Rewind sends application/json only"
     );
     let create = registered
-        .tools
+        .actions
         .iter()
-        .find(|tool| tool.name == "dax.createMeasure")
+        .find(|action| action.name == "dax.createMeasure")
         .unwrap();
     // A POST that declares Idempotency-Key may be sent again.
     assert_eq!(create.policy.on_interruption, Some(OnInterruption::Retry));
@@ -269,7 +269,7 @@ async fn a_deployed_server_reads_documents_through_the_egress_checks() {
     );
     closed.stop().await;
 
-    let open = TestServer::start(&["--allow-internal-tools", "127.0.0.1"]).await;
+    let open = TestServer::start(&["--allow-internal-addresses", "127.0.0.1"]).await;
     let harness = open.key(BuiltInRole::Harness, &[]).await;
     let registered = harness
         .create_action_set(&api(OpenApiDocument::Url(document_url), None))
@@ -310,7 +310,7 @@ async fn a_deployed_server_reads_documents_through_the_egress_checks() {
     );
     unknown.apis[0]
         .policies
-        .insert("dropMeasure".into(), ToolPolicy::default());
+        .insert("dropMeasure".into(), ActionPolicy::default());
     let refused = problem(harness.create_action_set(&unknown).await.unwrap_err());
     assert_eq!(
         refused.detail,
@@ -319,7 +319,7 @@ async fn a_deployed_server_reads_documents_through_the_egress_checks() {
     open.stop().await;
 }
 
-/// An MCP server with one tool, which records the claims of the JWT of each request. It does
+/// An MCP server with one action, which records the claims of the JWT of each request. It does
 /// not check the signature: the tenant's key is the server's own, and its JWKS is another
 /// workstream's endpoint.
 #[derive(Debug, Clone, Default)]
@@ -397,7 +397,7 @@ async fn a_signed_server_is_listed_with_the_reduced_claims() {
     let signed = Signed::default();
     let url = serve_signed(signed.clone()).await;
     let server = TestServer::in_memory(&[
-        "--allow-internal-tools",
+        "--allow-internal-addresses",
         "127.0.0.1",
         "--public-url",
         "https://rewind.example",
@@ -408,7 +408,7 @@ async fn a_signed_server_is_listed_with_the_reduced_claims() {
         .create_action_set(&signed_action_set(&url))
         .await
         .unwrap();
-    assert_eq!(registered.tools[0].name, "crm.whoami");
+    assert_eq!(registered.actions[0].name, "crm.whoami");
     let claims = signed.claims.lock().unwrap().clone();
     assert!(claims.len() >= 2, "initialize and tools/list: {claims:?}");
     for claims in &claims {
@@ -420,7 +420,7 @@ async fn a_signed_server_is_listed_with_the_reduced_claims() {
     server.stop().await;
 
     // Without a public URL, no one could fetch the keys: the server does not sign.
-    let unsigned = TestServer::in_memory(&["--allow-internal-tools", "127.0.0.1"]).await;
+    let unsigned = TestServer::in_memory(&["--allow-internal-addresses", "127.0.0.1"]).await;
     let harness = unsigned.key(BuiltInRole::Harness, &[]).await;
     let refused = problem(
         harness

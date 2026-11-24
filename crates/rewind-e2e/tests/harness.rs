@@ -23,8 +23,7 @@ async fn a_journal_that_no_longer_matches_its_script_does_not_replay() {
     let case = Case::load("epoch-1/blue/fan_out_out_of_order").unwrap();
     let journal = std::fs::read_to_string(case.journal_path()).unwrap();
     let mut document = rewind_format::decode_journal(&journal).unwrap();
-    let Event::Command(Command::ScheduleToolCall { args, .. }) = &mut document.entries[2].event
-    else {
+    let Event::Command(Command::ScheduleCall { args, .. }) = &mut document.entries[2].event else {
         panic!("entry 2 is the second call");
     };
     *args = Payload::Value(json!({ "number": 20, "repo": "acme/api" }));
@@ -34,7 +33,7 @@ async fn a_journal_that_no_longer_matches_its_script_does_not_replay() {
         panic!("{replayed:?}")
     };
     assert!(
-        message.starts_with("history entry 2 is tool call #2"),
+        message.starts_with("history entry 2 is call #2"),
         "{message}"
     );
 

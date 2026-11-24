@@ -1,24 +1,25 @@
-//! The action set as `rewind:tools` exports it: one namespace per MCP server or host-tool group, one
-//! function per bare host tool, and the type of each tool's args and result.
+//! The action set as `rewind:actions` exports it: one namespace per group (an MCP server, an API or a
+//! host-tool group), one function per bare host tool, and the type of each action's args and
+//! result.
 
 use std::collections::BTreeMap;
 
-use rewind_core::{ActionSet, Shape, Tool, ToolRoute};
+use rewind_core::{Action, ActionRoute, ActionSet, Shape};
 
 use crate::observed;
 use crate::schema::{self, Declaration, Role, Scope};
 use crate::ty::{Doc, Names, Ty, is_identifier};
 
-/// One export of `rewind:tools`.
+/// One export of `rewind:actions`.
 #[derive(Debug)]
 pub(crate) struct Export<'a> {
-    /// The name scripts import: the namespace, or the bare tool's name.
+    /// The name scripts import: the namespace, or the bare action's name.
     pub(crate) name: &'a str,
     pub(crate) kind: ExportKind,
-    /// The named types of its tools.
+    /// The named types of its actions.
     pub(crate) scope: Scope,
-    /// Its tools, sorted by name. A bare tool's export has exactly one.
-    pub(crate) tools: Vec<Signature<'a>>,
+    /// Its actions, sorted by name. A bare action's export has exactly one.
+    pub(crate) actions: Vec<Signature<'a>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,10 +30,10 @@ pub(crate) enum ExportKind {
     Function,
 }
 
-/// A tool's signature.
+/// An action's signature.
 #[derive(Debug)]
 pub(crate) struct Signature<'a> {
-    pub(crate) tool: &'a Tool,
+    pub(crate) action: &'a Action,
     pub(crate) args: Ty,
     /// The script may leave the args out: no property is required. The call sends `{}`.
     pub(crate) args_optional: bool,
@@ -50,43 +51,45 @@ pub(crate) fn exports<'a>(
     observed: &BTreeMap<String, Shape>,
 ) -> Vec<Export<'a>> {
     let mut exports: BTreeMap<&str, Export<'a>> = BTreeMap::new();
-    for tool in action_set.tools() {
-        let (name, kind) = match (&tool.route, tool.namespace()) {
-            (ToolRoute::Builtin(_), _) => continue,
+    for action in action_set.actions() {
+        let (name, kind) = match (&action.route, action.group()) {
+            (ActionRoute::Builtin(_), _) => continue,
             (_, Some(namespace)) => (namespace, ExportKind::Namespace),
-            (_, None) if is_identifier(&tool.name) => (tool.name.as_str(), ExportKind::Function),
+            (_, None) if is_identifier(&action.name) => {
+                (action.name.as_str(), ExportKind::Function)
+            }
             (_, None) => continue,
         };
         let export = exports.entry(name).or_insert_with(|| Export {
             name,
             kind,
             scope: Scope::default(),
-            tools: Vec::new(),
+            actions: Vec::new(),
         });
-        let signature = signature(&mut export.scope, tool, observed.get(&tool.name));
-        export.tools.push(signature);
+        let signature = signature(&mut export.scope, action, observed.get(&action.name));
+        export.actions.push(signature);
     }
     exports.into_values().collect()
 }
 
-fn signature<'a>(scope: &mut Scope, tool: &'a Tool, observed: Option<&Shape>) -> Signature<'a> {
-    let local = tool.local_name();
-    let args = schema::convert(scope, &tool.input_schema, local, Role::Args);
+fn signature<'a>(scope: &mut Scope, action: &'a Action, observed: Option<&Shape>) -> Signature<'a> {
+    let local = action.local_name();
+    let args = schema::convert(scope, &action.input_schema, local, Role::Args);
     let args_optional = args_optional(&args, scope);
-    let (result, observed) = match &tool.output_schema {
+    let (result, observed) = match &action.output_schema {
         Some(output) => (schema::convert(scope, output, local, Role::Result), false),
-        None => match (&tool.route, observed) {
-            (ToolRoute::Mcp { .. }, Some(shape)) => match observed::structured_content(shape) {
+        None => match (&action.route, observed) {
+            (ActionRoute::Mcp { .. }, Some(shape)) => match observed::structured_content(shape) {
                 Some(structured) => (Ty::Content(Box::new(observed::type_of(structured))), true),
                 None => (Ty::Content(Box::new(Ty::Unknown)), false),
             },
-            (ToolRoute::Mcp { .. }, None) => (Ty::Content(Box::new(Ty::Unknown)), false),
+            (ActionRoute::Mcp { .. }, None) => (Ty::Content(Box::new(Ty::Unknown)), false),
             (_, Some(shape)) if *shape != Shape::Unknown => (observed::type_of(shape), true),
             (_, _) => (Ty::Unknown, false),
         },
     };
     let mut doc = Doc {
-        description: tool
+        description: action
             .description
             .as_deref()
             .map(str::trim)
@@ -97,12 +100,12 @@ fn signature<'a>(scope: &mut Scope, tool: &'a Tool, observed: Option<&Shape>) ->
     if observed {
         doc.tags.push(
             "@observed The result type was inferred from recorded results, not declared by the \
-             tool: it may be incomplete."
+             action: it may be incomplete."
                 .to_owned(),
         );
     }
     Signature {
-        tool,
+        action,
         args,
         args_optional,
         result,
@@ -149,22 +152,22 @@ impl Export<'_> {
         self.scope.get(name).map(|declaration| &declaration.ty)
     }
 
-    /// Who the namespace's tools belong to, for its comment.
+    /// Who the namespace's actions belong to, for its comment.
     pub(crate) fn owner(&self) -> String {
         let mcp = self
-            .tools
+            .actions
             .iter()
-            .all(|signature| matches!(signature.tool.route, ToolRoute::Mcp { .. }));
+            .all(|signature| matches!(signature.action.route, ActionRoute::Mcp { .. }));
         let host = self
-            .tools
+            .actions
             .iter()
-            .all(|signature| matches!(signature.tool.route, ToolRoute::Host { .. }));
+            .all(|signature| matches!(signature.action.route, ActionRoute::Host { .. }));
         if mcp {
-            format!("Tools of the MCP server `{}`.", self.name)
+            format!("Actions of the MCP server `{}`.", self.name)
         } else if host {
-            format!("Tools of the harness, group `{}`.", self.name)
+            format!("Actions of the harness, group `{}`.", self.name)
         } else {
-            format!("Tools of `{}`.", self.name)
+            format!("Actions of `{}`.", self.name)
         }
     }
 }

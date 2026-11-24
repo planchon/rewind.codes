@@ -70,7 +70,7 @@ pub struct LegacyRun {
     pub signal_keys: Vec<String>,
     /// Its script's timers not fired yet, by `seq`.
     pub timers: Vec<(Seq, Timestamp)>,
-    /// Its tool tasks, by `seq`.
+    /// Its call tasks, by `seq`.
     pub tasks: Vec<LegacyTask>,
     /// Its webhook tokens, by their SHA-256.
     pub webhooks: Vec<LegacyWebhook>,
@@ -91,11 +91,11 @@ pub enum LegacyHistory {
     Archived(Digest),
 }
 
-/// A tool task of a run, as its row states it; its route and policy are the pinned action set's.
+/// A call's task of a run, as its row states it; its route and policy are the pinned action set's.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LegacyTask {
     pub seq: Seq,
-    pub tool: String,
+    pub action: String,
     pub args: Payload,
     /// `Claimed` while a worker held it, `Deferred` while its handler held its token.
     pub state: TaskState,

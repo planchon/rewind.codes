@@ -4,9 +4,9 @@
 #![allow(clippy::unwrap_used)]
 
 use rewind_core::{
-    AbortKind, AbortReason, Annotation, Callsite, CancelReason, Command, Completion, Digest, Epoch,
-    Event, Lifecycle, LogLevel, Payload, RunId, RunMode, RunStarted, RunState, RunStatus,
-    ScriptError, Seed, Seq, Timestamp, ToolFailure, ToolFailureKind,
+    AbortKind, AbortReason, ActionFailure, ActionFailureKind, Annotation, Callsite, CancelReason,
+    Command, Completion, Digest, Epoch, Event, Lifecycle, LogLevel, Payload, RunId, RunMode,
+    RunStarted, RunState, RunStatus, ScriptError, Seed, Seq, Timestamp,
 };
 use rewind_format::{FormatError, decode_event, decode_journal, encode_event, encode_journal};
 use serde_json::json;
@@ -62,14 +62,14 @@ fn decodes_to_the_expected_domain_values() {
             .source()
             .starts_with("import { github } from \"rewind:tools\";")
     );
-    assert_eq!(journal.action_set.tools().len(), 7);
+    assert_eq!(journal.action_set.actions().len(), 7);
     let history = journal.entries;
     assert_eq!(history.len(), 16);
     assert_eq!(
         history[0].event,
         Event::Lifecycle(Lifecycle::RunStarted(RunStarted {
             script: digest("88b30ba7a18c0a5dcd87a939c120336570ea6c747836b1a6b59ce93108d57c31"),
-            action_set: digest("41c98467fab2b9b22e2ef928f7b284e4c7adf424ed905dabfe4342e65ea69552"),
+            action_set: digest("e8bf5b78904ef944a7d6898a625ea47cf6714d38120ab859c01aa911cdb62de0"),
             input: json!({ "repo": "acme/api" }).into(),
             seed: Seed::from_bytes(
                 *digest("19b25856e1c150ca834cffc8b59b23adbd0ec0389e58eb22b3b64768098d002b")
@@ -83,9 +83,9 @@ fn decodes_to_the_expected_domain_values() {
     assert_eq!(history[0].recorded_at, Timestamp(1_767_225_600_000));
     assert_eq!(
         history[1].event,
-        Event::Command(Command::ScheduleToolCall {
+        Event::Command(Command::ScheduleCall {
             seq: Seq(1),
-            tool: "github.list_issues".into(),
+            action: "github.list_issues".into(),
             args: json!({ "repo": "acme/api", "state": "open" }).into(),
             callsite: Some(Callsite {
                 line: 5,
@@ -95,7 +95,7 @@ fn decodes_to_the_expected_domain_values() {
     );
     assert_eq!(
         history[2].event,
-        Event::Completion(Completion::ToolCallCompleted {
+        Event::Completion(Completion::CallCompleted {
             seq: Seq(1),
             result: Payload::Digest(digest(
                 "f6a214f7a5fcda0c2cee9660b7fc29f5649e3c68aad48e20e950137c98913a68"
@@ -115,10 +115,10 @@ fn decodes_to_the_expected_domain_values() {
     );
     assert_eq!(
         history[10].event,
-        Event::Completion(Completion::ToolCallFailed {
+        Event::Completion(Completion::CallFailed {
             seq: Seq(3),
-            error: ToolFailure {
-                kind: ToolFailureKind::OutcomeUnknown,
+            error: ActionFailure {
+                kind: ActionFailureKind::OutcomeUnknown,
                 message: "connection reset".into(),
                 data: Some(json!({ "status": 503 })),
             },
@@ -174,9 +174,9 @@ fn pins_the_spelling_of_every_variant() {
         })
     };
     let failure = |kind| {
-        Event::Completion(Completion::ToolCallFailed {
+        Event::Completion(Completion::CallFailed {
             seq: Seq(1),
-            error: ToolFailure {
+            error: ActionFailure {
                 kind,
                 message: "m".into(),
                 data: None,
@@ -221,20 +221,20 @@ fn pins_the_spelling_of_every_variant() {
             r#"{"v":1,"type":"log","level":"error","message":"m"}"#,
         ),
         (
-            failure(ToolFailureKind::Error),
-            r#"{"v":1,"type":"tool_call_failed","seq":1,"error":{"kind":"error","message":"m"}}"#,
+            failure(ActionFailureKind::Error),
+            r#"{"v":1,"type":"call_failed","seq":1,"error":{"kind":"error","message":"m"}}"#,
         ),
         (
-            failure(ToolFailureKind::Unavailable),
-            r#"{"v":1,"type":"tool_call_failed","seq":1,"error":{"kind":"unavailable","message":"m"}}"#,
+            failure(ActionFailureKind::Unavailable),
+            r#"{"v":1,"type":"call_failed","seq":1,"error":{"kind":"unavailable","message":"m"}}"#,
         ),
         (
-            failure(ToolFailureKind::Timeout),
-            r#"{"v":1,"type":"tool_call_failed","seq":1,"error":{"kind":"timeout","message":"m"}}"#,
+            failure(ActionFailureKind::Timeout),
+            r#"{"v":1,"type":"call_failed","seq":1,"error":{"kind":"timeout","message":"m"}}"#,
         ),
         (
-            failure(ToolFailureKind::OutcomeUnknown),
-            r#"{"v":1,"type":"tool_call_failed","seq":1,"error":{"kind":"outcome_unknown","message":"m"}}"#,
+            failure(ActionFailureKind::OutcomeUnknown),
+            r#"{"v":1,"type":"call_failed","seq":1,"error":{"kind":"outcome_unknown","message":"m"}}"#,
         ),
         (
             Event::Completion(Completion::CancelRequested {
@@ -265,25 +265,25 @@ fn pins_the_spelling_of_every_variant() {
 fn values_are_written_in_their_canonical_form() {
     let value: serde_json::Value =
         serde_json::from_str(r#"{"z":1e21,"a":[1.50,{"y":true,"b":null}],"é":"\u00e9"}"#).unwrap();
-    let event = Event::Completion(Completion::ToolCallFailed {
+    let event = Event::Completion(Completion::CallFailed {
         seq: Seq(1),
-        error: ToolFailure {
-            kind: ToolFailureKind::Error,
+        error: ActionFailure {
+            kind: ActionFailureKind::Error,
             message: "m".into(),
             data: Some(value.clone()),
         },
     });
     assert_eq!(
         encode_event(&event),
-        r#"{"v":1,"type":"tool_call_failed","seq":1,"error":{"kind":"error","message":"m","data":{"a":[1.5,{"b":null,"y":true}],"z":1e+21,"é":"é"}}}"#
+        r#"{"v":1,"type":"call_failed","seq":1,"error":{"kind":"error","message":"m","data":{"a":[1.5,{"b":null,"y":true}],"z":1e+21,"é":"é"}}}"#
     );
-    let result = Event::Completion(Completion::ToolCallCompleted {
+    let result = Event::Completion(Completion::CallCompleted {
         seq: Seq(1),
         result: value.clone().into(),
     });
     assert_eq!(
         encode_event(&result),
-        r#"{"v":1,"type":"tool_call_completed","seq":1,"result":{"value":{"a":[1.5,{"b":null,"y":true}],"z":1e+21,"é":"é"}}}"#
+        r#"{"v":1,"type":"call_completed","seq":1,"result":{"value":{"a":[1.5,{"b":null,"y":true}],"z":1e+21,"é":"é"}}}"#
     );
     assert_eq!(decode_event(&encode_event(&result)).unwrap(), result);
 }
@@ -313,9 +313,9 @@ fn rejects_what_v1_does_not_define() {
         r#"{"v":1,"type":"timer_exploded","seq":1}"#,
         r#"{"v":1,"type":"timer_fired"}"#,
         r#"{"v":1,"type":"timer_fired","seq":-1}"#,
-        r#"{"v":1,"type":"tool_call_completed","seq":1,"result":{"value":1,"digest":"00"}}"#,
-        r#"{"v":1,"type":"tool_call_completed","seq":1,"result":{"digest":"F6A214F7A5FCDA0C2CEE9660B7FC29F5649E3C68AAD48E20E950137C98913A68"}}"#,
-        r#"{"v":1,"type":"tool_call_completed","seq":1,"result":{"digest":"f6a2"}}"#,
+        r#"{"v":1,"type":"call_completed","seq":1,"result":{"value":1,"digest":"00"}}"#,
+        r#"{"v":1,"type":"call_completed","seq":1,"result":{"digest":"F6A214F7A5FCDA0C2CEE9660B7FC29F5649E3C68AAD48E20E950137C98913A68"}}"#,
+        r#"{"v":1,"type":"call_completed","seq":1,"result":{"digest":"f6a2"}}"#,
         r#"{"v":1,"type":"cancel_requested","reason":{"kind":"bored"}}"#,
         r#"{"v":1,"type":"cancel_requested","reason":{"kind":"ttl","extra":1}}"#,
         r#"{"v":1,"type":"log","level":"trace","message":"m"}"#,
@@ -328,7 +328,7 @@ fn rejects_what_v1_does_not_define() {
         );
     }
 
-    let action_set = r#"{"servers":[],"tools":[],"v":1}"#;
+    let action_set = r#"{"actions":[],"servers":[],"v":1}"#;
     let document = |fields: &str| format!(r#"{{"v":1,{fields}}}"#);
     let valid = document(&format!(
         r#""run":"019b7a3c-8f00-7000-8000-000000000003","script":"s","action_set":{action_set},"entries":[]"#

@@ -1,4 +1,4 @@
-import { reports } from "rewind:tools";
+import { reports } from "rewind:actions";
 
 export default async function main() {
   const report = await reports.build({ month: "2026-10" });

@@ -57,7 +57,7 @@ pub(crate) fn run(run: &Run) -> String {
                         text,
                         "  failed call #{} {}({}): {}: {}",
                         call.seq,
-                        call.tool,
+                        call.action,
                         payload(&call.args),
                         snake_case(&kind),
                         call.error.message
@@ -85,9 +85,9 @@ pub(crate) fn run(run: &Run) -> String {
 
 fn waiting(waiting: &Waiting) -> String {
     match waiting {
-        Waiting::ToolCall {
+        Waiting::Call {
             seq,
-            tool,
+            action,
             args,
             state,
             parked,
@@ -97,7 +97,7 @@ fn waiting(waiting: &Waiting) -> String {
         } => {
             let state = snake_case(&format!("{state:?}"));
             let mut text = format!(
-                "tool call #{seq} {tool}({}): {state}, attempt {attempt}",
+                "call #{seq} {action}({}): {state}, attempt {attempt}",
                 payload(args)
             );
             if let Some(parked) = parked {
@@ -174,7 +174,7 @@ pub(crate) fn runs(runs: &[RunSummary]) -> String {
             run.handle.clone(),
             status,
             run.started_at.to_string(),
-            run.tool_calls.to_string(),
+            run.calls.to_string(),
             run.errors.to_string(),
             // The script's title, else its first line.
             shorten(

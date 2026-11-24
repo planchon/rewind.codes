@@ -29,7 +29,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use hmac::Mac as _;
-use rewind_core::{McpServer, McpTransport, SecretPlacement, ToolFailureKind, canonical_json};
+use rewind_core::{ActionFailureKind, McpServer, McpTransport, SecretPlacement, canonical_json};
 use rewind_engine::ports::{Secret, SigningKey, TenantId};
 use rewind_outbound::{Placed, Redirects, Signer, place};
 use rmcp::model::{
@@ -222,7 +222,7 @@ impl Pool {
             });
         }
         Err(Failure::transient(
-            ToolFailureKind::Unavailable,
+            ActionFailureKind::Unavailable,
             format!("the connection to {} closed as it opened", server.name),
         ))
     }
@@ -440,7 +440,7 @@ impl Connection {
         }
         Err((
             Failure::permanent(
-                ToolFailureKind::Unavailable,
+                ActionFailureKind::Unavailable,
                 format!(
                     "{server} lists more than {MAX_TOOLS} tools, or more than {MAX_TOOL_PAGES} \
                      pages of them: Rewind reads no further"
@@ -624,7 +624,7 @@ async fn connect(
 
 /// A session that cannot be opened as its credentials say: it will not open by retrying.
 fn unavailable(message: String) -> Failure {
-    Failure::permanent(ToolFailureKind::Unavailable, message, None)
+    Failure::permanent(ActionFailureKind::Unavailable, message, None)
 }
 
 #[cfg(test)]

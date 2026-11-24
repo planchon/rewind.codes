@@ -17,8 +17,8 @@ use rewind_engine::edge::{Edge, EdgeError};
 use rewind_engine::plane::{HostTools, NodeConfig, Wiring};
 use rewind_engine::ports::link::{HostFailure, HostTask, RunView, StreamEvent};
 use rewind_engine::ports::{
-    Clock, Created, Enqueued, NodeId, PartitionStore, RunRef, TaskRef, TaskToken, TenantId,
-    ToolTask,
+    CallTask, Clock, Created, Enqueued, NodeId, PartitionStore, RunRef, TaskRef, TaskToken,
+    TenantId,
 };
 
 use super::{FakeExecutor, RecordingDispatcher, T0};
@@ -256,9 +256,9 @@ impl<S: PartitionStore<Log: 'static> + 'static> World<S> {
         self.edge.cancel(&mut gateway, run, None).await
     }
 
-    pub async fn tasks(&mut self, run: &RunRef) -> Vec<ToolTask> {
+    pub async fn tasks(&mut self, run: &RunRef) -> Vec<CallTask> {
         let mut gateway = self.driver.gateway(&self.at);
-        self.edge.tool_tasks(&mut gateway, run).await.unwrap()
+        self.edge.call_tasks(&mut gateway, run).await.unwrap()
     }
 
     pub async fn approve(&mut self, task: &TaskRef) -> Result<(), EdgeError> {

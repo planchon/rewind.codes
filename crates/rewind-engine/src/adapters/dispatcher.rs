@@ -1,27 +1,27 @@
 use std::collections::BTreeMap;
 
-use rewind_core::{JsonValue, ToolFailure, ToolFailureKind};
+use rewind_core::{ActionFailure, ActionFailureKind, JsonValue};
 
-use crate::ports::{CallAuth, Dispatched, ToolCall, ToolDispatcher};
+use crate::ports::{ActionDispatcher, Call, CallAuth, Dispatched};
 
-/// Answers every call to a tool with the same response: the static responses of mock mode,
-/// as the CLI reads them from `rewind.tools.json`.
+/// Answers every call to an action with the same response: the static responses of mock mode,
+/// as the CLI reads them from `rewind.actions.json`.
 ///
-/// In JSON, a tool maps to its result, or to `{"$error": "message"}` for a failure:
+/// In JSON, an action maps to its result, or to `{"$error": "message"}` for a failure:
 ///
 /// ```json
 /// { "github.get_issue": { "number": 4, "title": "Crash" }, "slack.post": { "$error": "rate limited" } }
 /// ```
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct StaticDispatcher {
-    responses: BTreeMap<String, Result<JsonValue, ToolFailure>>,
+    responses: BTreeMap<String, Result<JsonValue, ActionFailure>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum StaticResponsesError {
-    #[error("static responses must be a JSON object mapping tool names to responses")]
+    #[error("static responses must be a JSON object mapping action names to responses")]
     NotAnObject,
-    #[error("the \"$error\" of tool {0:?} must be a string")]
+    #[error("the \"$error\" of action {0:?} must be a string")]
     InvalidError(String),
 }
 
@@ -30,51 +30,51 @@ impl StaticDispatcher {
         Self::default()
     }
 
-    /// Responses in the `rewind.tools.json` format.
+    /// Responses in the `rewind.actions.json` format.
     pub fn from_json(json: &JsonValue) -> Result<Self, StaticResponsesError> {
-        let tools = json.as_object().ok_or(StaticResponsesError::NotAnObject)?;
+        let actions = json.as_object().ok_or(StaticResponsesError::NotAnObject)?;
         let mut dispatcher = Self::new();
-        for (tool, response) in tools {
+        for (action, response) in actions {
             match response.get("$error") {
-                Some(JsonValue::String(message)) => dispatcher.insert_error(tool, message),
-                Some(_) => return Err(StaticResponsesError::InvalidError(tool.clone())),
-                None => dispatcher.insert(tool, response.clone()),
+                Some(JsonValue::String(message)) => dispatcher.insert_error(action, message),
+                Some(_) => return Err(StaticResponsesError::InvalidError(action.clone())),
+                None => dispatcher.insert(action, response.clone()),
             }
         }
         Ok(dispatcher)
     }
 
-    pub fn insert(&mut self, tool: impl Into<String>, result: JsonValue) {
-        self.responses.insert(tool.into(), Ok(result));
+    pub fn insert(&mut self, action: impl Into<String>, result: JsonValue) {
+        self.responses.insert(action.into(), Ok(result));
     }
 
-    pub fn insert_error(&mut self, tool: impl Into<String>, message: impl Into<String>) {
+    pub fn insert_error(&mut self, action: impl Into<String>, message: impl Into<String>) {
         self.responses.insert(
-            tool.into(),
-            Err(ToolFailure {
-                kind: ToolFailureKind::Error,
+            action.into(),
+            Err(ActionFailure {
+                kind: ActionFailureKind::Error,
                 message: message.into(),
                 data: None,
             }),
         );
     }
 
-    fn respond(&self, tool: &str) -> Result<JsonValue, ToolFailure> {
-        self.responses.get(tool).cloned().unwrap_or_else(|| {
-            Err(ToolFailure {
-                kind: ToolFailureKind::Unavailable,
-                message: format!("no static response for {tool}"),
+    fn respond(&self, action: &str) -> Result<JsonValue, ActionFailure> {
+        self.responses.get(action).cloned().unwrap_or_else(|| {
+            Err(ActionFailure {
+                kind: ActionFailureKind::Unavailable,
+                message: format!("no static response for {action}"),
                 data: None,
             })
         })
     }
 }
 
-impl ToolDispatcher for StaticDispatcher {
-    /// The tool's response, or its failure. A tool without a response fails with
+impl ActionDispatcher for StaticDispatcher {
+    /// The action's response, or its failure. An action without a response fails with
     /// `unavailable`, for good: retrying would not make one appear.
-    async fn dispatch(&self, call: ToolCall, _auth: CallAuth) -> Dispatched {
-        match self.respond(&call.tool.name) {
+    async fn dispatch(&self, call: Call, _auth: CallAuth) -> Dispatched {
+        match self.respond(&call.action.name) {
             Ok(result) => Dispatched::Result(result),
             Err(failure) => Dispatched::Failed(failure),
         }
@@ -104,7 +104,7 @@ mod tests {
         );
         assert_eq!(
             dispatcher.respond("other").unwrap_err().kind,
-            ToolFailureKind::Unavailable
+            ActionFailureKind::Unavailable
         );
         assert_eq!(
             StaticDispatcher::from_json(&json!([])),

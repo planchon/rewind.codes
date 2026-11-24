@@ -3,7 +3,7 @@ use serde_json::Value;
 use crate::canonical::canonical_json;
 use crate::digest::Digest;
 
-/// A JSON value carried by an event: run input, tool args and results, run output, signal
+/// A JSON value carried by an event: run input, action args and results, run output, signal
 /// payloads.
 ///
 /// Payloads are content-addressed: a value is identified by the SHA-256 of its canonical JSON

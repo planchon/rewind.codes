@@ -1,8 +1,8 @@
 {
-  "description": "The harness's worker dies while it charges: an at_most_once tool is not called again, and the script gets a ToolError whose outcome is unknown, which it checks with another call.",
+  "description": "The harness's worker dies while it charges: an at_most_once action is not called again, and the script gets an ActionError whose outcome is unknown, which it checks with another call.",
   "input": { "amount": 100 },
   "host_worker": true,
-  "tools": {
+  "actions": {
     "payments.charge": { "$crash": true },
     "payments.status": { "charged": true }
   },
@@ -15,7 +15,7 @@
     "output": {
       "charged": true,
       "outcomeUnknown": true,
-      "message": "payments.charge failed: the call to payments.charge was interrupted and may or may not have taken effect; the tool is at_most_once, so it is not called again"
+      "message": "payments.charge failed: the call to payments.charge was interrupted and may or may not have taken effect; the action is at_most_once, so it is not called again"
     },
     "calls": { "payments.charge": 1, "payments.status": 1 }
   }

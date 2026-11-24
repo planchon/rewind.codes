@@ -43,11 +43,11 @@ fn steps() -> FakeExecutor {
             run.call("a", json!(1));
         },
         |run, delivery| match delivery {
-            Delivery::ToolCallCompleted { seq, .. } if seq.0 == 1 => {
+            Delivery::CallCompleted { seq, .. } if seq.0 == 1 => {
                 run.spend(Duration::from_millis(7));
                 run.call("b", json!(2));
             }
-            Delivery::ToolCallCompleted { .. } => {
+            Delivery::CallCompleted { .. } => {
                 run.spend(Duration::from_millis(11));
                 run.complete(json!("done"));
             }

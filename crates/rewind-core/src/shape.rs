@@ -1,7 +1,7 @@
 //! Observed result types (`archi/04-tools.md`, "Observed result types").
 //!
 //! Most MCP servers declare no `outputSchema`, but every result is in a journal. A projection
-//! folds the results of each tool into a [`Shape`]: keys and types, never values. Codegen uses
+//! folds the results of each action into a [`Shape`]: keys and types, never values. Codegen uses
 //! it, marked `@observed`, when the server declares nothing. Shapes serve type-checking and the
 //! prompt only: results are never validated against them, and they are not part of the action set
 //! digest.

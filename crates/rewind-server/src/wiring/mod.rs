@@ -7,7 +7,7 @@
 //! | [`bucket`] | `PartitionStore`, `RunArchive`, `BlobStore` | `rewind-store-slatedb`; `rewind-blob` (files, S3 behind this process's caches) |
 //! | [`link`] | `NodeLink` | in the process |
 //! | [`executor`] | `ScriptExecutor` | `rewind-runtime`'s `V8Executor` |
-//! | [`tools`] | `ToolDispatcher`, discovery and declarations | the engine's routing dispatcher |
+//! | [`actions`] | `ActionDispatcher`, discovery and declarations | the engine's routing dispatcher |
 //! | [`checker`] | `TypeChecker` | `rewind-check` (tsgo) |
 //! | [`telemetry`] | `SpanExporter`, the `tracing` subscriber | `rewind-otel` |
 //! | [`webhooks`] | `WebhookSender` | HTTP, Standard Webhooks (this crate) |
@@ -16,6 +16,7 @@
 //!
 //! Entropy is the engine's system entropy. [`jobs`] are the control plane's daily jobs.
 
+pub(crate) mod actions;
 pub(crate) mod bucket;
 pub(crate) mod checker;
 pub(crate) mod clock;
@@ -25,5 +26,4 @@ pub(crate) mod identity;
 pub(crate) mod jobs;
 pub(crate) mod link;
 pub(crate) mod telemetry;
-pub(crate) mod tools;
 pub(crate) mod webhooks;

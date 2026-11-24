@@ -12,13 +12,13 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use rewind_core::{
-    ActionSet, Annotation, Callsite, Command, Epoch, JsonValue, Payload, RunId, Script,
-    ScriptError, Seq, Timestamp, ToolFailure,
+    ActionFailure, ActionSet, Annotation, Callsite, Command, Epoch, JsonValue, Payload, RunId,
+    Script, ScriptError, Seq, Timestamp,
 };
 use rewind_engine::StartRun;
 use rewind_engine::ports::{
-    CallAuth, CompiledScript, Delivery, Dispatched, Emitted, ExecutorError, InvalidScript,
-    ScriptExecutor, ScriptInstance, StartScript, ToolCall, ToolDispatcher,
+    ActionDispatcher, Call, CallAuth, CompiledScript, Delivery, Dispatched, Emitted, ExecutorError,
+    InvalidScript, ScriptExecutor, ScriptInstance, StartScript,
 };
 
 /// 2026-01-01T00:00:00Z
@@ -105,18 +105,17 @@ impl FakeRun {
         seq
     }
 
-    pub fn call(&mut self, tool: &str, args: JsonValue) -> Seq {
+    pub fn call(&mut self, action: &str, args: JsonValue) -> Seq {
         let seq = self.take_seq();
-        self.emitted
-            .push(Emitted::Command(Command::ScheduleToolCall {
-                seq,
-                tool: tool.into(),
-                args: args.into(),
-                callsite: Some(Callsite {
-                    line: seq.0,
-                    column: 1,
-                }),
-            }));
+        self.emitted.push(Emitted::Command(Command::ScheduleCall {
+            seq,
+            action: action.into(),
+            args: args.into(),
+            callsite: Some(Callsite {
+                line: seq.0,
+                column: 1,
+            }),
+        }));
         seq
     }
 
@@ -167,7 +166,7 @@ impl FakeRun {
 
 /// Programs by name: a script's source is the name of its program. A source starting with
 /// `syntax error` does not compile; the program `unloadable` fails to load. A program imports
-/// every name of `rewind:tools` unless [`FakeExecutor::importing`] says which.
+/// every name of `rewind:actions` unless [`FakeExecutor::importing`] says which.
 #[derive(Clone, Default)]
 pub struct FakeExecutor {
     programs: HashMap<String, Arc<dyn Program>>,
@@ -197,7 +196,7 @@ impl FakeExecutor {
         self
     }
 
-    /// The program `name` imports only these names from `rewind:tools`.
+    /// The program `name` imports only these names from `rewind:actions`.
     pub fn importing(mut self, name: &str, imports: &[&str]) -> Self {
         self.imports.insert(
             name.into(),
@@ -242,7 +241,7 @@ impl ScriptExecutor for FakeExecutor {
         })
     }
 
-    fn tool_imports(&self, script: &Script) -> Option<BTreeSet<String>> {
+    fn action_imports(&self, script: &Script) -> Option<BTreeSet<String>> {
         self.imports.get(script.source()).cloned()
     }
 
@@ -309,8 +308,8 @@ impl ScriptInstance for FakeInstance {
 // -------------------------------------------------------------------------------------------
 // Dispatcher
 
-type Handler = dyn Fn(&ToolCall, &CallAuth) -> Dispatched + Send + Sync;
-type Calls = Arc<Mutex<Vec<(ToolCall, CallAuth)>>>;
+type Handler = dyn Fn(&Call, &CallAuth) -> Dispatched + Send + Sync;
+type Calls = Arc<Mutex<Vec<(Call, CallAuth)>>>;
 
 /// Answers with a handler and records every call, with the authentication it was given.
 #[derive(Clone)]
@@ -328,7 +327,7 @@ impl std::fmt::Debug for RecordingDispatcher {
 
 impl RecordingDispatcher {
     pub fn new(
-        handler: impl Fn(&ToolCall) -> Result<JsonValue, ToolFailure> + Send + Sync + 'static,
+        handler: impl Fn(&Call) -> Result<JsonValue, ActionFailure> + Send + Sync + 'static,
     ) -> Self {
         Self::dispatching(move |call, _| match handler(call) {
             Ok(result) => Dispatched::Result(result),
@@ -339,7 +338,7 @@ impl RecordingDispatcher {
     /// Answers with whatever the handler says, given the call and its authentication: transient
     /// failures, deferrals, parked calls.
     pub fn dispatching(
-        handler: impl Fn(&ToolCall, &CallAuth) -> Dispatched + Send + Sync + 'static,
+        handler: impl Fn(&Call, &CallAuth) -> Dispatched + Send + Sync + 'static,
     ) -> Self {
         Self {
             handler: Arc::new(handler),
@@ -352,7 +351,7 @@ impl RecordingDispatcher {
         Self::new(|call| Ok(call.args.clone()))
     }
 
-    pub fn calls(&self) -> Vec<ToolCall> {
+    pub fn calls(&self) -> Vec<Call> {
         let calls = self.calls.lock().unwrap();
         calls.iter().map(|(call, _)| call.clone()).collect()
     }
@@ -364,19 +363,19 @@ impl RecordingDispatcher {
     }
 }
 
-impl ToolDispatcher for RecordingDispatcher {
-    async fn dispatch(&self, call: ToolCall, auth: CallAuth) -> Dispatched {
+impl ActionDispatcher for RecordingDispatcher {
+    async fn dispatch(&self, call: Call, auth: CallAuth) -> Dispatched {
         let outcome = (self.handler)(&call, &auth);
         self.calls.lock().unwrap().push((call, auth));
         outcome
     }
 }
 
-/// The delivered value of a tool call, or panics.
+/// The delivered value of a call, or panics.
 pub fn result_of(delivery: &Delivery) -> &JsonValue {
     match delivery {
-        Delivery::ToolCallCompleted { result, .. } => result,
-        other => panic!("expected a tool result, got {other:?}"),
+        Delivery::CallCompleted { result, .. } => result,
+        other => panic!("expected an action result, got {other:?}"),
     }
 }
 

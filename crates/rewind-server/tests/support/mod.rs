@@ -577,7 +577,7 @@ pub(crate) async fn nul_lookups_match_nothing(server: &TestServer) {
     not_found(harness.delete_token_key("rk_\u{0}").await.unwrap_err());
     not_found(harness.get_run("run\u{0}", None).await.unwrap_err());
 
-    // Filters: labels and tools.
+    // Filters: labels and actions.
     for label in ["agent:tri\u{0}age", "ag\u{0}ent:triage"] {
         let runs = RunFilter {
             labels: vec![label.into()],
@@ -586,17 +586,17 @@ pub(crate) async fn nul_lookups_match_nothing(server: &TestServer) {
         refused(harness.list_runs(&runs).await.unwrap_err());
     }
     let runs = RunFilter {
-        tool: Some("ask\u{0}".into()),
+        action: Some("ask\u{0}".into()),
         ..RunFilter::default()
     };
     refused(harness.list_runs(&runs).await.unwrap_err());
     let scripts = ScriptFilter {
-        tool: Some("ask\u{0}".into()),
+        action: Some("ask\u{0}".into()),
         ..ScriptFilter::default()
     };
     refused(harness.list_scripts(&scripts).await.unwrap_err());
     let stream = TaskStreamQuery {
-        tools: vec!["ask_user".into(), "ask\u{0}".into()],
+        actions: vec!["ask_user".into(), "ask\u{0}".into()],
         ..TaskStreamQuery::default()
     };
     refused(worker.task_stream(&stream).await.unwrap_err());

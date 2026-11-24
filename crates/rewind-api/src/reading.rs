@@ -1,4 +1,4 @@
-//! Reading across runs, for the dashboard: tool statistics and payloads on demand
+//! Reading across runs, for the dashboard: action statistics and payloads on demand
 //! (`archi/05-testing-and-observability.md`, "Read model" and "Dashboard"). The list of
 //! scripts is in [`crate::scripts`], the list of runs in [`crate::runs`].
 
@@ -9,26 +9,26 @@ use utoipa::{IntoParams, ToSchema};
 
 use crate::common::Timestamp;
 
-/// `GET /v1/tools/stats`: latency, errors and retries per tool, over the calls of a scope
+/// `GET /v1/actions/stats`: latency, errors and retries per action, over the calls of a scope
 /// scheduled in a window, from the hourly counters. A scope and a window, as `GET /v1/runs/stats`
-/// takes them (`crate::runs::RunStatsQuery`), and the start of a tool's name.
+/// takes them (`crate::runs::RunStatsQuery`), and the start of an action's name.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, IntoParams)]
 #[serde(rename_all = "camelCase")]
 #[into_params(parameter_in = Query)]
-pub struct ToolStatsFilter {
+pub struct ActionStatsFilter {
     /// The scope, as a query: one term `namespace:<name>` of one value, or nothing for the
     /// tenant. Any other term is refused with its position (`invalid-query`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub q: Option<String>,
-    /// Only the tools whose name starts with this (`github.`).
+    /// Only the actions of this group, their name's prefix (`github` for `github.list_issues`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub prefix: Option<String>,
+    pub group: Option<String>,
     /// Only calls of runs of this action set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub action_set: Option<String>,
-    /// Only this tool.
+    /// Only this action.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tool: Option<String>,
+    pub action: Option<String>,
     /// Calls scheduled at or after this time, rounded down to the hour. 24 hours ago by default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[param(value_type = Option<String>, format = DateTime)]
@@ -41,17 +41,17 @@ pub struct ToolStatsFilter {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct ToolStatsPage {
+pub struct ActionStatsPage {
     pub since: Timestamp,
     pub until: Timestamp,
-    /// By tool name.
-    pub tools: Vec<ToolStats>,
+    /// By action name.
+    pub actions: Vec<ActionStats>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct ToolStats {
-    pub tool: String,
+pub struct ActionStats {
+    pub action: String,
     /// Calls scheduled in the window.
     pub calls: u64,
     /// Calls that failed, whatever the kind.
@@ -60,7 +60,7 @@ pub struct ToolStats {
     pub error_kinds: BTreeMap<String, u64>,
     /// Attempts beyond the first, over every call.
     pub retries: u64,
-    /// From `schedule_tool_call` to the completion, in milliseconds, over the calls that have an
+    /// From `schedule_call` to the completion, in milliseconds, over the calls that have an
     /// outcome; zeros when none has.
     pub latency_ms: Latency,
 }

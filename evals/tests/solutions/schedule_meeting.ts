@@ -1,4 +1,4 @@
-import { office } from "rewind:tools";
+import { office } from "rewind:actions";
 
 type Availability = { busy: { start: string; end: string }[] };
 

@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use rewind_core::{ActionSet, Digest, PartitionId, RunId, Script, Timestamp, Workflow};
 
-use crate::ports::checker::ToolDeclarations;
+use crate::ports::checker::ActionDeclarations;
 use crate::ports::executor::CompiledScript;
 use crate::ports::journal::{
     ScriptTitle, StoredActionSet, StoredScript, StoredWorkflow, TestRecord, WorkflowFilter,
@@ -155,7 +155,7 @@ pub trait CatalogStore: Send + Sync {
         &self,
         tenant: &TenantId,
         action_set: &ActionSet,
-        declarations: &ToolDeclarations,
+        declarations: &ActionDeclarations,
     ) -> impl Future<Output = Result<(), CatalogError>> + Send;
 
     fn get_action_set(

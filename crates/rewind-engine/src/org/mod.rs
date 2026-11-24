@@ -1,5 +1,5 @@
 //! The organization actor (`archi/06-storage-and-scale.md`, "Quotas", "Partitions, owners and
-//! nodes"; `archi/04-tools.md`, "Tool task lifecycle", "Policies").
+//! nodes"; `archi/04-tools.md`, "Call lifecycle", "Policies").
 //!
 //! One per tenant, on the owner of the tenant's home partition, which hosts it: its writes are
 //! that owner's batches. It holds:
@@ -952,7 +952,7 @@ impl<P: Plane> OrgActor<P> {
     }
 }
 
-/// Whether a stream may be handed a task: its namespace, its labels, its action set, its tools.
+/// Whether a stream may be handed a task: its namespace, its labels, its action set, its actions.
 fn takes(stream: &StreamAttach, offer: &HostTaskOffer) -> bool {
     let task = &offer.task;
     stream
@@ -966,7 +966,7 @@ fn takes(stream: &StreamAttach, offer: &HostTaskOffer) -> bool {
         && stream
             .action_set
             .is_none_or(|action_set| action_set == offer.action_set)
-        && (stream.tools.is_empty() || stream.tools.contains(&task.tool))
+        && (stream.actions.is_empty() || stream.actions.contains(&task.action))
 }
 
 /// The scripts new to a namespace among the admissions in flight.

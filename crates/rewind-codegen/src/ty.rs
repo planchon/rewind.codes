@@ -1,5 +1,5 @@
 //! The TypeScript types codegen produces, and how they are written: in full for
-//! `rewind-tools.d.ts`, on one line for the prompt.
+//! `rewind-actions.d.ts`, on one line for the prompt.
 
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
@@ -26,9 +26,9 @@ pub(crate) enum Ty {
     Object(Object),
     Union(Vec<Ty>),
     Intersection(Vec<Ty>),
-    /// A named type of the tool's namespace.
+    /// A named type of the action's namespace.
     Named(String),
-    /// `ToolContent<T>`: what an MCP tool without an output schema returns.
+    /// `ActionContent<T>`: what an MCP action without an output schema returns.
     Content(Box<Ty>),
 }
 
@@ -257,7 +257,7 @@ impl Names {
 }
 
 // -------------------------------------------------------------------------------------------
-// Written in full, for `rewind-tools.d.ts`
+// Written in full, for `rewind-actions.d.ts`
 
 /// Objects shorter than this, without comments, are written on one line.
 const INLINE_OBJECT: usize = 64;
@@ -375,7 +375,7 @@ fn write(out: &mut String, ty: &Ty, qualifier: Option<&str>, layout: Layout) -> 
             out.push_str(name);
         }
         Ty::Content(structured) => {
-            out.push_str("ToolContent");
+            out.push_str("ActionContent");
             if **structured != Ty::Unknown {
                 out.push('<');
                 if !write(out, structured, qualifier, layout) {
@@ -772,7 +772,7 @@ impl Compact<'_> {
                 }
             }
             Ty::Content(structured) => {
-                out.push_str("ToolContent");
+                out.push_str("ActionContent");
                 if **structured != Ty::Unknown {
                     out.push('<');
                     self.write(out, structured, depth, walk);
@@ -880,7 +880,7 @@ mod tests {
         );
         assert_eq!(
             render(&Ty::Content(Box::new(Ty::Unknown)), None, 0),
-            "ToolContent"
+            "ActionContent"
         );
     }
 

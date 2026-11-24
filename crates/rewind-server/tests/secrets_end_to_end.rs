@@ -2,7 +2,7 @@
 //! "Authenticating calls", "Secrets" and "Signed calls"; `archi/06-storage-and-scale.md`, "What
 //! the caller may do"; `archi/07-code-architecture.md`, "HTTP API /v1"), on Turso and on Postgres:
 //!
-//! - an MCP server over streamable HTTP that requires a secret: its tools listed with an
+//! - an MCP server over streamable HTTP that requires a secret: its actions listed with an
 //!   organization's secret and refused without one; Alice's run calls it with Alice's value and
 //!   Bob's with Bob's; a start that attaches nothing is refused before any run exists, and nothing
 //!   falls back on the organization's secret;
@@ -19,7 +19,7 @@
 //!   logs.
 //!
 //! The fake servers listen on 127.0.0.1, which a deployed server reaches with
-//! `--allow-internal-tools`. A deployed server calls APIs over https only, with the platform's
+//! `--allow-internal-addresses`. A deployed server calls APIs over https only, with the platform's
 //! roots, which a test's certificate is not among: the signed API is called by the embedded
 //! server, which reaches it over http, and whose keys the API reads over its socket.
 
@@ -213,7 +213,7 @@ impl Outside {
     /// listen on 127.0.0.1.
     fn args(&self) -> Vec<String> {
         [
-            "--allow-internal-tools",
+            "--allow-internal-addresses",
             "127.0.0.1",
             "--allow-private-webhooks",
             "--public-url",
@@ -341,7 +341,7 @@ fn unauthorized(why: &str) -> Response {
 #[derive(Debug, Clone)]
 struct Verified(Value);
 
-/// An MCP server with one tool, `whoami`, which answers who calls: the end user its signature
+/// An MCP server with one action, `whoami`, which answers who calls: the end user its signature
 /// names (`sub`), else whom the `Authorization` header belongs to.
 #[derive(Clone, Default)]
 struct Whoami {
@@ -581,7 +581,7 @@ impl Checker {
             .collect()
     }
 
-    /// Serves `/mcp` with the tool `whoami`: its URL, its audience.
+    /// Serves `/mcp` with the action `whoami`: its URL, its audience.
     async fn serve_mcp(&self) -> String {
         let router = axum::Router::new()
             .nest_service("/mcp", mcp_service(Whoami::default()))
@@ -700,7 +700,7 @@ fn github_action_set(url: &str, listing: Option<&str>) -> CreateActionSet {
     }
 }
 
-const WHOAMI: &str = r#"import { github } from "rewind:tools";
+const WHOAMI: &str = r#"import { github } from "rewind:actions";
 
 export default async function main() {
   return (await github.whoami({})).json();
@@ -751,7 +751,7 @@ async fn parked(client: &Client, run: &str) -> (String, u32, ParkedReason) {
     eventually(|| async {
         let run = client.get_run(run, None).await.unwrap();
         run.waiting_for.iter().find_map(|waiting| match waiting {
-            Waiting::ToolCall {
+            Waiting::Call {
                 seq,
                 task_id,
                 state: TaskState::Parked,
@@ -816,7 +816,7 @@ async fn nothing_holds(server: &TestServer, outside: &Outside, left: &Left, valu
         "/v1/secrets".to_owned(),
         "/v1/action-sets".to_owned(),
         "/v1/scripts".to_owned(),
-        "/v1/tools/stats".to_owned(),
+        "/v1/actions/stats".to_owned(),
         "/v1/subscriptions".to_owned(),
         "/v1/organization/signing-keys".to_owned(),
         "/organizations/acme/jwks.json".to_owned(),
@@ -971,9 +971,9 @@ async fn each_end_user_calls_with_their_own_secret(server: &TestServer, outside:
         .unwrap();
     assert_eq!(
         action_set
-            .tools
+            .actions
             .iter()
-            .map(|tool| tool.name.as_str())
+            .map(|action| action.name.as_str())
             .collect::<Vec<_>>(),
         ["github.whoami", "webhook"]
     );
@@ -1119,7 +1119,7 @@ async fn each_end_user_calls_with_their_own_secret(server: &TestServer, outside:
     .await;
 }
 
-const THREE_CALLS: &str = r#"import { github } from "rewind:tools";
+const THREE_CALLS: &str = r#"import { github } from "rewind:actions";
 import { signal } from "rewind";
 
 export default async function main() {
@@ -1288,7 +1288,7 @@ async fn a_call_waits_until_its_secret_is_put_again(server: &TestServer, outside
     nothing_holds(server, outside, &left, &[&first, &second, &listing]).await;
 }
 
-const CRM: &str = r#"import { crm } from "rewind:tools";
+const CRM: &str = r#"import { crm } from "rewind:actions";
 
 export default async function main() {
   return (await crm.whoami({})).json();
@@ -1488,7 +1488,7 @@ fn signed_api_document(base: &str) -> Value {
     })
 }
 
-const NOTES: &str = r#"import { notes } from "rewind:tools";
+const NOTES: &str = r#"import { notes } from "rewind:actions";
 
 export default async function main() {
   const me = await notes.whoAmI({ id: "a b/c", verbose: true });

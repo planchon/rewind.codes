@@ -3,11 +3,11 @@
 //! The renderings are what the evals compare (`archi/08-decisions.md`: "the evals decide
 //! between renderings"):
 //!
-//! | Rendering | The tools of `rewind:tools` in the prompt |
+//! | Rendering | The actions of `rewind:actions` in the prompt |
 //! | --- | --- |
-//! | `compact` | The compact rendering of `rewind-codegen`: one line per tool, with argument and result types |
-//! | `dts` | The whole `rewind-tools.d.ts`, as the type-checker reads it |
-//! | `search` | Tool names only: the model reads declarations with `search_tools` |
+//! | `compact` | The compact rendering of `rewind-codegen`: one line per action, with argument and result types |
+//! | `dts` | The whole `rewind-actions.d.ts`, as the type-checker reads it |
+//! | `search` | Action names only: the model reads declarations with `search_actions` |
 
 use std::fmt;
 use std::str::FromStr;
@@ -55,14 +55,14 @@ impl FromStr for Rendering {
 const INTRODUCTION: &str = "\
 You solve tasks by writing TypeScript scripts that Rewind runs for you, through the tools \
 run_script, check_script, test_script, get_run, list_runs, signal_run, cancel_run, retry_run, \
-search_tools, save_workflow, get_workflow and record_tests.
+search_actions, save_workflow, get_workflow and record_tests.
 
 - A script is one ES module whose default export is `async function main(input)`. What `main` \
 returns is the run's output, as JSON.
-- It imports its tools from \"rewind:tools\", and `sleep`, `signal`, `webhook`, `run`, \
-`ToolError` and `CancelledError` from \"rewind\". Nothing else can be imported: there is no npm, \
+- It imports its actions from \"rewind:actions\", and `sleep`, `signal`, `webhook`, `run`, \
+`ActionError` and `CancelledError` from \"rewind\". Nothing else can be imported: there is no npm, \
 no `fetch`, no file system and no `process`.
-- A tool call that fails throws a `ToolError`. Runs are durable: `await sleep(\"2d\")` and \
+- A call that fails throws an `ActionError`. Runs are durable: `await sleep(\"2d\")` and \
 `await signal(\"name\")` can last days, and a script sees time move only as its run does.
 - run_script type-checks the script before running it: fix what the diagnostics say and run it \
 again. When a run fails halfway, retry_run starts it again with a corrected script, without \
@@ -81,30 +81,30 @@ fn rewind_module() -> &'static str {
 
 /// The system prompt for an action set's declarations, in a rendering.
 pub fn system(declarations: &rewind_codegen::Declarations, rendering: Rendering) -> String {
-    let tools = match rendering {
+    let actions = match rendering {
         Rendering::Compact => format!(
-            "The tools of \"rewind:tools\", one per line:\n\n{}",
+            "The actions of \"rewind:actions\", one per line:\n\n{}",
             declarations.prompt.trim_end()
         ),
         Rendering::Dts => format!(
-            "The declarations of \"rewind:tools\" (rewind-tools.d.ts):\n\n```ts\n{}\n```",
+            "The declarations of \"rewind:actions\" (rewind-actions.d.ts):\n\n```ts\n{}\n```",
             declarations.typescript.trim_end()
         ),
         Rendering::Search => {
             let names: Vec<&str> = declarations
-                .tools
+                .actions
                 .iter()
-                .map(|tool| tool.name.as_str())
+                .map(|action| action.name.as_str())
                 .collect();
             format!(
-                "The tools of \"rewind:tools\", by name: {}.\nRead their declarations (arguments, results, \
-                 descriptions) with search_tools before using them.",
+                "The actions of \"rewind:actions\", by name: {}.\nRead their declarations (arguments, results, \
+                 descriptions) with search_actions before using them.",
                 names.join(", ")
             )
         }
     };
     format!(
-        "{INTRODUCTION}\n\nThe `rewind` module:\n\n```ts\n{}\n```\n\n{tools}\n",
+        "{INTRODUCTION}\n\nThe `rewind` module:\n\n```ts\n{}\n```\n\n{actions}\n",
         rewind_module().trim_end()
     )
 }
@@ -115,9 +115,9 @@ mod tests {
 
     fn declarations() -> rewind_codegen::Declarations {
         rewind_codegen::Declarations {
-            typescript: "declare module \"rewind:tools\" {}\n".into(),
-            prompt: "import { crm } from \"rewind:tools\";\ncrm.get_customer({ id: string }) → ToolContent · Get a customer\n".into(),
-            tools: vec![rewind_codegen::ToolDeclaration {
+            typescript: "declare module \"rewind:actions\" {}\n".into(),
+            prompt: "import { crm } from \"rewind:actions\";\ncrm.get_customer({ id: string }) → ActionContent · Get a customer\n".into(),
+            actions: vec![rewind_codegen::ActionDeclaration {
                 name: "crm.get_customer".into(),
                 prompt: String::new(),
                 typescript: String::new(),
@@ -126,14 +126,14 @@ mod tests {
     }
 
     #[test]
-    fn each_rendering_writes_the_tools_its_way() {
+    fn each_rendering_writes_the_actions_its_way() {
         let declarations = declarations();
         let compact = system(&declarations, Rendering::Compact);
         assert!(compact.contains("crm.get_customer({ id: string })"));
         assert!(compact.contains("declare module \"rewind\""));
         assert!(!compact.contains("archi/"));
         assert!(
-            system(&declarations, Rendering::Dts).contains("declare module \"rewind:tools\" {}")
+            system(&declarations, Rendering::Dts).contains("declare module \"rewind:actions\" {}")
         );
         let search = system(&declarations, Rendering::Search);
         assert!(search.contains("by name: crm.get_customer."));

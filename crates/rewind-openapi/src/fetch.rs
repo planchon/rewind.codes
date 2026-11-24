@@ -1,12 +1,12 @@
 //! An OpenAPI document read from its URL, once, at registration (`archi/04-tools.md`, "API
-//! tools"): through the egress checks of the deployment (`rewind-outbound`), at most
+//! actions"): through the egress checks of the deployment (`rewind-outbound`), at most
 //! [`MAX_DOCUMENT_BYTES`], within [`FETCH_TIMEOUT`]. No secret goes with it, so a redirect
 //! is followed wherever it leads, each new host checked again, up to 5 times. What an internal
 //! server answers is never quoted: an error gives the HTTP status, not the body.
 
 use std::time::Duration;
 
-use rewind_outbound::{Egress, Redirects, ToolEgress};
+use rewind_outbound::{ActionEgress, Egress, Redirects};
 use serde_json::Value;
 use url::Url;
 
@@ -34,7 +34,7 @@ pub struct Fetched {
 pub struct FetchError(pub String);
 
 /// Reads the JSON document at `url`, where `egress` lets it go.
-pub async fn fetch(url: &str, egress: &ToolEgress) -> Result<Fetched, FetchError> {
+pub async fn fetch(url: &str, egress: &ActionEgress) -> Result<Fetched, FetchError> {
     let fail = |reason: String| FetchError(format!("the OpenAPI document {url} {reason}"));
     let parsed = Url::parse(url).map_err(|error| fail(format!("is not a URL: {error}")))?;
     let builder = reqwest::Client::builder()

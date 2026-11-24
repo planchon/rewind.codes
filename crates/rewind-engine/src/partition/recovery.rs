@@ -1,5 +1,5 @@
 //! The open and the recovery of a partition (`archi/06-storage-and-scale.md`, "Partitions,
-//! owners and nodes": recovery; `archi/04-tools.md`, "Tool task lifecycle").
+//! owners and nodes": recovery; `archi/04-tools.md`, "Call lifecycle").
 //!
 //! `open` makes the owner the only writer: it fences the previous one. The owner then reads,
 //! once, what the previous owner held in memory and rebuilds it from the records:
@@ -163,7 +163,7 @@ impl<P: Plane> Owner<P> {
             let task = record.task.task.clone();
             let next = record.task.attempt.saturating_add(1);
             match crate::tasks::calls::interrupted(
-                &record.task.tool,
+                &record.task.action,
                 record.task.policy.on_interruption,
                 next,
                 self.config.max_tool_attempts,

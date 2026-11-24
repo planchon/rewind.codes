@@ -175,7 +175,7 @@ impl fmt::Debug for Seed {
 ///
 /// It versions together everything that can change a `seq`, a digest or a value the script
 /// observes: V8 and ICU, the JS glue, the random generators, the `rewind` library and the
-/// `rewind:tools` codegen. It is not the crate version: most releases leave it unchanged.
+/// `rewind:actions` codegen. It is not the crate version: most releases leave it unchanged.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Epoch(pub u32);
 

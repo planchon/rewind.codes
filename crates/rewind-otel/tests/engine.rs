@@ -1,5 +1,5 @@
 //! The engine's service telemetry through `rewind-otel`, on the SDK's in-memory exporters: an
-//! activation is a child of its run span, a tool attempt a child of its tool call span, and
+//! activation is a child of its run span, a tool attempt a child of its call span, and
 //! every instrument of `rewind_engine::metrics` is recorded, the run metrics of the outbox's
 //! projections included.
 //!
@@ -17,8 +17,8 @@ use opentelemetry_sdk::metrics::InMemoryMetricExporter;
 use opentelemetry_sdk::metrics::data::{AggregatedMetrics, MetricData};
 use opentelemetry_sdk::trace::{InMemorySpanExporter, SpanData};
 use rewind_core::{
-    ActionSet, Command, Epoch, JsonValue, McpServer, McpTransport, Payload, Script, Seq, Timestamp,
-    Tool, ToolFailure, ToolFailureKind, ToolRoute,
+    Action, ActionFailure, ActionFailureKind, ActionRoute, ActionSet, Command, Epoch, JsonValue,
+    McpServer, McpTransport, Payload, Script, Seq, Timestamp,
 };
 use rewind_engine::adapters::{
     ControlPlaneChanges, MemoryArchive, MemoryBlobs, MemoryCatalog, MemoryCluster,
@@ -30,8 +30,8 @@ use rewind_engine::edge::Edge;
 use rewind_engine::metrics;
 use rewind_engine::plane::{NodeConfig, Wiring};
 use rewind_engine::ports::{
-    CallAuth, CompiledScript, Delivery, Dispatched, Emitted, ExecutorError, InvalidScript, NodeId,
-    QuarantineKind, RunRef, ScriptExecutor, ScriptInstance, StartScript, ToolCall, ToolDispatcher,
+    ActionDispatcher, Call, CallAuth, CompiledScript, Delivery, Dispatched, Emitted, ExecutorError,
+    InvalidScript, NodeId, QuarantineKind, RunRef, ScriptExecutor, ScriptInstance, StartScript,
 };
 use rewind_engine::telemetry::{SpanKey, TelemetryConfig, span_id};
 use rewind_engine::{CacheConfig, StartRun};
@@ -53,8 +53,8 @@ async fn an_engine_s_service_telemetry_joins_its_runs_and_measures_it() {
     // A run whose call fails once, transiently: two attempts, a sticky second activation.
     let flaky = Dispatcher::new(|call| {
         if call.attempt == 1 {
-            Dispatched::Transient(ToolFailure {
-                kind: ToolFailureKind::Unavailable,
+            Dispatched::Transient(ActionFailure {
+                kind: ActionFailureKind::Unavailable,
                 message: "try again".into(),
                 data: None,
             })
@@ -98,7 +98,7 @@ async fn an_engine_s_service_telemetry_joins_its_runs_and_measures_it() {
         );
     }
     // An activation's id is `H(run, "activation", index of its first entry)`: the start's
-    // `run_started` and `schedule_tool_call`, then the call's result at 2.
+    // `run_started` and `schedule_call`, then the call's result at 2.
     let mut ids: Vec<String> = activations
         .iter()
         .map(|span| span.span_context.span_id().to_string())
@@ -110,7 +110,7 @@ async fn an_engine_s_service_telemetry_joins_its_runs_and_measures_it() {
     ];
     expected.sort();
     assert_eq!(ids, expected);
-    // Each attempt is a child of the tool call span.
+    // Each attempt is a child of the call span.
     let attempts = backend.spans("tool_attempt");
     assert_eq!(attempts.len(), 2);
     for attempt in &attempts {
@@ -137,15 +137,15 @@ async fn an_engine_s_service_telemetry_joins_its_runs_and_measures_it() {
         vec![
             (
                 vec![
-                    label(metrics::OUTCOME, "result"),
-                    label("rewind.tool", ISSUE)
+                    label("rewind.action", ISSUE),
+                    label(metrics::OUTCOME, "result")
                 ],
                 1
             ),
             (
                 vec![
-                    label(metrics::OUTCOME, "transient"),
-                    label("rewind.tool", ISSUE)
+                    label("rewind.action", ISSUE),
+                    label(metrics::OUTCOME, "transient")
                 ],
                 1
             ),
@@ -153,7 +153,7 @@ async fn an_engine_s_service_telemetry_joins_its_runs_and_measures_it() {
     );
     assert_eq!(
         backend.series(metrics::TOOL_ATTEMPT_RETRIES),
-        vec![(vec![label("rewind.tool", ISSUE)], 1)]
+        vec![(vec![label("rewind.action", ISSUE)], 1)]
     );
     // Run metrics, from the outbox's projections of the committed entries.
     assert_eq!(backend.series(metrics::RUNS_STARTED), vec![(vec![], 1)]);
@@ -162,11 +162,11 @@ async fn an_engine_s_service_telemetry_joins_its_runs_and_measures_it() {
         vec![(vec![label(metrics::OUTCOME, "completed")], 1)]
     );
     assert_eq!(
-        backend.series(metrics::TOOL_CALL_DURATION),
+        backend.series(metrics::CALL_DURATION),
         vec![(
             vec![
-                label(metrics::OUTCOME, "completed"),
-                label("rewind.tool", ISSUE)
+                label("rewind.action", ISSUE),
+                label(metrics::OUTCOME, "completed")
             ],
             1
         )]
@@ -410,7 +410,7 @@ impl World {
     }
 }
 
-/// A run of the script `name`, with the MCP tool `github.get_issue`.
+/// A run of the script `name`, with the MCP action `github.get_issue`.
 fn request(name: &str) -> StartRun {
     let server = McpServer::new(
         "github",
@@ -418,9 +418,9 @@ fn request(name: &str) -> StartRun {
             url: "https://mcp.example.com/github".into(),
         },
     );
-    let issue = Tool::new(
+    let issue = Action::new(
         ISSUE,
-        ToolRoute::Mcp {
+        ActionRoute::Mcp {
             server: "github".into(),
         },
         json!({}),
@@ -431,19 +431,19 @@ fn request(name: &str) -> StartRun {
 
 /// Answers each call with a function of it.
 struct Dispatcher {
-    answer: Box<dyn Fn(&ToolCall) -> Dispatched + Send + Sync>,
+    answer: Box<dyn Fn(&Call) -> Dispatched + Send + Sync>,
 }
 
 impl Dispatcher {
-    fn new(answer: impl Fn(&ToolCall) -> Dispatched + Send + Sync + 'static) -> Self {
+    fn new(answer: impl Fn(&Call) -> Dispatched + Send + Sync + 'static) -> Self {
         Self {
             answer: Box::new(answer),
         }
     }
 }
 
-impl ToolDispatcher for Dispatcher {
-    async fn dispatch(&self, call: ToolCall, _auth: CallAuth) -> Dispatched {
+impl ActionDispatcher for Dispatcher {
+    async fn dispatch(&self, call: Call, _auth: CallAuth) -> Dispatched {
         (self.answer)(&call)
     }
 }
@@ -460,9 +460,9 @@ struct Instance {
 }
 
 fn call(args: JsonValue) -> Emitted {
-    Emitted::Command(Command::ScheduleToolCall {
+    Emitted::Command(Command::ScheduleCall {
         seq: Seq(1),
-        tool: ISSUE.into(),
+        action: ISSUE.into(),
         args: Payload::Value(args),
         callsite: None,
     })
@@ -504,12 +504,12 @@ impl ScriptInstance for Instance {
         _now: Timestamp,
     ) -> Result<Vec<Emitted>, ExecutorError> {
         Ok(match (self.script.as_str(), delivery) {
-            ("flow", Delivery::ToolCallCompleted { result, .. }) => {
+            ("flow", Delivery::CallCompleted { result, .. }) => {
                 vec![Emitted::Command(Command::CompleteRun {
                     output: Payload::Value(result),
                 })]
             }
-            ("diverge", Delivery::ToolCallCompleted { .. }) => {
+            ("diverge", Delivery::CallCompleted { .. }) => {
                 vec![Emitted::Annotation(
                     rewind_core::Annotation::SignalAwaited {
                         name: "go".into(),

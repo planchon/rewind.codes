@@ -11,8 +11,8 @@ use rewind_core::{ActionSet, JsonValue, RunMode, Script};
 
 use crate::attachments::{AttachRights, RefusedAttachments};
 use crate::ports::{
-    CheckerError, Diagnostic, InvalidScript, NamespaceName, QuotaExceeded, RunMetadata,
-    SecretError, Severity, StoreError, TenantId, ToolDeclarations, TypeChecker,
+    ActionDeclarations, CheckerError, Diagnostic, InvalidScript, NamespaceName, QuotaExceeded,
+    RunMetadata, SecretError, Severity, StoreError, TenantId, TypeChecker,
 };
 use crate::text::{self, NulCharacter};
 
@@ -25,7 +25,7 @@ pub struct StartRun {
     pub script: Script,
     pub action_set: ActionSet,
     /// The declarations generated from the action set, stored with it.
-    pub declarations: ToolDeclarations,
+    pub declarations: ActionDeclarations,
     pub input: JsonValue,
     pub mode: RunMode,
     /// The run's TTL; the node's default TTL when `None`, bounded by its namespace's.
@@ -49,7 +49,7 @@ impl StartRun {
                 .unwrap_or_else(|_| NamespaceName::migrated()),
             script,
             action_set,
-            declarations: ToolDeclarations::default(),
+            declarations: ActionDeclarations::default(),
             input,
             mode: RunMode::Live,
             ttl: None,
@@ -144,7 +144,7 @@ fn scope_name(exceeded: &QuotaExceeded) -> &'static str {
 pub(crate) async fn type_check<K: TypeChecker>(
     checker: &K,
     script: &Script,
-    declarations: &ToolDeclarations,
+    declarations: &ActionDeclarations,
 ) -> Result<(), StartError> {
     let diagnostics = checker.check(script, declarations).await?;
     if diagnostics

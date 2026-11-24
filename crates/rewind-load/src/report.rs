@@ -53,8 +53,8 @@ pub(crate) struct Report {
     pub(crate) elapsed_s: f64,
     /// Runs that ended, per second of `elapsed_s`.
     pub(crate) runs_per_s: f64,
-    /// Tool calls that reached the fake MCP server or the host-tool worker, per second.
-    pub(crate) tool_calls_per_s: f64,
+    /// Calls that reached the fake MCP server or the host-tool worker, per second.
+    pub(crate) calls_per_s: f64,
     /// Runs by final status (`completed`, `failed`…, or `unfinished`).
     pub(crate) statuses: BTreeMap<String, usize>,
     pub(crate) latency_ms: Latencies,
@@ -63,18 +63,18 @@ pub(crate) struct Report {
     /// Broken invariants, one line each (the first ones only).
     pub(crate) violations: Vec<String>,
     pub(crate) violation_count: usize,
-    /// The calls of this load, as the server's counters count them (`GET /v1/tools/stats`).
-    pub(crate) server_tool_stats: Vec<ToolStatsLine>,
+    /// The calls of this load, as the server's counters count them (`GET /v1/actions/stats`).
+    pub(crate) server_action_stats: Vec<ActionStatsLine>,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
 pub(crate) struct Latencies {
     /// `POST /v1/runs`, type-check included.
     pub(crate) start: Percentiles,
-    /// From the start's answer to the run's first tool call at the MCP server: the first
+    /// From the start's answer to the run's first call at the MCP server: the first
     /// activation.
     pub(crate) first_call: Percentiles,
-    /// From a host tool's result being accepted to the run's next tool call at the MCP server:
+    /// From a host tool's result being accepted to the run's next call at the MCP server:
     /// one activation and the dispatch of its call.
     pub(crate) activation: Percentiles,
     /// From the start's request to the run's end as observed through the API.
@@ -82,8 +82,8 @@ pub(crate) struct Latencies {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub(crate) struct ToolStatsLine {
-    pub(crate) tool: String,
+pub(crate) struct ActionStatsLine {
+    pub(crate) action: String,
     pub(crate) calls: u64,
     pub(crate) errors: u64,
     pub(crate) retries: u64,
@@ -126,14 +126,14 @@ impl fmt::Display for Report {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(
             f,
-            "{} runs, {} at once, payloads of {} bytes, in {:.1} s: {:.1} runs/s, {:.1} tool \
+            "{} runs, {} at once, payloads of {} bytes, in {:.1} s: {:.1} runs/s, {:.1} action \
              calls/s",
             self.runs,
             self.concurrency,
             self.payload_bytes,
             self.elapsed_s,
             self.runs_per_s,
-            self.tool_calls_per_s
+            self.calls_per_s
         )?;
         let statuses: Vec<String> = self
             .statuses
@@ -156,13 +156,13 @@ impl fmt::Display for Report {
                 .collect();
             writeln!(f, "errors: {}", errors.join(", "))?;
         }
-        if !self.server_tool_stats.is_empty() {
-            writeln!(f, "server tool stats")?;
-            for line in &self.server_tool_stats {
+        if !self.server_action_stats.is_empty() {
+            writeln!(f, "server action stats")?;
+            for line in &self.server_action_stats {
                 writeln!(
                     f,
                     "  {:<12} calls {:>6}  errors {:>4}  retries {:>5}  p50 {:>6} ms  p99 {:>6} ms",
-                    line.tool, line.calls, line.errors, line.retries, line.p50_ms, line.p99_ms
+                    line.action, line.calls, line.errors, line.retries, line.p50_ms, line.p99_ms
                 )?;
             }
         }

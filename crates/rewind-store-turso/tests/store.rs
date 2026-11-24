@@ -8,8 +8,8 @@ use std::path::Path;
 
 use rewind_core::{ActionSet, RunId, Script, SecretName, Timestamp, Workflow, WorkflowSchemas};
 use rewind_engine::ports::{
-    CatalogStore, CompiledScript, NamespaceName, NamespaceWrite, NewSecret, Secret, SecretError,
-    SecretId, SecretReader, SecretStore, Tenant, TenantId, ToolDeclarations,
+    ActionDeclarations, CatalogStore, CompiledScript, NamespaceName, NamespaceWrite, NewSecret,
+    Secret, SecretError, SecretId, SecretReader, SecretStore, Tenant, TenantId,
 };
 use rewind_store_turso::{Error, MasterKey, MasterKeys, SCHEMA_VERSION, TursoStore};
 use serde_json::json;
@@ -112,7 +112,7 @@ async fn the_catalog_survives_a_restart() {
             .await
             .expect("put_script");
         catalog
-            .put_action_set(&tenant, &action_set, &ToolDeclarations::default())
+            .put_action_set(&tenant, &action_set, &ActionDeclarations::default())
             .await
             .expect("put_action_set");
         catalog

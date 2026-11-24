@@ -42,7 +42,7 @@ fn programs() -> FakeExecutor {
                 run.call("a", json!({ "text": "m".repeat(2_000) }));
             },
             |run, delivery| match delivery {
-                Delivery::ToolCallCompleted { result, .. } => {
+                Delivery::CallCompleted { result, .. } => {
                     let size = result
                         .get("text")
                         .and_then(JsonValue::as_str)
@@ -73,8 +73,8 @@ fn dispatcher() -> RecordingDispatcher {
 
 fn payload(event: &Event) -> Option<Payload> {
     match event {
-        Event::Command(Command::ScheduleToolCall { args, .. }) => Some(args.clone()),
-        Event::Completion(Completion::ToolCallCompleted { result, .. }) => Some(result.clone()),
+        Event::Command(Command::ScheduleCall { args, .. }) => Some(args.clone()),
+        Event::Completion(Completion::CallCompleted { result, .. }) => Some(result.clone()),
         _ => None,
     }
 }

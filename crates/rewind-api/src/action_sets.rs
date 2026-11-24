@@ -10,8 +10,8 @@ use utoipa::{IntoParams, ToSchema};
 
 use crate::common::Duration;
 
-/// `POST /v1/action-sets`: MCP servers, APIs, host tools and the `http` tool, with a policy per
-/// tool. Registering connects to the MCP servers and lists their tools, reads the APIs' OpenAPI
+/// `POST /v1/action-sets`: MCP servers, APIs, host tools and the `http` action, with a policy per
+/// action. Registering connects to the MCP servers and lists their actions, reads the APIs' OpenAPI
 /// documents, and pins their schemas. The action set is content-addressed: registering the same
 /// action set twice gives the same id. It holds no secret: a run attaches its secrets when it
 /// starts.
@@ -36,21 +36,21 @@ use crate::common::Duration;
     }]
 }))]
 pub struct CreateActionSet {
-    /// MCP servers. Their tools are called by Rewind and named `<server>.<tool>`.
+    /// MCP servers. Their actions are called by Rewind and named `<server>.<action>`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mcp: Vec<McpServer>,
-    /// APIs described by OpenAPI documents: one tool per operation, named
+    /// APIs described by OpenAPI documents: one action per operation, named
     /// `<api>.<operationId>`, called by Rewind.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub apis: Vec<Api>,
     /// Host tools: functions of the harness, executed by its SDK worker (`GET /v1/tasks`). A
-    /// name `group.tool` puts the tool in the `group` namespace of `rewind:tools`.
+    /// name `group.action` puts the action in the `group` namespace of `rewind:actions`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub host: Vec<HostTool>,
-    /// Enables the built-in `http` tool, and `fetch` in scripts, for these hosts only.
+    /// Enables the built-in `http` action, and `fetch` in scripts, for these hosts only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub http: Option<HttpTool>,
-    /// The organization's secrets that list the tools of the MCP servers whose `auth` takes one,
+    pub http: Option<HttpAction>,
+    /// The organization's secrets that list the actions of the MCP servers whose `auth` takes one,
     /// by server: `{ "github": "org/github" }`. Only `org/` secrets; no run keeps them, and they
     /// are not part of the action set's id. Requires `secrets:use`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -60,7 +60,7 @@ pub struct CreateActionSet {
     /// action set's scripts are checked against them, and start them, for their whole life.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub workflows: Vec<String>,
-    /// Derives the action set from a registered one: its servers, tools and workflows are kept as
+    /// Derives the action set from a registered one: its servers, actions and workflows are kept as
     /// pinned, without listing the servers again; `workflows` adds workflows or pins them again.
     /// `mcp`, `host` and `http` must then be empty.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -74,7 +74,7 @@ pub struct CreateActionSet {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct McpServer {
-    /// The namespace of its tools in `rewind:tools`: an identifier that is not a reserved word of
+    /// The namespace of its actions in `rewind:actions`: an identifier that is not a reserved word of
     /// JavaScript (`default`, `delete`, `let`…).
     pub name: String,
     /// The URL of a streamable HTTP server. A server of a deployment reaches it only at a public
@@ -93,19 +93,19 @@ pub struct McpServer {
     /// How its calls prove who calls. None when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth: Option<Auth>,
-    /// Policies of its tools, by tool name as the server defines it. Tools not listed get the
+    /// Policies of its actions, by action name as the server defines it. Actions not listed get the
     /// default policy.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub policies: BTreeMap<String, ToolPolicy>,
+    pub policies: BTreeMap<String, ActionPolicy>,
 }
 
-/// An API described by an OpenAPI 3.0 or 3.1 document (`archi/04-tools.md`, "API tools"). Each
-/// operation is a tool: its input the path, query and header parameters by name and the JSON
+/// An API described by an OpenAPI 3.0 or 3.1 document (`archi/04-tools.md`, "API actions"). Each
+/// operation is an action: its input the path, query and header parameters by name and the JSON
 /// body under `body`; its output the schema of its first `2xx` JSON response.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Api {
-    /// The namespace of its tools in `rewind:tools`, an identifier as a server's name is.
+    /// The namespace of its actions in `rewind:actions`, an identifier as a server's name is.
     pub name: String,
     /// Its OpenAPI document in JSON, or the URL it is read from once, at registration (at most
     /// 2 MiB, through the egress checks). The document is pinned and never read again.
@@ -125,11 +125,11 @@ pub struct Api {
     /// Its calls in flight in the organization. 8 by default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub concurrency: Option<u32>,
-    /// Policies of its tools, by operation name. An operation not listed gets the default of
+    /// Policies of its actions, by operation name. An operation not listed gets the default of
     /// its method: `retry` for `GET`, `HEAD`, `OPTIONS`, `PUT` and `DELETE`; `at_most_once`
     /// for `POST` and `PATCH` unless it declares an `Idempotency-Key` header.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub policies: BTreeMap<String, ToolPolicy>,
+    pub policies: BTreeMap<String, ActionPolicy>,
 }
 
 /// An OpenAPI document, or where to read it.
@@ -175,17 +175,17 @@ pub enum Auth {
 impl Auth {
     /// The `auth` an action set pins, what the server and the CLI pin alike. Whether it fits the
     /// server's transport is checked when the action set is built (`rewind_core::ActionSet`).
-    pub fn to_core(&self) -> Result<rewind_core::ToolAuth, String> {
-        use rewind_core::{SecretEncoding as Encoding, SecretPlacement, ToolAuth};
+    pub fn to_core(&self) -> Result<rewind_core::ActionAuth, String> {
+        use rewind_core::{ActionAuth, SecretEncoding as Encoding, SecretPlacement};
         Ok(match self {
-            Auth::None {} => ToolAuth::None,
-            Auth::Rewind {} => ToolAuth::Rewind,
+            Auth::None {} => ActionAuth::None,
+            Auth::Rewind {} => ActionAuth::Rewind,
             Auth::Secret {
                 header: Some(name),
                 format,
                 encoding,
                 env: None,
-            } => ToolAuth::Secret(SecretPlacement::Header {
+            } => ActionAuth::Secret(SecretPlacement::Header {
                 name: name.clone(),
                 format: format.clone(),
                 encoding: match encoding.unwrap_or_default() {
@@ -198,7 +198,7 @@ impl Auth {
                 format: None,
                 encoding: None,
                 env: Some(variable),
-            } => ToolAuth::Secret(SecretPlacement::Env {
+            } => ActionAuth::Secret(SecretPlacement::Env {
                 variable: variable.clone(),
             }),
             Auth::Secret { .. } => {
@@ -212,12 +212,12 @@ impl Auth {
     }
 
     /// How the API shows a pinned `auth`; `None` for none.
-    pub fn of_core(auth: &rewind_core::ToolAuth) -> Option<Self> {
-        use rewind_core::{SecretEncoding as Encoding, SecretPlacement, ToolAuth};
+    pub fn of_core(auth: &rewind_core::ActionAuth) -> Option<Self> {
+        use rewind_core::{ActionAuth, SecretEncoding as Encoding, SecretPlacement};
         Some(match auth {
-            ToolAuth::None => return None,
-            ToolAuth::Rewind => Auth::Rewind {},
-            ToolAuth::Secret(SecretPlacement::Header {
+            ActionAuth::None => return None,
+            ActionAuth::Rewind => Auth::Rewind {},
+            ActionAuth::Secret(SecretPlacement::Header {
                 name,
                 format,
                 encoding,
@@ -230,7 +230,7 @@ impl Auth {
                 },
                 env: None,
             },
-            ToolAuth::Secret(SecretPlacement::Env { variable }) => Auth::Secret {
+            ActionAuth::Secret(SecretPlacement::Env { variable }) => Auth::Secret {
                 header: None,
                 format: None,
                 encoding: None,
@@ -253,7 +253,7 @@ pub enum SecretEncoding {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HostTool {
-    /// `group.tool` puts the tool in a group, the namespace `rewind:tools` exports it under. The
+    /// `group.action` puts the action in a group, the namespace `rewind:actions` exports it under. The
     /// group, and a name without a dot, may not be a reserved word of JavaScript.
     pub name: String,
     /// Shown to the model in the declarations.
@@ -266,25 +266,25 @@ pub struct HostTool {
     #[schema(value_type = Option<Object>)]
     pub output_schema: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub policy: Option<ToolPolicy>,
+    pub policy: Option<ActionPolicy>,
 }
 
-/// The built-in `http` tool: requests leave from the dispatcher, never from the isolate, and
-/// only toward these hosts (`archi/04-tools.md`, "The `http` tool and egress").
+/// The built-in `http` action: requests leave from the dispatcher, never from the isolate, and
+/// only toward these hosts (`archi/04-tools.md`, "The `http` action and egress").
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct HttpTool {
+pub struct HttpAction {
     /// Host names, such as `api.example.com`. `*.example.com` allows the subdomains.
     pub allow: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub policy: Option<ToolPolicy>,
+    pub policy: Option<ActionPolicy>,
 }
 
-/// A tool's policy, pinned in the action set (`archi/04-tools.md`, "Policies"). Every field is
+/// An action's policy, pinned in the action set (`archi/04-tools.md`, "Policies"). Every field is
 /// optional: what is not given takes its default.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ToolPolicy {
+pub struct ActionPolicy {
     /// What happens to a call interrupted mid-flight. `retry` by default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub on_interruption: Option<OnInterruption>,
@@ -292,7 +292,7 @@ pub struct ToolPolicy {
     /// sent. Off by default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approval: Option<bool>,
-    /// How long one attempt may take. 5 minutes by default for MCP tools.
+    /// How long one attempt may take. 5 minutes by default for MCP actions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout: Option<Duration>,
     /// The grace after a stream closes: how long a host task handed on a stream that closed
@@ -300,7 +300,7 @@ pub struct ToolPolicy {
     /// by default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub heartbeat_timeout: Option<Duration>,
-    /// At most this many calls of the tool in flight per run. The run's own limit (16) still
+    /// At most this many calls of the action in flight per run. The run's own limit (16) still
     /// applies.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub concurrency: Option<u32>,
@@ -314,7 +314,7 @@ pub enum OnInterruption {
     /// `outcomeUnknown`.
     #[default]
     Retry,
-    /// Fail with `outcomeUnknown` at once. For tools that ignore idempotency keys.
+    /// Fail with `outcomeUnknown` at once. For actions that ignore idempotency keys.
     AtMostOnce,
 }
 
@@ -325,8 +325,8 @@ pub struct ActionSet {
     /// The digest of the pinned action set (SHA-256, lowercase hex). Runs record it.
     pub id: String,
     pub servers: Vec<ServerSummary>,
-    /// Every tool a script of this action set can call, sorted by name.
-    pub tools: Vec<Tool>,
+    /// Every action a script of this action set can call, sorted by name.
+    pub actions: Vec<Action>,
     /// Its APIs, sorted by name.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub apis: Vec<ApiSummary>,
@@ -349,8 +349,8 @@ pub struct ApiSummary {
     /// How its calls authenticate; absent for none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth: Option<Auth>,
-    /// How many tools it has.
-    pub tools: u32,
+    /// How many actions it has.
+    pub actions: u32,
 }
 
 /// An operation of an API that registering left out, and why.
@@ -383,8 +383,8 @@ pub struct ActionSetSummary {
     /// Its APIs, sorted by name.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub apis: Vec<ApiSummary>,
-    /// The names of its tools, sorted.
-    pub tools: Vec<String>,
+    /// The names of its actions, sorted.
+    pub actions: Vec<String>,
     /// The names of the workflows it pins, sorted.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub workflows: Vec<String>,
@@ -398,8 +398,8 @@ pub struct ServerSummary {
     /// How its calls authenticate; absent for none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth: Option<Auth>,
-    /// How many tools it has.
-    pub tools: u32,
+    /// How many actions it has.
+    pub actions: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
@@ -409,17 +409,17 @@ pub enum McpTransport {
     Stdio,
 }
 
-/// A pinned tool.
+/// A pinned action.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct Tool {
+pub struct Action {
     /// As scripts call it: `github.list_issues`, `ask_user`, `http`.
     pub name: String,
     pub route: Route,
-    /// The MCP server, for an MCP tool.
+    /// The MCP server, for an MCP action.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub server: Option<String>,
-    /// The API, for an API tool.
+    /// The API, for an API action.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api: Option<String>,
     pub description: String,
@@ -429,10 +429,10 @@ pub struct Tool {
     #[schema(value_type = Option<Object>)]
     pub output_schema: Option<Value>,
     /// The policy with its defaults filled in.
-    pub policy: ToolPolicy,
+    pub policy: ActionPolicy,
 }
 
-/// Who calls the tool (`archi/04-tools.md`, "Routes").
+/// Who calls the action (`archi/04-tools.md`, "Routes").
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Route {
@@ -450,10 +450,10 @@ pub enum Route {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Declarations {
-    /// `rewind-tools.d.ts`: the `rewind:tools` module, with tool descriptions as JSDoc, and the
+    /// `rewind-actions.d.ts`: the `rewind:actions` module, with action descriptions as JSDoc, and the
     /// `rewind:workflows` module when the action set pins workflows.
     pub dts: String,
-    /// The compact rendering for the model's prompt, one line per tool.
+    /// The compact rendering for the model's prompt, one line per action.
     pub prompt: String,
 }
 
@@ -470,7 +470,7 @@ pub struct DeclarationsQuery {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum DeclarationFormat {
-    /// `rewind-tools.d.ts`.
+    /// `rewind-actions.d.ts`.
     #[default]
     Dts,
     /// The compact prompt rendering.
@@ -494,32 +494,32 @@ pub struct DeclarationsText {
     pub text: String,
 }
 
-/// `GET /v1/action-sets/{id}/search`: `search_tools`, for action sets too large for the prompt.
+/// `GET /v1/action-sets/{id}/search`: `search_actions`, for action sets too large for the prompt.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, IntoParams)]
 #[into_params(parameter_in = Query)]
 pub struct SearchQuery {
-    /// Words to look for in tool names and descriptions.
+    /// Words to look for in action names and descriptions.
     pub query: String,
-    /// At most this many tools (10 by default).
+    /// At most this many actions (10 by default).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<u32>,
 }
 
-/// The tools matching a search, best first.
+/// The actions matching a search, best first.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct ToolSearchResults {
-    pub tools: Vec<ToolMatch>,
+pub struct ActionSearchResults {
+    pub actions: Vec<ActionMatch>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct ToolMatch {
+pub struct ActionMatch {
     pub name: String,
     pub description: String,
-    /// The tool's line of the prompt rendering.
+    /// The action's line of the prompt rendering.
     pub prompt: String,
-    /// The tool's declaration in `rewind-tools.d.ts`, with the types it uses.
+    /// The action's declaration in `rewind-actions.d.ts`, with the types it uses.
     pub dts: String,
 }
 
@@ -611,7 +611,7 @@ mod tests {
         ] {
             assert_eq!(Auth::of_core(&auth.to_core().unwrap()), Some(auth));
         }
-        assert_eq!(Auth::None {}.to_core(), Ok(rewind_core::ToolAuth::None));
+        assert_eq!(Auth::None {}.to_core(), Ok(rewind_core::ActionAuth::None));
         assert!(
             Auth::Secret {
                 header: Some("X".into()),

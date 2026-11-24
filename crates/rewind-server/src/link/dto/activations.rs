@@ -29,7 +29,7 @@ where
 /// An activation an owner sends: `{"partition":3,"head":<run head record>,"summary":<summary
 /// record>,"inbox":[<inbox item record>,…],"history":[<history entry record>,…],
 /// "payloads":[<payload record>,…],"parent":{…},"script":{…},"action_set":{…},
-/// "purpose":"runnable","tasks":[<tool task record>,…]}`; `history` left out when the owner
+/// "purpose":"runnable","tasks":[<call task record>,…]}`; `history` left out when the owner
 /// expects the executor's instance cache to hold the run.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -146,7 +146,7 @@ pub struct Committed {
 }
 
 /// A run metric of the new entries: `"started"`, `{"ended":{"outcome":"completed"}}` or
-/// `{"tool_call":{"tool":"…","outcome":"failed","error_kind":"timeout","seconds":1.5}}`.
+/// `{"call":{"action":"…","outcome":"failed","error_kind":"timeout","seconds":1.5}}`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum Measurement {
@@ -154,8 +154,8 @@ pub enum Measurement {
     Ended {
         outcome: String,
     },
-    ToolCall {
-        tool: String,
+    Call {
+        action: String,
         outcome: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error_kind: Option<String>,
@@ -170,13 +170,13 @@ impl From<&RunMeasurement> for Measurement {
             RunMeasurement::Ended { outcome } => Measurement::Ended {
                 outcome: outcome.clone(),
             },
-            RunMeasurement::ToolCall {
-                tool,
+            RunMeasurement::Call {
+                action,
                 outcome,
                 error_kind,
                 seconds,
-            } => Measurement::ToolCall {
-                tool: tool.clone(),
+            } => Measurement::Call {
+                action: action.clone(),
                 outcome: outcome.clone(),
                 error_kind: error_kind.clone(),
                 seconds: *seconds,
@@ -190,13 +190,13 @@ impl From<Measurement> for RunMeasurement {
         match measurement {
             Measurement::Started => RunMeasurement::Started,
             Measurement::Ended { outcome } => RunMeasurement::Ended { outcome },
-            Measurement::ToolCall {
-                tool,
+            Measurement::Call {
+                action,
                 outcome,
                 error_kind,
                 seconds,
-            } => RunMeasurement::ToolCall {
-                tool,
+            } => RunMeasurement::Call {
+                action,
                 outcome,
                 error_kind,
                 seconds,
@@ -252,7 +252,7 @@ pub enum TimerChange {
 }
 
 /// `{"hour":{"tenant":"acme","namespace":"user-1","hour":…,"counts":{…}}}` or
-/// `{"shape":{"tenant":"acme","namespace":"user-1","tool":"…","shape":<shape record>}}`.
+/// `{"shape":{"tenant":"acme","namespace":"user-1","action":"…","shape":<shape record>}}`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum CounterDelta {
@@ -265,7 +265,7 @@ pub enum CounterDelta {
     Shape {
         tenant: String,
         namespace: String,
-        tool: String,
+        action: String,
         shape: record::Shape,
     },
 }
@@ -358,7 +358,7 @@ impl TryFrom<ActivationRequest> for link::ActivationRequest {
             action_set: engine::StoredActionSet {
                 action_set: rewind_format::decode_action_set(request.action_set.action_set.get())
                     .map_err(Invalid::new)?,
-                declarations: engine::ToolDeclarations {
+                declarations: engine::ActionDeclarations {
                     typescript: request.action_set.typescript,
                     prompt: request.action_set.prompt,
                 },
@@ -577,12 +577,12 @@ impl From<&engine::CounterDelta> for CounterDelta {
             engine::CounterDelta::Shape {
                 tenant,
                 namespace,
-                tool,
+                action,
                 shape,
             } => CounterDelta::Shape {
                 tenant: tenant.to_string(),
                 namespace: namespace.to_string(),
-                tool: tool.clone(),
+                action: action.clone(),
                 shape: record::Shape {
                     shape: shape.clone(),
                 },
@@ -610,12 +610,12 @@ impl TryFrom<CounterDelta> for engine::CounterDelta {
             CounterDelta::Shape {
                 tenant: id,
                 namespace: name,
-                tool,
+                action,
                 shape,
             } => engine::CounterDelta::Shape {
                 tenant: tenant(id)?,
                 namespace: namespace(name)?,
-                tool,
+                action,
                 shape: shape.shape,
             },
         })

@@ -1,7 +1,7 @@
 {
   "description": "The server refuses expired credentials: the call is parked, the run waits, and once the harness renews the credentials the call is sent again and the script gets its answer.",
   "input": { "customer": "c-7" },
-  "tools": {
+  "actions": {
     "crm.lookup": {
       "$sequence": [{ "$unauthorized": "the token expired" }, { "name": "Ada" }]
     }
@@ -14,6 +14,6 @@
     "status": "completed",
     "output": { "name": "Ada" },
     "calls": { "crm.lookup": 1 },
-    "events": ["run_started", "schedule_tool_call", "tool_call_completed", "complete_run"]
+    "events": ["run_started", "schedule_call", "call_completed", "complete_run"]
   }
 }

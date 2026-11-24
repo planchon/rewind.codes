@@ -8,8 +8,7 @@
 use serde_json::{Value, json};
 
 use super::{
-    AssistantTurn, Conversation, ModelError, Reply, Stop, ToolCall, Turn, Usage, http_client,
-    post_json,
+    AssistantTurn, Call, Conversation, ModelError, Reply, Stop, Turn, Usage, http_client, post_json,
 };
 
 const PROVIDER: &str = "Anthropic";
@@ -159,7 +158,7 @@ pub fn parse(response: &Value) -> Result<Reply, ModelError> {
     for block in content {
         match block["type"].as_str() {
             Some("text") => text.push(block["text"].as_str().unwrap_or_default().to_owned()),
-            Some("tool_use") => calls.push(ToolCall {
+            Some("tool_use") => calls.push(Call {
                 id: block["id"].as_str().unwrap_or_default().to_owned(),
                 name: block["name"].as_str().unwrap_or_default().to_owned(),
                 input: block["input"].clone(),

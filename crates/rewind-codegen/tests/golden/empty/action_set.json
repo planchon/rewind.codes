@@ -1,5 +1,5 @@
 {
   "description": "An action set with no tool: an empty module, an empty prompt.",
   "servers": [],
-  "tools": []
+  "actions": []
 }

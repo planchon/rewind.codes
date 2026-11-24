@@ -7,8 +7,7 @@
 use serde_json::{Value, json};
 
 use super::{
-    AssistantTurn, Conversation, ModelError, Reply, Stop, ToolCall, Turn, Usage, http_client,
-    post_json,
+    AssistantTurn, Call, Conversation, ModelError, Reply, Stop, Turn, Usage, http_client, post_json,
 };
 
 const PROVIDER: &str = "OpenAI";
@@ -171,7 +170,7 @@ pub fn parse(response: &Value) -> Result<Reply, ModelError> {
             }
             Some("function_call") => {
                 let arguments = item["arguments"].as_str().unwrap_or("{}");
-                calls.push(ToolCall {
+                calls.push(Call {
                     id: item["call_id"].as_str().unwrap_or_default().to_owned(),
                     name: item["name"].as_str().unwrap_or_default().to_owned(),
                     // Invalid JSON is left as text: the agent tool says so to the model.

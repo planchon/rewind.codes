@@ -2,4 +2,4 @@
 // available to scripts").
 import hooks from "rewind:internal";
 
-export const { sleep, signal, webhook, run, ToolError, CancelledError, WorkflowError } = hooks;
+export const { sleep, signal, webhook, run, ActionError, ToolError, CancelledError, WorkflowError } = hooks;

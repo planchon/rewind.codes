@@ -10,7 +10,7 @@
 //! everything else it commits:
 //!
 //! - While the script's commands match the parent's, the parent's triggers are copied into the
-//!   fork's history, with their recorded results and `recorded_at`: no tool is called again.
+//!   fork's history, with their recorded results and `recorded_at`: no action is called again.
 //! - At the first command that differs, at the entry `at`, at the parent's cancellation or
 //!   abort, or at the end of the parent's history, the fork goes live.
 //! - The calls the fork inherited (their commands matched before it went live) and that are
@@ -198,7 +198,7 @@ pub(crate) struct FollowWith<'a, X, S, C> {
 /// `archi/05-testing-and-observability.md`, "Replay, debugging and forks"). The script is
 /// followed against the journal on `executor` as a fork's first activation follows its parent,
 /// as the run itself (it reads the run's id); every payload of the journal is held as a value.
-/// Nothing is written and no tool is called.
+/// Nothing is written and no action is called.
 pub async fn compatibility<X: ScriptExecutor>(
     executor: &X,
     journal: &JournalDocument,
@@ -419,7 +419,7 @@ where
         let mut redispatched = Vec::new();
         let mut unknown = Vec::new();
         if !batch.state.is_terminal() {
-            let pending = batch.state.pending_tool_calls().clone();
+            let pending = batch.state.pending_calls().clone();
             let mut outcomes: BTreeMap<Seq, Completion> = BTreeMap::new();
             let mut order = Vec::new();
             for entry in parent {
@@ -438,7 +438,7 @@ where
                     reused.push(with_values(with.payloads, tenant, &completion).await?);
                 }
             }
-            for (seq, tool) in &pending {
+            for (seq, action) in &pending {
                 if !inherited.contains(seq)
                     || reused.iter().any(|c| completion_seq(c) == Some(*seq))
                 {
@@ -446,8 +446,8 @@ where
                 }
                 let policy = source
                     .action_set
-                    .tool(tool)
-                    .map(|tool| tool.policy.on_interruption);
+                    .action(action)
+                    .map(|action| action.policy.on_interruption);
                 match policy {
                     Some(Interruption::AtMostOnce) => unknown.push(*seq),
                     _ => redispatched.push(*seq),
@@ -471,7 +471,7 @@ pub(crate) async fn with_values<S: payloads::PayloadSource>(
     completion: &Completion,
 ) -> Result<Completion, EngineError> {
     Ok(match completion {
-        Completion::ToolCallCompleted { seq, result } => Completion::ToolCallCompleted {
+        Completion::CallCompleted { seq, result } => Completion::CallCompleted {
             seq: *seq,
             result: Payload::Value(payloads::load(payloads, tenant, result).await?),
         },
@@ -483,25 +483,25 @@ pub(crate) async fn with_values<S: payloads::PayloadSource>(
     })
 }
 
-/// Whether a history scheduled the call `seq` to `tool` with `args`, and recorded no outcome for
+/// Whether a history scheduled the call `seq` to `action` with `args`, and recorded no outcome for
 /// it before its cancellation.
 pub(crate) fn left_without_outcome(
     history: &[HistoryEntry],
     seq: Seq,
-    tool: &str,
+    action: &str,
     args: &Payload,
 ) -> bool {
     let mut scheduled = false;
     for entry in history {
         match &entry.event {
             Event::Completion(Completion::CancelRequested { .. }) => break,
-            Event::Command(Command::ScheduleToolCall {
+            Event::Command(Command::ScheduleCall {
                 seq: recorded,
-                tool: recorded_tool,
+                action: recorded_action,
                 args: recorded_args,
                 ..
             }) if *recorded == seq => {
-                scheduled = recorded_tool == tool && recorded_args.same_as(args);
+                scheduled = recorded_action == action && recorded_args.same_as(args);
             }
             Event::Completion(completion) if completion_seq(completion) == Some(seq) => {
                 return false;
@@ -514,9 +514,7 @@ pub(crate) fn left_without_outcome(
 
 pub(crate) fn completion_seq(completion: &Completion) -> Option<Seq> {
     match completion {
-        Completion::ToolCallCompleted { seq, .. } | Completion::ToolCallFailed { seq, .. } => {
-            Some(*seq)
-        }
+        Completion::CallCompleted { seq, .. } | Completion::CallFailed { seq, .. } => Some(*seq),
         _ => None,
     }
 }
@@ -535,7 +533,7 @@ fn follow(
         };
         match cursor.on_command(command) {
             Ok(Replayed::Matched { index }) if index < at => {
-                if let Command::ScheduleToolCall { seq, .. } = command {
+                if let Command::ScheduleCall { seq, .. } = command {
                     inherited.insert(*seq);
                 }
             }

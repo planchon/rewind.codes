@@ -33,15 +33,15 @@ use object_store::{
     PutMultipartOptions, PutOptions, PutPayload, PutResult, RenameOptions,
 };
 use rewind_core::{
-    Command, Completion, Digest, Epoch, Event, HistoryEntry, Lifecycle, PartitionId, RunId,
-    RunMode, RunStarted, RunStatus, Seed, Seq, Timestamp, ToolPolicy, ToolRoute,
+    ActionPolicy, ActionRoute, Command, Completion, Digest, Epoch, Event, HistoryEntry, Lifecycle,
+    PartitionId, RunId, RunMode, RunStarted, RunStatus, Seed, Seq, Timestamp,
 };
 use rewind_engine::ports::partition::{Activation, CreateRun};
 use rewind_engine::ports::{
-    Attempt, Batch, Change, CounterDelta, Counters, DueTimer, Hour, InboxItem, IndexedSummary,
-    NamespaceName, NodeId, PartitionError, PartitionLog, PartitionStore, RunCounts, RunHead,
-    RunMetadata, RunRef, RunSummary, TaskRecord, TaskRef, TaskState, TenantId, TimerChange,
-    TimerKind, ToolTask, Trigger, Wait, WaitKind,
+    Attempt, Batch, CallTask, Change, CounterDelta, Counters, DueTimer, Hour, InboxItem,
+    IndexedSummary, NamespaceName, NodeId, PartitionError, PartitionLog, PartitionStore, RunCounts,
+    RunHead, RunMetadata, RunRef, RunSummary, TaskRecord, TaskRef, TaskState, TenantId,
+    TimerChange, TimerKind, Trigger, Wait, WaitKind,
 };
 use rewind_store_slatedb::{Options, SlatePartitions, Timers};
 use serde_json::json;
@@ -308,7 +308,7 @@ impl Runs {
                     started_at: None,
                     ended_at: None,
                     last_activity_at: at,
-                    tool_calls: 0,
+                    calls: 0,
                     errors: 0,
                     history_len: 0,
                     waits: Vec::new(),
@@ -398,9 +398,9 @@ impl Runs {
                     entry(0, Event::Lifecycle(Lifecycle::RunStarted(self.started()))),
                     entry(
                         1,
-                        Event::Command(Command::ScheduleToolCall {
+                        Event::Command(Command::ScheduleCall {
                             seq: Seq(1),
-                            tool: "github.list_issues".into(),
+                            action: "github.list_issues".into(),
                             args: json!({ "repo": "acme/app", "state": "open" }).into(),
                             callsite: None,
                         }),
@@ -415,7 +415,7 @@ impl Runs {
                 vec![
                     entry(
                         len,
-                        Event::Completion(Completion::ToolCallCompleted {
+                        Event::Completion(Completion::CallCompleted {
                             seq: Seq(seq - 1),
                             result: json!({ "issues": [{ "id": 1, "title": "y".repeat(300) }] })
                                 .into(),
@@ -423,9 +423,9 @@ impl Runs {
                     ),
                     entry(
                         len + 1,
-                        Event::Command(Command::ScheduleToolCall {
+                        Event::Command(Command::ScheduleCall {
                             seq: Seq(seq),
-                            tool: "github.close_issue".into(),
+                            action: "github.close_issue".into(),
                             args: json!({ "repo": "acme/app", "issue": seq }).into(),
                             callsite: None,
                         }),
@@ -435,18 +435,18 @@ impl Runs {
                 seq,
             )
         };
-        let route = ToolRoute::Mcp {
+        let route = ActionRoute::Mcp {
             server: "github".into(),
         };
         let task = TaskRecord {
-            task: ToolTask {
+            task: CallTask {
                 task: TaskRef {
                     run: run.clone(),
                     seq: Seq(seq),
                 },
                 action_set: Digest::of(b"action_set"),
-                tool: "github.close_issue".into(),
-                policy: ToolPolicy::default_for(&route),
+                action: "github.close_issue".into(),
+                policy: ActionPolicy::default_for(&route),
                 route,
                 args: json!({ "repo": "acme/app", "issue": seq }).into(),
                 state: TaskState::Ready {
@@ -475,10 +475,10 @@ impl Runs {
         summary.summary.status = RunStatus::Active;
         summary.summary.started_at.get_or_insert(at);
         summary.summary.last_activity_at = at;
-        summary.summary.tool_calls += 1;
+        summary.summary.calls += 1;
         summary.summary.history_len = head.history_len;
         summary.summary.waits = head.waits.clone();
-        summary.tools.insert("github.close_issue".into());
+        summary.actions.insert("github.close_issue".into());
         let counts = Counters {
             runs: RunCounts {
                 started: u64::from(len == 0),

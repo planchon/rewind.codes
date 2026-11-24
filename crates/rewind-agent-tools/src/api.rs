@@ -11,7 +11,7 @@ use std::future::Future;
 
 use rewind_api::Problem;
 use rewind_api::action_sets::{
-    ActionSet, ActionSetList, CreateActionSet, SearchQuery, ToolSearchResults,
+    ActionSearchResults, ActionSet, ActionSetList, CreateActionSet, SearchQuery,
 };
 use rewind_api::common::Duration;
 use rewind_api::events::Entry;
@@ -148,11 +148,11 @@ pub trait Api: Send + Sync {
     ) -> impl Future<Output = Result<ActionSet, ApiError>> + Send;
 
     /// `GET /v1/action-sets/{id}/search`.
-    fn search_tools(
+    fn search_actions(
         &self,
         action_set: &str,
         query: &SearchQuery,
-    ) -> impl Future<Output = Result<ToolSearchResults, ApiError>> + Send;
+    ) -> impl Future<Output = Result<ActionSearchResults, ApiError>> + Send;
 
     /// `POST /v1/workflows`.
     fn create_workflow(
@@ -299,12 +299,12 @@ impl<A: Api> Api for &A {
         (**self).create_action_set(action_set)
     }
 
-    fn search_tools(
+    fn search_actions(
         &self,
         action_set: &str,
         query: &SearchQuery,
-    ) -> impl Future<Output = Result<ToolSearchResults, ApiError>> + Send {
-        (**self).search_tools(action_set, query)
+    ) -> impl Future<Output = Result<ActionSearchResults, ApiError>> + Send {
+        (**self).search_actions(action_set, query)
     }
 
     fn create_workflow(

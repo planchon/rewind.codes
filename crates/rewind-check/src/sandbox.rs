@@ -11,8 +11,10 @@ use serde_json::Value;
 const REWIND_D_TS: &str = include_str!("../../rewind-runtime/lib/rewind.d.ts");
 /// The sandbox's globals beyond ECMAScript.
 const GLOBALS_D_TS: &str = include_str!("../../rewind-runtime/lib/globals.d.ts");
-/// `fetch`: only for an action set that enables the `http` tool.
+/// `fetch`: only for an action set that enables the `http` action.
 const FETCH_D_TS: &str = include_str!("../../rewind-runtime/lib/fetch.d.ts");
+/// The old names code already written still uses (`archi/08-decisions.md`, R1): never shown.
+const OLD_NAMES_D_TS: &str = include_str!("../../rewind-runtime/lib/old-names.d.ts");
 /// tsgo's options: strict, the ECMAScript lib of the sandbox, every `*.ts` of the directory.
 const TSCONFIG_JSON: &str = include_str!("../../rewind-runtime/lib/tsconfig.json");
 /// The declared names and the hints for absent globals.
@@ -21,7 +23,7 @@ const GLOBALS_JSON: &str = include_str!("../../rewind-runtime/lib/globals.json")
 /// Where the script is written, and the name diagnostics give it.
 pub(crate) const SCRIPT: &str = "script.ts";
 /// Where the action set's declarations are written.
-pub(crate) const TOOLS: &str = "rewind-tools.d.ts";
+pub(crate) const ACTIONS: &str = "rewind-actions.d.ts";
 /// The declaration file of `fetch`, as the action set's declarations reference it.
 pub(crate) const FETCH: &str = "fetch.d.ts";
 /// Where a workflow's own declarations are written: its signals.
@@ -30,13 +32,14 @@ pub(crate) const WORKFLOW: &str = "rewind-workflow.d.ts";
 pub(crate) const ENTRY: &str = "entry.ts";
 
 /// The files written next to the script and the action set's declarations, by name.
-pub(crate) fn files(http_tool: bool) -> Vec<(&'static str, &'static str)> {
+pub(crate) fn files(http_action: bool) -> Vec<(&'static str, &'static str)> {
     let mut files = vec![
         ("tsconfig.json", TSCONFIG_JSON),
         ("rewind.d.ts", REWIND_D_TS),
         ("globals.d.ts", GLOBALS_D_TS),
+        ("old-names.d.ts", OLD_NAMES_D_TS),
     ];
-    if http_tool {
+    if http_action {
         files.push((FETCH, FETCH_D_TS));
     }
     files
@@ -70,21 +73,35 @@ mod tests {
         let absent = absent_globals();
         let names: Vec<&str> = absent.keys().map(String::as_str).collect();
         assert_eq!(names, ["Buffer", "fetch", "process", "require"]);
-        assert!(absent["fetch"].contains("http tool"));
+        assert!(absent["fetch"].contains("http action"));
     }
 
     #[test]
-    fn fetch_is_declared_only_with_the_http_tool() {
-        let names = |http_tool| -> Vec<&str> {
-            files(http_tool).into_iter().map(|(name, _)| name).collect()
+    fn fetch_is_declared_only_with_the_http_action() {
+        let names = |http_action| -> Vec<&str> {
+            files(http_action)
+                .into_iter()
+                .map(|(name, _)| name)
+                .collect()
         };
         assert_eq!(
             names(false),
-            ["tsconfig.json", "rewind.d.ts", "globals.d.ts"]
+            [
+                "tsconfig.json",
+                "rewind.d.ts",
+                "globals.d.ts",
+                "old-names.d.ts"
+            ]
         );
         assert_eq!(
             names(true),
-            ["tsconfig.json", "rewind.d.ts", "globals.d.ts", "fetch.d.ts"]
+            [
+                "tsconfig.json",
+                "rewind.d.ts",
+                "globals.d.ts",
+                "old-names.d.ts",
+                "fetch.d.ts"
+            ]
         );
         let config: Value = serde_json::from_str(TSCONFIG_JSON).unwrap();
         assert_eq!(config["include"], serde_json::json!(["*.ts"]));

@@ -28,7 +28,7 @@ use rewind_api::namespaces::{
 };
 use rewind_api::organization::{Principal, TokenKind};
 use rewind_api::problem::QuotaReached;
-use rewind_api::reading::ToolStatsFilter;
+use rewind_api::reading::ActionStatsFilter;
 use rewind_api::runs::{CancelRun, ForkRun, RunFilter, StartRun};
 use rewind_api::scripts::{CheckRequest, TestRequest};
 use rewind_api::tasks::{CompleteTask, TaskStreamQuery};
@@ -45,7 +45,7 @@ export default async function main() {
 "#;
 
 /// A run that asks the harness's host tool.
-const ASK: &str = r#"import { ask_user } from "rewind:tools";
+const ASK: &str = r#"import { ask_user } from "rewind:actions";
 export default async function main() {
   return { answer: await ask_user({ question: "ready?" }) };
 }
@@ -315,7 +315,10 @@ async fn an_end_user_s_token_reaches_its_namespace_only() {
         .await
         .unwrap();
     assert_eq!(stats.runs, 1);
-    alice.tool_stats(&ToolStatsFilter::default()).await.unwrap();
+    alice
+        .action_stats(&ActionStatsFilter::default())
+        .await
+        .unwrap();
 
     // A header naming another namespace is refused; her own may be repeated.
     let astray = alice.with_namespace(ns("bob"));
@@ -419,7 +422,7 @@ async fn a_token_claims_the_tasks_of_its_namespace_only() {
     let alice = server.bare(&token(&customer, "alice", &worker).await);
     let query = TaskStreamQuery {
         action_set: Some(action_set.id.clone()),
-        tools: vec!["ask_user".into()],
+        actions: vec!["ask_user".into()],
         slots: Some(10),
         ..TaskStreamQuery::default()
     };

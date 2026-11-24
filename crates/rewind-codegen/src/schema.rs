@@ -1,7 +1,7 @@
 //! Our JSON Schema → TypeScript converter (`archi/04-tools.md`, "Action sets and code
 //! generation"): no maintained crate does it.
 //!
-//! It covers what tool schemas use: `type` (one or several), objects with `properties`,
+//! It covers what action schemas use: `type` (one or several), objects with `properties`,
 //! `required`, `additionalProperties` and `patternProperties`, arrays with `items` and
 //! `prefixItems` (or the older `items` list with `additionalItems`), `enum` and `const`,
 //! `anyOf`, `oneOf` and `allOf`, `nullable`, and `$ref` into the same document (`#`, JSON
@@ -12,10 +12,10 @@
 //!
 //! Choices:
 //!
-//! - Each `$ref` target becomes a named type of the tool's namespace, named after its last
+//! - Each `$ref` target becomes a named type of the action's namespace, named after its last
 //!   meaningful pointer segment (`#/$defs/issue-comment` → `IssueComment`). Two targets with
 //!   the same definition, down to everything they refer to, share one name; a different type
-//!   that wants a taken name gets the tool's name in front of it, then a number.
+//!   that wants a taken name gets the action's name in front of it, then a number.
 //! - An object whose `additionalProperties` is absent or `false` lists its properties and
 //!   nothing else, so that a misspelled argument is caught at check time; with `true` or a
 //!   schema, it gets an index signature. An object schema that lists no property at all (no
@@ -43,8 +43,8 @@ pub(crate) const MAX_DEFINITIONS: usize = 512;
 
 use crate::ty::{Doc, Object, Property, Tuple, Ty};
 
-/// The named types of one namespace of `rewind:tools`: an MCP server, a host-tool group, or a
-/// bare host tool. Its tools' schemas share them.
+/// The named types of one namespace of `rewind:actions`: an MCP server, a host-tool group, or a
+/// bare host tool. Its actions' schemas share them.
 #[derive(Debug, Default)]
 pub(crate) struct Scope {
     pub(crate) declarations: Vec<Declaration>,
@@ -101,17 +101,17 @@ impl Scope {
     }
 }
 
-/// Which schema of a tool a document is.
+/// Which schema of an action a document is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Role {
     Args,
     Result,
 }
 
-/// Converts one schema document (a tool's input or output schema) to a type, adding the
-/// named types it refers to to `scope`. `tool` is the tool's name inside its namespace, which
-/// tells types of different tools apart when their names clash.
-pub(crate) fn convert(scope: &mut Scope, document: &Value, tool: &str, role: Role) -> Ty {
+/// Converts one schema document (an action's input or output schema) to a type, adding the
+/// named types it refers to to `scope`. `action` is the action's name inside its namespace, which
+/// tells types of different actions apart when their names clash.
+pub(crate) fn convert(scope: &mut Scope, document: &Value, action: &str, role: Role) -> Ty {
     if !fits(document, MAX_DOCUMENT) {
         return Ty::Unknown;
     }
@@ -120,7 +120,7 @@ pub(crate) fn convert(scope: &mut Scope, document: &Value, tool: &str, role: Rol
     let mut converter = Converter {
         scope,
         document,
-        prefix: pascal_case(tool),
+        prefix: pascal_case(action),
         role,
         references: definitions.count() <= MAX_DEFINITIONS,
         definitions,
@@ -152,7 +152,7 @@ pub(crate) fn convert(scope: &mut Scope, document: &Value, tool: &str, role: Rol
 struct Converter<'a> {
     scope: &'a mut Scope,
     document: &'a Value,
-    /// The tool's name in PascalCase, put in front of a type name that clashes.
+    /// The action's name in PascalCase, put in front of a type name that clashes.
     prefix: String,
     role: Role,
     /// Whether `$ref`s become named types: the document designates few enough definitions.

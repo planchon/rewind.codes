@@ -11,36 +11,36 @@ use std::time::Duration;
 
 use deno_ast::{MediaType, ModuleSpecifier, ParseParams};
 use rewind_codegen::{Declarations, generate};
-use rewind_core::{ActionSet, McpServer, McpTransport, Tool, ToolRoute};
+use rewind_core::{Action, ActionRoute, ActionSet, McpServer, McpTransport};
 use serde_json::{Map, Value, json};
 
 /// Far more than any case takes, even in a debug build on a busy machine.
 const PATIENCE: Duration = Duration::from_secs(60);
 
-/// The declarations of an action set whose tool `crm.find` takes `input`, generated within
+/// The declarations of an action set whose action `crm.find` takes `input`, generated within
 /// [`PATIENCE`], and checked as TypeScript.
 fn generate_for(input: Value) -> Declarations {
-    generate_for_tools(vec![("find".to_owned(), input)])
+    generate_for_actions(vec![("find".to_owned(), input)])
 }
 
-/// The same, for tools of the server `crm` named and taking what `tools` says.
-fn generate_for_tools(tools: Vec<(String, Value)>) -> Declarations {
+/// The same, for actions of the server `crm` named and taking what `actions` says.
+fn generate_for_actions(actions: Vec<(String, Value)>) -> Declarations {
     let server = McpServer::new(
         "crm",
         McpTransport::Http {
             url: "https://mcp.example.com/crm".into(),
         },
     );
-    let tools = tools.into_iter().map(|(name, input)| {
-        Tool::new(
+    let actions = actions.into_iter().map(|(name, input)| {
+        Action::new(
             format!("crm.{name}"),
-            ToolRoute::Mcp {
+            ActionRoute::Mcp {
                 server: "crm".into(),
             },
             input,
         )
     });
-    let action_set = ActionSet::new([server], tools).unwrap();
+    let action_set = ActionSet::new([server], actions).unwrap();
     let (sender, receiver) = mpsc::channel();
     std::thread::spawn(move || {
         let _ = sender.send(generate(&action_set, &BTreeMap::new()));
@@ -54,7 +54,7 @@ fn generate_for_tools(tools: Vec<(String, Value)>) -> Declarations {
 
 fn parse(text: &str) {
     deno_ast::parse_program(ParseParams {
-        specifier: ModuleSpecifier::parse("file:///rewind-tools.d.ts").unwrap(),
+        specifier: ModuleSpecifier::parse("file:///rewind-actions.d.ts").unwrap(),
         text: text.into(),
         media_type: MediaType::Dts,
         capture_tokens: false,
@@ -117,16 +117,16 @@ fn named_types_that_refer_to_each_other_many_times_over_stay_cheap_in_the_prompt
     assert!(
         declarations
             .prompt
-            .starts_with("import { crm } from \"rewind:tools\";\ncrm.find({ x: ")
+            .starts_with("import { crm } from \"rewind:actions\";\ncrm.find({ x: ")
     );
 }
 
 #[test]
 fn many_definitions_with_the_same_name_are_named_in_linear_time() {
-    // Every definition of every tool of the server wants the name `Item`: each name was looked
+    // Every definition of every action of the server wants the name `Item`: each name was looked
     // up through every name taken, and the next free number searched from 2 each time.
-    let tools = (0..40)
-        .map(|tool| {
+    let actions = (0..40)
+        .map(|action| {
             let mut properties = Map::new();
             let mut definitions = Map::new();
             for n in 0..500 {
@@ -136,14 +136,14 @@ fn many_definitions_with_the_same_name_are_named_in_linear_time() {
                 );
                 definitions.insert(
                     format!("d{n}"),
-                    json!({ "$defs": { "item": { "const": tool * 1000 + n } } }),
+                    json!({ "$defs": { "item": { "const": action * 1000 + n } } }),
                 );
             }
             let input = json!({ "type": "object", "properties": properties, "$defs": definitions });
-            (format!("t{tool}"), input)
+            (format!("t{action}"), input)
         })
         .collect();
-    let declarations = generate_for_tools(tools);
+    let declarations = generate_for_actions(actions);
     for name in [
         "Item",
         "T0Item",
@@ -227,7 +227,7 @@ fn a_document_larger_than_a_mebibyte_is_unknown() {
     assert!(
         declarations
             .typescript
-            .contains("find(args?: unknown): Promise<ToolContent>;"),
+            .contains("find(args?: unknown): Promise<ActionContent>;"),
         "{}",
         declarations.typescript
     );

@@ -13,7 +13,7 @@
 //!      ended: its attempt sealed in the archive, then one batch:
 //!             head, history, payload records, summary, counters; Seal; its retention's timer
 //!      live:  one batch: head, history, payload records, summary, counters; its inbox, signal
-//!             keys, tool tasks (in flight: ready), timers (its script's, its deadline, a
+//!             keys, call tasks (in flight: ready), timers (its script's, its deadline, a
 //!             backoff), watchers, webhook tokens
 //!      its legacy_runs row: the router finds its version 7 id
 //!  every run moved ───────────────────────────────────────► the tables dropped
@@ -44,10 +44,10 @@ use crate::payloads::payload_mut;
 use crate::ports::legacy::{LegacyBlobs, LegacyError, LegacyHistory, LegacyRun, LegacyRuns};
 use crate::ports::partition::CreateRun;
 use crate::ports::{
-    ArchiveError, Attempt, Batch, BlobError, BlobOwner, BlobStore, CatalogError, CatalogStore,
-    Change, DueTimer, NamespaceWrite, NodeId, PartitionError, PartitionLog, PartitionStore,
-    PayloadRecord, RunArchive, RunHead, RunRef, SealedAttempt, TaskChange, TaskRecord, TaskRef,
-    TaskState, Tenant, TimerChange, TimerKind, ToolTask, namespace_partition,
+    ArchiveError, Attempt, Batch, BlobError, BlobOwner, BlobStore, CallTask, CatalogError,
+    CatalogStore, Change, DueTimer, NamespaceWrite, NodeId, PartitionError, PartitionLog,
+    PartitionStore, PayloadRecord, RunArchive, RunHead, RunRef, SealedAttempt, TaskChange,
+    TaskRecord, TaskRef, TaskState, Tenant, TimerChange, TimerKind, namespace_partition,
 };
 
 /// The runs read from the tables at once.
@@ -486,7 +486,7 @@ fn live(batch: &mut Batch, legacy: &LegacyRun, tasks: Vec<TaskRecord>, now: Time
     }
 }
 
-/// The run's tool tasks, their route and policy from the pinned action set. A task in flight is
+/// The run's call tasks, their route and policy from the pinned action set. A task in flight is
 /// `ready` from now: what was in flight is in no node's memory any more.
 fn tasks_of(
     legacy: &LegacyRun,
@@ -497,8 +497,8 @@ fn tasks_of(
         .tasks
         .iter()
         .map(|task| {
-            let pinned = action_set.tool(&task.tool).ok_or_else(|| {
-                Refused::Run(format!("its action set has no tool {:?}", task.tool))
+            let pinned = action_set.action(&task.action).ok_or_else(|| {
+                Refused::Run(format!("its action set has no action {:?}", task.action))
             })?;
             let state = match &task.state {
                 TaskState::Claimed { .. } | TaskState::Deferred { .. } => TaskState::Ready {
@@ -507,13 +507,13 @@ fn tasks_of(
                 other => other.clone(),
             };
             Ok(TaskRecord {
-                task: ToolTask {
+                task: CallTask {
                     task: TaskRef {
                         run: legacy.run.clone(),
                         seq: task.seq,
                     },
                     action_set: legacy.action_set,
-                    tool: task.tool.clone(),
+                    action: task.action.clone(),
                     route: pinned.route.clone(),
                     args: task.args.clone(),
                     policy: pinned.policy,

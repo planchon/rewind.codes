@@ -16,7 +16,7 @@ pub(super) fn tasks() -> Vec<Task> {
         Task {
             id: "customer_email",
             difficulty: Difficulty::Easy,
-            features: &["single call", "ToolContent.json()"],
+            features: &["single call", "ActionContent.json()"],
             world: || world(&["crm"]),
             setup: &[],
             prompt: |_| "What is the email address of customer C-1007?".into(),

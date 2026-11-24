@@ -1,6 +1,6 @@
 {
   "description": "A run waiting for a signal is suspended, not deadlocked: only the outside world can wake it, and its journal replays to exactly that state.",
-  "tools": {
+  "actions": {
     "github.get_issue": {
       "$echo": true
     },
@@ -15,8 +15,8 @@
     ],
     "events": [
       "run_started",
-      "schedule_tool_call",
-      "tool_call_completed",
+      "schedule_call",
+      "call_completed",
       "signal_awaited"
     ]
   }

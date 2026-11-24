@@ -1,6 +1,6 @@
 {
   "description": "A script changed after the run: it goes idle where the journal says it made a call.",
-  "tools": {
+  "actions": {
     "audit.record": {
       "ok": true
     }
@@ -10,6 +10,6 @@
   },
   "replay": {
     "script": "changed.ts",
-    "diverges": "history entry 3 is tool call #2 audit.record({\"step\":2}), but the script went idle without emitting it"
+    "diverges": "history entry 3 is call #2 audit.record({\"step\":2}), but the script went idle without emitting it"
   }
 }

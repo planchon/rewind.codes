@@ -10,7 +10,7 @@ use rewind_api::Problem;
 use rewind_api::common::{Callsite, Labels, timestamp};
 use rewind_api::query::{self, Comparison, Filter, Pattern, TimeValue, WaitKind};
 use rewind_api::runs::{DurationStats, RunFilter, RunSort, RunWait, WaitCounts};
-use rewind_core::{Digest, RunId, RunMode, ToolFailureKind};
+use rewind_core::{ActionFailureKind, Digest, RunId, RunMode};
 use rewind_engine::ports::{
     self, Predicate, Range, RunOrder, RunQuery, Scope, SearchCursor, Term, TextMatch, WaitingFor,
 };
@@ -76,9 +76,9 @@ fn filter_terms(filter: &RunFilter) -> Result<Vec<Term>, ApiError> {
             values: vec![TextMatch::Exact(value.to_owned())],
         });
     }
-    if let Some(tool) = &filter.tool {
-        refuse_nul_in_filter("tool", tool)?;
-        with(Predicate::Tool(vec![TextMatch::Exact(tool.clone())]));
+    if let Some(action) = &filter.action {
+        refuse_nul_in_filter("action", action)?;
+        with(Predicate::Action(vec![TextMatch::Exact(action.clone())]));
     }
     if let Some(script) = &filter.script {
         let digest = Digest::from_hex(script)
@@ -145,7 +145,7 @@ fn term(term: query::Term, now: jiff::Timestamp) -> Term {
         Filter::Status(statuses) => {
             Predicate::Status(statuses.into_iter().map(runs_status).collect())
         }
-        Filter::Tool(tools) => Predicate::Tool(patterns(tools)),
+        Filter::Action(actions) => Predicate::Action(patterns(actions)),
         Filter::Error(errors) => error_predicate(&errors),
         Filter::Waiting(kinds) => Predicate::Waiting(kinds.into_iter().map(waiting_for).collect()),
         Filter::Signal(names) => Predicate::Signal(patterns(names)),
@@ -198,12 +198,12 @@ fn error_predicate(errors: &[String]) -> Predicate {
     }
 }
 
-pub(crate) fn failure_kind(text: &str) -> Option<ToolFailureKind> {
+pub(crate) fn failure_kind(text: &str) -> Option<ActionFailureKind> {
     [
-        ToolFailureKind::Error,
-        ToolFailureKind::Unavailable,
-        ToolFailureKind::Timeout,
-        ToolFailureKind::OutcomeUnknown,
+        ActionFailureKind::Error,
+        ActionFailureKind::Unavailable,
+        ActionFailureKind::Timeout,
+        ActionFailureKind::OutcomeUnknown,
     ]
     .into_iter()
     .find(|kind| kind.as_str() == text)
@@ -359,7 +359,7 @@ pub(crate) fn summary(run: &ports::RunSummary) -> rewind_api::runs::RunSummary {
         started_at: timestamp(run.started_at.unwrap_or(run.last_activity_at)),
         ended_at: run.ended_at.map(timestamp),
         last_activity_at: timestamp(run.last_activity_at),
-        tool_calls: run.tool_calls,
+        calls: run.calls,
         errors: run.errors,
         history_len: run.history_len,
         error: ending.map(|ending| ending.error.clone()),
@@ -465,6 +465,6 @@ mod tests {
             panic!("an error predicate");
         };
         assert_eq!(names.len(), 2);
-        assert_eq!(kinds, BTreeSet::from([ToolFailureKind::Timeout]));
+        assert_eq!(kinds, BTreeSet::from([ActionFailureKind::Timeout]));
     }
 }

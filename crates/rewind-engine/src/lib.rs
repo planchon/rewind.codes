@@ -37,7 +37,7 @@
 //!   partitions and the archive, once.
 //! - [`adapters`]: the in-memory control plane (catalog, cluster), run plane (partitions),
 //!   archive, link between nodes, blobs, access, secrets, telemetry and webhooks; a fake
-//!   identity provider; static tool responses and type-checking; system and virtual time;
+//!   identity provider; static action responses and type-checking; system and virtual time;
 //!   system and seeded entropy. With a virtual clock they make mock mode and the test harness.
 //! - `conformance` (feature): the suites every adapter of `CatalogStore`, `PartitionStore`,
 //!   `RunArchive`, `Cluster`, `AccessStore`, `BlobStore`, `SecretStore`, `SpanExporter` and

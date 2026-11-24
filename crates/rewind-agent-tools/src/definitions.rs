@@ -23,7 +23,7 @@ pub const AGENT_TOOLS: [&str; 13] = [
     "signal_run",
     "cancel_run",
     "retry_run",
-    "search_tools",
+    "search_actions",
     "list_secrets",
     "save_workflow",
     "get_workflow",
@@ -32,7 +32,7 @@ pub const AGENT_TOOLS: [&str; 13] = [
 
 /// The tools that need an action set (the SDK's `NEEDS_TOOLSET`).
 pub const NEEDS_ACTION_SET: [&str; 4] = [
-    "search_tools",
+    "search_actions",
     "save_workflow",
     "get_workflow",
     "record_tests",
@@ -61,7 +61,7 @@ macro_rules! title_comment {
 fn code() -> Value {
     json!({
         "type": "string",
-        "description": "The TypeScript source: one ES module whose default export is `async function main(input)`. It imports tools from \"rewind:tools\", workflows from \"rewind:workflows\", and `sleep`, `signal`, `webhook` from \"rewind\". Its input and output are JSON."
+        "description": "The TypeScript source: one ES module whose default export is `async function main(input)`. It imports actions from \"rewind:actions\", workflows from \"rewind:workflows\", and `sleep`, `signal`, `webhook` from \"rewind\". Its input and output are JSON."
     })
 }
 
@@ -96,20 +96,20 @@ fn with_description(mut schema: Value, description: &str) -> Value {
     schema
 }
 
-/// An answer of a test's world to the calls of one tool.
+/// An answer of a test's world to the calls of one action.
 fn rule() -> Value {
     json!({
         "type": "object",
-        "description": "An answer to the calls of the tool whose args contain `args`: the result in `returns`, or a failure in `error`.",
+        "description": "An answer to the calls of the action whose args contain `args`: the result in `returns`, or a failure in `error`.",
         "properties": {
             "args": {
                 "type": "object",
-                "description": "The call's args contain these (objects compared key by key). Any call of the tool when absent."
+                "description": "The call's args contain these (objects compared key by key). Any call of the action when absent."
             },
             "returns": { "description": "The result of the call, any JSON value, null included." },
             "error": {
                 "type": "object",
-                "description": "The call fails with a ToolError instead.",
+                "description": "The call fails with an ActionError instead.",
                 "properties": {
                     "message": { "type": "string" },
                     "kind": {
@@ -117,7 +117,7 @@ fn rule() -> Value {
                         "enum": ["error", "unavailable", "timeout", "outcome_unknown"],
                         "description": "\"error\" when absent."
                     },
-                    "data": { "description": "Any JSON value: the ToolError's `data`." }
+                    "data": { "description": "Any JSON value: the ActionError's `data`." }
                 },
                 "required": ["message"],
                 "additionalProperties": false
@@ -148,7 +148,7 @@ fn expect() -> Value {
             },
             "error": {
                 "type": "object",
-                "description": "The run failed with an error of this name (such as ToolError), whose message contains `message`.",
+                "description": "The run failed with an error of this name (such as ActionError), whose message contains `message`.",
                 "properties": { "name": { "type": "string" }, "message": { "type": "string" } },
                 "required": ["name"],
                 "additionalProperties": false
@@ -159,10 +159,10 @@ fn expect() -> Value {
                 "items": {
                     "type": "object",
                     "properties": {
-                        "tool": { "type": "string", "description": "The tool, such as \"github.close_issue\"." },
+                        "action": { "type": "string", "description": "The action, such as \"github.close_issue\"." },
                         "args": {
                             "type": "object",
-                            "description": "Only the calls whose args contain these. Every call of the tool when absent."
+                            "description": "Only the calls whose args contain these. Every call of the action when absent."
                         },
                         "times": {
                             "type": "integer",
@@ -170,7 +170,7 @@ fn expect() -> Value {
                             "description": "Exactly this many matching calls. At least one when absent; 0 says the call must not happen."
                         }
                     },
-                    "required": ["tool"],
+                    "required": ["action"],
                     "additionalProperties": false
                 }
             },
@@ -202,16 +202,16 @@ fn inline_test() -> Value {
             },
             "world": {
                 "type": "object",
-                "description": "Everything the script may touch. A call that nothing here answers fails with a ToolError (no recorded response) and fails the test, even if the script catches the error.",
+                "description": "Everything the script may touch. A call that nothing here answers fails with an ActionError (no recorded response) and fails the test, even if the script catches the error.",
                 "properties": {
-                    "tools": {
+                    "actions": {
                         "type": "object",
-                        "description": "By tool name, such as \"github.list_issues\": one rule answering every call, or a list of rules tried in order. A start of a workflow, \"workflows.<name>.start\", is answered the same way: `returns` is the child's output, `error` its failure.",
+                        "description": "By action name, such as \"github.list_issues\": one rule answering every call, or a list of rules tried in order. A start of a workflow, \"workflows.<name>.start\", is answered the same way: `returns` is the child's output, `error` its failure.",
                         "additionalProperties": { "anyOf": [rule(), { "type": "array", "items": rule() }] }
                     },
                     "mocks": {
                         "type": "string",
-                        "description": "TypeScript mock handlers, for answers computed from the args: a module that imports nothing and default-exports its handlers by tool name or by namespace, such as `export default { \"github.get_issue\": ({ number }) => ({ number, state: \"open\" }) }`. What a handler throws fails the call. Tried after `tools`."
+                        "description": "TypeScript mock handlers, for answers computed from the args: a module that imports nothing and default-exports its handlers by action name or by group, such as `export default { \"github.get_issue\": ({ number }) => ({ number, state: \"open\" }) }`. What a handler throws fails the call. Tried after `tools`."
                     }
                 },
                 "additionalProperties": false
@@ -274,7 +274,7 @@ pub fn definition(name: &str) -> Option<ToolDefinition> {
         "run_script" => ToolDefinition {
             name: "run_script",
             description: concat!(
-                "Type-check a TypeScript script and run it. The script calls the tools declared in `rewind:tools` and runs durably: it can sleep for days and wait for signals. A script that does not type-check is refused with its diagnostics, before anything runs. When the run ends within `wait`, you get its output and last log lines, or its error with the failing line and the trace up to the failure. Otherwise you get the run's handle and what the run waits for: follow it with get_run, send it a signal with signal_run, or cancel it with cancel_run. ",
+                "Type-check a TypeScript script and run it. The script calls the actions declared in `rewind:actions` and runs durably: it can sleep for days and wait for signals. A script that does not type-check is refused with its diagnostics, before anything runs. When the run ends within `wait`, you get its output and last log lines, or its error with the failing line and the trace up to the failure. Otherwise you get the run's handle and what the run waits for: follow it with get_run, send it a signal with signal_run, or cancel it with cancel_run. ",
                 title_comment!()
             ),
             input_schema: json!({
@@ -292,7 +292,7 @@ pub fn definition(name: &str) -> Option<ToolDefinition> {
         "check_script" => ToolDefinition {
             name: "check_script",
             description: concat!(
-                "Type-check a TypeScript script against the sandbox and the tool declarations, without running it. Returns the diagnostics with their location and a code frame, and a note when the script has no title. ",
+                "Type-check a TypeScript script against the sandbox and the action declarations, without running it. Returns the diagnostics with their location and a code frame, and a note when the script has no title. ",
                 title_comment!()
             ),
             input_schema: json!({
@@ -304,7 +304,7 @@ pub fn definition(name: &str) -> Option<ToolDefinition> {
         },
         "test_script" => ToolDefinition {
             name: "test_script",
-            description: "Run tests against a script, end to end, in virtual time: no tool is really called and sleeps take no time. Each test gives the world the run meets (its input, the answers of the tools it may call, the signals sent to it) and what must hold at the end (its status, its output or error, the calls it made). A call the world does not answer fails the test. With `workflow`, that workflow's suite runs too, against your script: this is how you check a fix or a change of a workflow before save_workflow. Returns whether each test passed and, for those that did not, why: stale (it names tools, answers or args your tools no longer have; not run), incompatible (the workflow's input or signal schemas refuse it; not run) or failed (an expectation does not hold), with the run's outcome and its trace.",
+            description: "Run tests against a script, end to end, in virtual time: no action is really called and sleeps take no time. Each test gives the world the run meets (its input, the answers of the actions it may call, the signals sent to it) and what must hold at the end (its status, its output or error, the calls it made). A call the world does not answer fails the test. With `workflow`, that workflow's suite runs too, against your script: this is how you check a fix or a change of a workflow before save_workflow. Returns whether each test passed and, for those that did not, why: stale (it names tools, answers or args your tools no longer have; not run), incompatible (the workflow's input or signal schemas refuse it; not run) or failed (an expectation does not hold), with the run's outcome and its trace.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -381,12 +381,12 @@ pub fn definition(name: &str) -> Option<ToolDefinition> {
                 "additionalProperties": false
             }),
         },
-        "search_tools" => ToolDefinition {
-            name: "search_tools",
-            description: "Find the tools of `rewind:tools` matching a query, with their TypeScript declarations: for action sets too large to be listed in full.",
+        "search_actions" => ToolDefinition {
+            name: "search_actions",
+            description: "Find the actions of `rewind:actions` matching a query, with their TypeScript declarations: for action sets too large to be listed in full.",
             input_schema: json!({
                 "type": "object",
-                "properties": { "query": { "type": "string", "description": "Words to look for in tool names and descriptions." } },
+                "properties": { "query": { "type": "string", "description": "Words to look for in action names and descriptions." } },
                 "required": ["query"],
                 "additionalProperties": false
             }),
@@ -402,7 +402,7 @@ pub fn definition(name: &str) -> Option<ToolDefinition> {
         },
         "save_workflow" => ToolDefinition {
             name: "save_workflow",
-            description: "Save a script as a workflow: a named script with JSON Schemas for its input, its output and the signals it accepts. The script is type-checked against your tools and against these schemas: its default export must take the input and return the output, and `signal(name)` only takes a declared name and returns that signal's payload. Then its suite runs, and the workflow is saved only if every test passes. The suite is the tests of the version it derives from (`parent`, by default the latest version of this name), minus those you `retire`, with those you `update` replaced, plus your new `tests`. There is no way around a failing test. To change a behavior a test pins on purpose, retire the test when the behavior is deprecated, or update it when its state or its expected result is out of date, always with a reason: the reasons stay in the workflow's lineage for whoever reads it next. Read the suite with get_workflow, and check a change with test_script({ code, workflow }) first. Once saved, your later scripts can `import { <name> } from \"rewind:workflows\"`, start runs of it with `<name>.start(input)`, send them signals with `run.signal(name, payload)` and wait for their output with `run.result()`. Saving it again with another script, other schemas or other tests saves a new version, which your later scripts use.",
+            description: "Save a script as a workflow: a named script with JSON Schemas for its input, its output and the signals it accepts. The script is type-checked against your actions and against these schemas: its default export must take the input and return the output, and `signal(name)` only takes a declared name and returns that signal's payload. Then its suite runs, and the workflow is saved only if every test passes. The suite is the tests of the version it derives from (`parent`, by default the latest version of this name), minus those you `retire`, with those you `update` replaced, plus your new `tests`. There is no way around a failing test. To change a behavior a test pins on purpose, retire the test when the behavior is deprecated, or update it when its state or its expected result is out of date, always with a reason: the reasons stay in the workflow's lineage for whoever reads it next. Read the suite with get_workflow, and check a change with test_script({ code, workflow }) first. Once saved, your later scripts can `import { <name> } from \"rewind:workflows\"`, start runs of it with `<name>.start(input)`, send them signals with `run.signal(name, payload)` and wait for their output with `run.result()`. Saving it again with another script, other schemas or other tests saves a new version, which your later scripts use.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -413,7 +413,7 @@ pub fn definition(name: &str) -> Option<ToolDefinition> {
                     "description": { "type": "string", "description": "What the workflow does, shown with its declaration." },
                     "code": with_description(
                         code(),
-                        "The workflow's TypeScript source: one ES module whose default export is `async function main(input)`, taking the input and returning the output. It imports tools from \"rewind:tools\" and `sleep`, `signal`, `webhook` from \"rewind\"."
+                        "The workflow's TypeScript source: one ES module whose default export is `async function main(input)`, taking the input and returning the output. It imports actions from \"rewind:actions\" and `sleep`, `signal`, `webhook` from \"rewind\"."
                     ),
                     "input": { "type": "object", "description": "The JSON Schema of the input of `main`." },
                     "output": { "type": "object", "description": "The JSON Schema of what `main` returns." },
@@ -476,7 +476,7 @@ pub fn definition(name: &str) -> Option<ToolDefinition> {
         },
         "record_tests" => ToolDefinition {
             name: "record_tests",
-            description: "Record tests from past runs of a workflow, so a new version must keep doing what the old ones did on real inputs. Its completed and failed runs are grouped by the path they took (the tools they called in order, the signals they waited for, how they ended), and the newest run of each path becomes a test: its input, its calls and signals as they happened, and the same status, output or error and number of calls per tool as expected. The tests are stored but join no suite: pass their digests in save_workflow's `tests`, or { from: <digest>, expect } to give a failed run the expectation it should have met.",
+            description: "Record tests from past runs of a workflow, so a new version must keep doing what the old ones did on real inputs. Its completed and failed runs are grouped by the path they took (the actions they called in order, the signals they waited for, how they ended), and the newest run of each path becomes a test: its input, its calls and signals as they happened, and the same status, output or error and number of calls per tool as expected. The tests are stored but join no suite: pass their digests in save_workflow's `tests`, or { from: <digest>, expect } to give a failed run the expectation it should have met.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -518,7 +518,7 @@ pub const MCP_TOOLS: [&str; 15] = [
     "list_orgs",
     "list_namespaces",
     "list_action_sets",
-    "search_tools",
+    "search_actions",
     "list_secrets",
     "check_script",
     "test_script",
@@ -603,7 +603,7 @@ fn action_set_required(what: &str) -> Value {
 fn action_set_of_script() -> Value {
     json!({
         "type": "string",
-        "description": "The action set whose tools the script imports from \"rewind:tools\": its id, as list_action_sets gives it. Without it, the script has only the built-in `webhook`."
+        "description": "The action set whose actions the script imports from \"rewind:actions\": its id, as list_action_sets gives it. Without it, the script has only the built-in `webhook`."
     })
 }
 
@@ -661,7 +661,7 @@ pub fn mcp_tool(name: &str) -> Option<McpTool> {
             return Some(McpTool {
                 name: "list_action_sets",
                 title: "List action sets",
-                description: "List the action sets of an organization: each pins MCP servers and their tools, which scripts import from \"rewind:tools\", and the workflows they import from \"rewind:workflows\". Give an action set's id as `action_set` to search_tools, check_script, test_script and run_script, and read its tools' declarations with search_tools before you write a script.".into(),
+                description: "List the action sets of an organization: each pins MCP servers and their actions, which scripts import from \"rewind:actions\", and the workflows they import from \"rewind:workflows\". Give an action set's id as `action_set` to search_actions, check_script, test_script and run_script, and read its tools' declarations with search_actions before you write a script.".into(),
                 input_schema: json!({
                     "type": "object",
                     "properties": { "org": org() },
@@ -679,11 +679,11 @@ pub fn mcp_tool(name: &str) -> Option<McpTool> {
     let mut required: Vec<&str> = Vec::new();
     let mut extra = vec![("org", org())];
     let (title, permission, annotations, place) = match name {
-        "search_tools" => {
-            extra.push(("action_set", action_set_required("whose tools to search")));
+        "search_actions" => {
+            extra.push(("action_set", action_set_required("whose actions to search")));
             required.push("action_set");
             (
-                "Search tools",
+                "Search actions",
                 Permission::ActionsRead,
                 Annotations::READ,
                 "Give the action set as `action_set`, as list_action_sets gives it.",
@@ -743,7 +743,7 @@ pub fn mcp_tool(name: &str) -> Option<McpTool> {
                 "Run a script",
                 Permission::RunsStart,
                 annotations(false, false, true),
-                "Give the namespace the run acts for as `namespace` (list_namespaces), and the action set whose tools it imports as `action_set` (list_action_sets).",
+                "Give the namespace the run acts for as `namespace` (list_namespaces), and the action set whose actions it imports as `action_set` (list_action_sets).",
             )
         }
         "get_run" => {
@@ -878,7 +878,7 @@ mod tests {
         assert_eq!(required("run_script"), json!(["code", "namespace"]));
         assert_eq!(required("check_script"), json!(["code", "namespace"]));
         assert_eq!(required("test_script"), json!(["code", "namespace"]));
-        assert_eq!(required("search_tools"), json!(["query", "action_set"]));
+        assert_eq!(required("search_actions"), json!(["query", "action_set"]));
         assert_eq!(required("get_run"), json!(["run_id"]));
         assert!(tool("get_run").input_schema["properties"]["namespace"].is_object());
         assert!(tool("list_runs").input_schema["properties"]["namespace"].is_object());
@@ -911,7 +911,7 @@ mod tests {
                 "list_orgs",
                 "list_namespaces",
                 "list_action_sets",
-                "search_tools",
+                "search_actions",
                 "list_secrets",
                 "check_script",
                 "test_script",
@@ -983,10 +983,10 @@ mod tests {
         );
         assert_eq!(
             keys(&inline["properties"]["world"]["properties"]),
-            sorted(&["tools", "mocks"])
+            sorted(&["actions", "mocks"])
         );
-        let rule = &inline["properties"]["world"]["properties"]["tools"]["additionalProperties"]["anyOf"]
-            [0];
+        let rule = &inline["properties"]["world"]["properties"]["actions"]["additionalProperties"]
+            ["anyOf"][0];
         assert_eq!(
             keys(&rule["properties"]),
             sorted(&["args", "returns", "error", "times"])
@@ -1002,7 +1002,7 @@ mod tests {
         );
         assert_eq!(
             keys(&expectations["properties"]["calls"]["items"]["properties"]),
-            sorted(&["tool", "args", "times"])
+            sorted(&["action", "args", "times"])
         );
         assert_eq!(digest["type"], "string");
         assert_eq!(from["type"], "object");

@@ -157,12 +157,12 @@ pub(crate) fn started_runs(entries: &[HistoryEntry]) -> Vec<(Seq, RunId)> {
     let mut runs = Vec::new();
     for entry in entries {
         match &entry.event {
-            Event::Command(Command::ScheduleToolCall { seq, tool, .. })
-                if matches!(WorkflowOp::of_tool(tool), Some((_, WorkflowOp::Start))) =>
+            Event::Command(Command::ScheduleCall { seq, action, .. })
+                if matches!(WorkflowOp::of_action(action), Some((_, WorkflowOp::Start))) =>
             {
                 starts.insert(*seq);
             }
-            Event::Completion(Completion::ToolCallCompleted {
+            Event::Completion(Completion::CallCompleted {
                 seq,
                 result: Payload::Value(result),
             }) if starts.contains(seq) => {
@@ -295,7 +295,7 @@ fn first_error(diagnostics: &[Diagnostic]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use rewind_core::{Timestamp, ToolOutcome, end_signal_name};
+    use rewind_core::{ActionOutcome, Timestamp, end_signal_name};
     use serde_json::json;
 
     use super::*;
@@ -313,16 +313,17 @@ mod tests {
         let a: RunId = "0193a5c4-0000-7000-8000-000000000001".parse().unwrap();
         let b: RunId = "0193a5c4-0000-7000-8000-000000000002".parse().unwrap();
         let start = |seq: u32| {
-            Event::Command(Command::ScheduleToolCall {
+            Event::Command(Command::ScheduleCall {
                 seq: Seq(seq),
-                tool: "workflows.triage.start".into(),
+                action: "workflows.triage.start".into(),
                 args: json!({ "input": {} }).into(),
                 callsite: None,
             })
         };
         let started = |seq: u32, run: RunId| {
             Event::Completion(
-                ToolOutcome::Result(json!({ "runId": run.to_string() })).into_completion(Seq(seq)),
+                ActionOutcome::Result(json!({ "runId": run.to_string() }))
+                    .into_completion(Seq(seq)),
             )
         };
         let entries = [

@@ -2,7 +2,7 @@
   "description": "A script starts a run of a workflow per repository, approves each with a signal and adds up their results: the runs really run, and their ends come back to the script as signals.",
   "live": true,
   "input": { "repos": ["acme/api", "acme/web"] },
-  "tools": {
+  "actions": {
     "github.list_issues": [{ "number": 1 }, { "number": 2 }],
     "github.close_issue": { "$echo": true }
   },

@@ -134,19 +134,19 @@ pub async fn every_kind_of_event_is_delivered<S: WebhookSender, R: Receiver>(
         ),
         failed(RunStatus::Aborted, "limit_exceeded: CPU time"),
         WebhookEventKind::RunSuspended {
-            waiting_for: vec!["tool ask_user #1".into()],
+            waiting_for: vec!["action ask_user #1".into()],
         },
         WebhookEventKind::RunQuarantined {
-            reason: "history entry 1 is tool call #1 a({}), but the script emitted b({})".into(),
+            reason: "history entry 1 is call #1 a({}), but the script emitted b({})".into(),
         },
-        WebhookEventKind::ToolSchemaChanged {
+        WebhookEventKind::ActionSchemaChanged {
             seq: Seq(2),
-            tool: "github.close_issue".into(),
-            message: "the tool's input schema refuses the call's arguments".into(),
+            action: "github.close_issue".into(),
+            message: "the action's input schema refuses the call's arguments".into(),
         },
         WebhookEventKind::CredentialsExpired {
             seq: Seq(3),
-            tool: "github.list_issues".into(),
+            action: "github.list_issues".into(),
             message: "401 Unauthorized".into(),
             reason: CredentialsExpiredReason::Refused,
             secret: Some(SecretRef::parse("ns/github").expect("valid")),

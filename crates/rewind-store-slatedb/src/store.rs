@@ -742,7 +742,7 @@ impl PartitionLog for SlateLog {
         &self,
         tenant: &TenantId,
         namespace: Option<&NamespaceName>,
-        tools: &[String],
+        actions: &[String],
     ) -> Result<BTreeMap<String, Shape>, PartitionError> {
         let prefix = keys::shapes_of(tenant, namespace);
         let mut shapes: BTreeMap<String, Shape> = BTreeMap::new();
@@ -756,15 +756,16 @@ impl PartitionLog for SlateLog {
                         .1
                 }
             };
-            let (tool, _) = keys::read_str(rest).ok_or_else(|| codec::corrupt("a shape's key"))?;
-            if !tools.contains(&tool) {
+            let (action, _) =
+                keys::read_str(rest).ok_or_else(|| codec::corrupt("a shape's key"))?;
+            if !actions.contains(&action) {
                 continue;
             }
-            let merged = match shapes.remove(&tool) {
+            let merged = match shapes.remove(&action) {
                 Some(known) => known.merge(shape.shape),
                 None => shape.shape,
             };
-            shapes.insert(tool, merged);
+            shapes.insert(action, merged);
         }
         Ok(shapes)
     }

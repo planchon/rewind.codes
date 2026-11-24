@@ -1,4 +1,4 @@
-import { tracker } from "rewind:tools";
+import { tracker } from "rewind:actions";
 
 export default async function main() {
   let open = 0;

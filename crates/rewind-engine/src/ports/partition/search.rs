@@ -9,7 +9,7 @@
 use std::cmp::Reverse;
 use std::collections::BTreeSet;
 
-use rewind_core::{Digest, RunId, RunStatus, ToolFailureKind};
+use rewind_core::{ActionFailureKind, Digest, RunId, RunStatus};
 
 use crate::ports::read_model::{
     Predicate, RunOrder, RunQuery, RunSummary, SearchCursor, Wait, WaitKind, WaitingFor,
@@ -22,18 +22,18 @@ pub const SCAN_BUDGET: usize = 10_000;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct IndexedSummary {
     pub summary: RunSummary,
-    /// The tools the run scheduled calls to (`tool:`).
-    pub tools: BTreeSet<String>,
+    /// The actions the run scheduled calls to (`action:`).
+    pub actions: BTreeSet<String>,
     /// The kinds its failed calls failed with (`error:`).
-    pub call_errors: BTreeSet<ToolFailureKind>,
+    pub call_errors: BTreeSet<ActionFailureKind>,
 }
 
 impl IndexedSummary {
-    /// A summary whose run called no tool.
+    /// A summary whose run called no action.
     pub fn new(summary: RunSummary) -> Self {
         Self {
             summary,
-            tools: BTreeSet::new(),
+            actions: BTreeSet::new(),
             call_errors: BTreeSet::new(),
         }
     }
@@ -73,10 +73,10 @@ impl IndexedSummary {
                 .is_some_and(|value| values.iter().any(|matcher| matcher.matches(value))),
             Predicate::Script(prefixes) => hex_prefix(&summary.script, prefixes),
             Predicate::ActionSet(prefixes) => hex_prefix(&summary.action_set, prefixes),
-            Predicate::Tool(matchers) => self
-                .tools
+            Predicate::Action(matchers) => self
+                .actions
                 .iter()
-                .any(|tool| matchers.iter().any(|matcher| matcher.matches(tool))),
+                .any(|action| matchers.iter().any(|matcher| matcher.matches(action))),
             Predicate::Error { names, kinds } => {
                 summary
                     .ending
@@ -99,7 +99,7 @@ impl IndexedSummary {
             Predicate::Duration(range) => summary
                 .duration()
                 .is_some_and(|duration| range.contains(&duration)),
-            Predicate::Calls(range) => range.contains(&summary.tool_calls),
+            Predicate::Calls(range) => range.contains(&summary.calls),
             Predicate::Errors(range) => range.contains(&summary.errors),
             Predicate::Parent(parent) => summary.parent == Some(*parent),
             Predicate::Workflow(matchers) => summary

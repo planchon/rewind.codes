@@ -1,6 +1,6 @@
 //! What an activation writes beside its entries, derived from the history it extends
 //! (`archi/05-testing-and-observability.md`, "Read model", "The projector";
-//! `archi/06-storage-and-scale.md`, "Quotas"): the run's head and summary, the tool tasks and
+//! `archi/06-storage-and-scale.md`, "Quotas"): the run's head and summary, the call tasks and
 //! timers of its new commands, the counters it moves, and the projections it feeds.
 //!
 //! Everything here is pure: the same history gives the same records on every node, so an
@@ -17,9 +17,9 @@ use rewind_core::{
 use crate::failures;
 use crate::metrics::RunMeasurement;
 use crate::ports::{
-    CounterDelta, Counters, DueTimer, FailureCounts, Hour, IndexedSummary, LatestRun,
-    PayloadRecord, Projection, QuarantineNote, RunHead, RunSummary, TaskPhase, TaskRecord, TaskRef,
-    TaskState, TimerChange, TimerKind, ToolCounts, ToolTask, WaitKind,
+    ActionCounts, CallTask, CounterDelta, Counters, DueTimer, FailureCounts, Hour, IndexedSummary,
+    LatestRun, PayloadRecord, Projection, QuarantineNote, RunHead, RunSummary, TaskPhase,
+    TaskRecord, TaskRef, TaskState, TimerChange, TimerKind, WaitKind,
 };
 use crate::projector;
 use crate::telemetry::{RunTelemetry, SpanKey, TelemetryConfig};
@@ -36,7 +36,7 @@ pub(crate) fn phase_of(task: &TaskRecord) -> TaskPhase {
 }
 
 /// The run's summary after `history`, which leaves the run in `state`: its status, its waits
-/// (each call's with its task's phase), its ending, its counts, the tools it called.
+/// (each call's with its task's phase), its ending, its counts, the actions it called.
 ///
 /// The counts are those of `previous`, the summary of the history up to its `history_len`,
 /// with the entries after it: an activation counts its new entries only, and its derivation
@@ -68,22 +68,22 @@ pub(crate) fn summary_of(
     let counted = previous
         .and_then(|previous| usize::try_from(previous.summary.history_len).ok())
         .filter(|counted| *counted <= history.len());
-    let (mut tools, mut call_errors, mut tool_calls, mut errors) = match previous.zip(counted) {
+    let (mut actions, mut call_errors, mut calls, mut errors) = match previous.zip(counted) {
         Some((previous, _)) => (
-            previous.tools.clone(),
+            previous.actions.clone(),
             previous.call_errors.clone(),
-            previous.summary.tool_calls,
+            previous.summary.calls,
             previous.summary.errors,
         ),
         None => (BTreeSet::new(), BTreeSet::new(), 0, 0),
     };
     for entry in &history[counted.unwrap_or(0)..] {
         match &entry.event {
-            Event::Command(Command::ScheduleToolCall { tool, .. }) => {
-                tool_calls += 1;
-                tools.insert(tool.clone());
+            Event::Command(Command::ScheduleCall { action, .. }) => {
+                calls += 1;
+                actions.insert(action.clone());
             }
-            Event::Completion(Completion::ToolCallFailed { error, .. }) => {
+            Event::Completion(Completion::CallFailed { error, .. }) => {
                 errors += 1;
                 call_errors.insert(error.kind);
             }
@@ -124,7 +124,7 @@ pub(crate) fn summary_of(
             last_activity_at: history
                 .last()
                 .map_or(head.updated_at, |entry| entry.recorded_at),
-            tool_calls,
+            calls,
             errors,
             history_len: history.len() as u64,
             waits,
@@ -132,7 +132,7 @@ pub(crate) fn summary_of(
             ending: state.outcome().and_then(failures::ending),
             quarantine: head.quarantine.as_ref().map(QuarantineNote::from),
         },
-        tools,
+        actions,
         call_errors,
     }
 }
@@ -167,7 +167,7 @@ impl<'h> Openings<'h> {
             .iter()
             .filter_map(|entry| match &entry.event {
                 Event::Command(
-                    Command::ScheduleToolCall { seq, .. } | Command::StartTimer { seq, .. },
+                    Command::ScheduleCall { seq, .. } | Command::StartTimer { seq, .. },
                 ) => Some((*seq, entry)),
                 _ => None,
             })
@@ -187,12 +187,12 @@ impl<'h> Openings<'h> {
             .or_else(|| projector::opening(self.history, self.before, seq))
     }
 
-    /// The call `seq`: when it was scheduled, and its tool.
+    /// The call `seq`: when it was scheduled, and its action.
     pub(crate) fn call(&self, seq: Seq) -> Option<(Timestamp, &'h str)> {
         let entry = self.of(seq)?;
         match &entry.event {
-            Event::Command(Command::ScheduleToolCall { tool, .. }) => {
-                Some((entry.recorded_at, tool.as_str()))
+            Event::Command(Command::ScheduleCall { action, .. }) => {
+                Some((entry.recorded_at, action.as_str()))
             }
             _ => None,
         }
@@ -225,10 +225,10 @@ pub(crate) fn head_after(
     next
 }
 
-/// The tool tasks and timers of the new entries (`from` on): a call still pending at the end of
+/// The call tasks and timers of the new entries (`from` on): a call still pending at the end of
 /// the activation, a timer still pending, the cancellation of a timer of an earlier activation,
 /// and the run's deadline once `run_started` is committed. A terminal run has none: its commit
-/// clears them. A task takes its route and policy from the pinned action set; a tool the action set
+/// clears them. A task takes its route and policy from the pinned action set; an action the action set
 /// does not have is returned as the error.
 pub(crate) fn effects_of(
     head: &RunHead,
@@ -253,18 +253,18 @@ pub(crate) fn effects_of(
                     kind: TimerKind::RunDeadline { run: run.clone() },
                 }));
             }
-            Event::Command(Command::ScheduleToolCall {
-                seq, tool, args, ..
-            }) if state.pending_tool_calls().contains_key(seq) => {
-                let pinned = action_set.tool(tool).ok_or_else(|| tool.clone())?;
+            Event::Command(Command::ScheduleCall {
+                seq, action, args, ..
+            }) if state.pending_calls().contains_key(seq) => {
+                let pinned = action_set.action(action).ok_or_else(|| action.clone())?;
                 tasks.push(TaskRecord {
-                    task: ToolTask {
+                    task: CallTask {
                         task: TaskRef {
                             run: run.clone(),
                             seq: *seq,
                         },
                         action_set: head.action_set,
-                        tool: tool.clone(),
+                        action: action.clone(),
                         route: pinned.route.clone(),
                         args: args.clone(),
                         policy: pinned.policy,
@@ -315,16 +315,16 @@ pub(crate) fn shapes_of(
 ) -> Vec<CounterDelta> {
     let mut deltas = Vec::new();
     for entry in &history[from.min(history.len())..] {
-        if let Event::Completion(Completion::ToolCallCompleted {
+        if let Event::Completion(Completion::CallCompleted {
             seq,
             result: Payload::Value(value),
         }) = &entry.event
-            && let Some((_, tool)) = openings.call(*seq)
+            && let Some((_, action)) = openings.call(*seq)
         {
             deltas.push(CounterDelta::Shape {
                 tenant: head.run.tenant.clone(),
                 namespace: head.namespace.clone(),
-                tool: tool.to_owned(),
+                action: action.to_owned(),
                 shape: Shape::of(value),
             });
         }
@@ -334,7 +334,7 @@ pub(crate) fn shapes_of(
 
 /// The counters the new entries (`from` on) move, per hour of their `recorded_at`: the run's
 /// start and end, its duration and failure group, its workflow and script, the calls of each
-/// tool; and the CPU time of the activation in the hour of `now`.
+/// action; and the CPU time of the activation in the hour of `now`.
 pub(crate) fn counters_of(
     head: &RunHead,
     history: &[HistoryEntry],
@@ -364,30 +364,30 @@ pub(crate) fn counters_of(
                 script.first_started_at = Some(entry.recorded_at);
                 script.last_started_at = Some(entry.recorded_at);
             }
-            Event::Command(Command::ScheduleToolCall { tool, .. }) => {
+            Event::Command(Command::ScheduleCall { action, .. }) => {
                 let counters = hours.entry(Hour::of(entry.recorded_at)).or_default();
-                counters.tools.entry(tool.clone()).or_default().calls += 1;
+                counters.actions.entry(action.clone()).or_default().calls += 1;
                 counters
                     .scripts
                     .entry(head.script)
                     .or_default()
-                    .tools
-                    .insert(tool.clone());
+                    .actions
+                    .insert(action.clone());
             }
-            Event::Completion(Completion::ToolCallCompleted { seq, .. }) => {
-                if let Some((at, tool)) = openings.call(*seq) {
+            Event::Completion(Completion::CallCompleted { seq, .. }) => {
+                if let Some((at, action)) = openings.call(*seq) {
                     let counters = hours.entry(Hour::of(entry.recorded_at)).or_default();
-                    let calls = counters.tools.entry(tool.to_owned()).or_default();
+                    let calls = counters.actions.entry(action.to_owned()).or_default();
                     calls.completed += 1;
                     calls
                         .latency
                         .record(entry.recorded_at.0.saturating_sub(at.0));
                 }
             }
-            Event::Completion(Completion::ToolCallFailed { seq, error }) => {
-                if let Some((at, tool)) = openings.call(*seq) {
+            Event::Completion(Completion::CallFailed { seq, error }) => {
+                if let Some((at, action)) = openings.call(*seq) {
                     let counters = hours.entry(Hour::of(entry.recorded_at)).or_default();
-                    let calls = counters.tools.entry(tool.to_owned()).or_default();
+                    let calls = counters.actions.entry(action.to_owned()).or_default();
                     calls.failed += 1;
                     *calls.errors.entry(error.kind).or_default() += 1;
                     calls
@@ -474,7 +474,7 @@ pub(crate) fn created_counters(head: &RunHead) -> CounterDelta {
 /// The retries of a call that ended after its first attempt.
 pub(crate) fn retries_counters(
     head: &RunHead,
-    tool: &str,
+    action: &str,
     attempt: u32,
     now: Timestamp,
 ) -> Option<CounterDelta> {
@@ -487,11 +487,11 @@ pub(crate) fn retries_counters(
         namespace: head.namespace.clone(),
         hour: Hour::of(now),
         counts: Counters {
-            tools: BTreeMap::from([(
-                tool.to_owned(),
-                ToolCounts {
+            actions: BTreeMap::from([(
+                action.to_owned(),
+                ActionCounts {
                     retries,
-                    ..ToolCounts::default()
+                    ..ActionCounts::default()
                 },
             )]),
             ..Counters::default()
@@ -581,11 +581,11 @@ pub(crate) fn measurements_of(
 pub(crate) fn children_of(history: &[HistoryEntry]) -> Vec<(Seq, rewind_core::RunId, bool)> {
     let mut detached: BTreeMap<Seq, bool> = BTreeMap::new();
     for entry in history {
-        if let Event::Command(Command::ScheduleToolCall {
-            seq, tool, args, ..
+        if let Event::Command(Command::ScheduleCall {
+            seq, action, args, ..
         }) = &entry.event
             && matches!(
-                rewind_core::WorkflowOp::of_tool(tool),
+                rewind_core::WorkflowOp::of_action(action),
                 Some((_, rewind_core::WorkflowOp::Start))
             )
         {
@@ -630,9 +630,9 @@ pub(crate) fn with_phases(
 #[cfg(test)]
 mod tests {
     use rewind_core::{
-        Annotation, Callsite, CancelReason, Digest, Epoch, LogLevel, McpServer, McpTransport,
-        RunId, RunMode, RunStarted, ScriptError, Seed, Tool, ToolFailure, ToolFailureKind,
-        ToolRoute,
+        Action, ActionFailure, ActionFailureKind, ActionRoute, Annotation, Callsite, CancelReason,
+        Digest, Epoch, LogLevel, McpServer, McpTransport, RunId, RunMode, RunStarted, ScriptError,
+        Seed,
     };
     use serde_json::json;
 
@@ -673,14 +673,14 @@ mod tests {
                 url: "https://mcp.example.com/github".into(),
             },
         );
-        let get = Tool::new(
+        let get = Action::new(
             "github.get",
-            ToolRoute::Mcp {
+            ActionRoute::Mcp {
                 server: "github".into(),
             },
             json!({}),
         );
-        let ask = Tool::new("ask", ToolRoute::Host { group: None }, json!({}));
+        let ask = Action::new("ask", ActionRoute::Host { group: None }, json!({}));
         ActionSet::new([server], [get, ask]).unwrap()
     }
 
@@ -706,15 +706,15 @@ mod tests {
         for round in 0..rounds {
             let (ask, get, sleep, timeout) = (seq(), seq(), seq(), seq());
             let at = 1_000 * u64::from(round);
-            events.push(Event::Command(Command::ScheduleToolCall {
+            events.push(Event::Command(Command::ScheduleCall {
                 seq: ask,
-                tool: "ask".into(),
+                action: "ask".into(),
                 args: json!({ "round": round }).into(),
                 callsite: callsite(ask.0),
             }));
-            events.push(Event::Command(Command::ScheduleToolCall {
+            events.push(Event::Command(Command::ScheduleCall {
                 seq: get,
-                tool: "github.get".into(),
+                action: "github.get".into(),
                 args: json!({ "issue": round }).into(),
                 callsite: callsite(get.0),
             }));
@@ -740,7 +740,7 @@ mod tests {
                 message: format!("round {round}"),
                 callsite: None,
             }));
-            events.push(Event::Completion(Completion::ToolCallCompleted {
+            events.push(Event::Completion(Completion::CallCompleted {
                 seq: ask,
                 result: json!({ "answer": round }).into(),
             }));
@@ -765,13 +765,13 @@ mod tests {
                 })),
             }
             if round % 5 != 0 {
-                events.push(Event::Completion(Completion::ToolCallFailed {
+                events.push(Event::Completion(Completion::CallFailed {
                     seq: get,
-                    error: ToolFailure {
+                    error: ActionFailure {
                         kind: if round % 2 == 0 {
-                            ToolFailureKind::Timeout
+                            ActionFailureKind::Timeout
                         } else {
-                            ToolFailureKind::Error
+                            ActionFailureKind::Error
                         },
                         message: "no".into(),
                         data: None,

@@ -90,7 +90,7 @@ mod tests {
     #[test]
     fn a_block_comment_gives_the_title_then_the_description() {
         let doc = script_doc(
-            "/**\n * Triage new GitHub issues\n *\n * Labels each new issue, and asks for an\n * approval.\n *\n * Then closes duplicates.\n */\nimport { github } from \"rewind:tools\";\n",
+            "/**\n * Triage new GitHub issues\n *\n * Labels each new issue, and asks for an\n * approval.\n *\n * Then closes duplicates.\n */\nimport { github } from \"rewind:actions\";\n",
         )
         .expect("a doc");
         assert_eq!(doc.title, "Triage new GitHub issues");
@@ -119,7 +119,7 @@ mod tests {
     #[test]
     fn code_first_or_an_empty_comment_has_no_title() {
         assert_eq!(
-            script_doc("import { github } from \"rewind:tools\";\n/** late */"),
+            script_doc("import { github } from \"rewind:actions\";\n/** late */"),
             None
         );
         assert_eq!(script_doc("/** */\nexport default 1"), None);

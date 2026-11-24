@@ -3,7 +3,7 @@
   "input": {
     "size": 5000
   },
-  "tools": {
+  "actions": {
     "storage.put": {
       "$echo": true
     }
@@ -15,8 +15,8 @@
     },
     "events": [
       "run_started",
-      "schedule_tool_call",
-      "tool_call_completed",
+      "schedule_call",
+      "call_completed",
       "complete_run"
     ]
   }

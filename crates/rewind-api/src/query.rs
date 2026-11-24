@@ -23,7 +23,7 @@ use crate::namespaces::NamespaceName;
 /// The fields of the language, in the order error messages list them.
 pub const FIELDS: [&str; 21] = [
     "status",
-    "tool",
+    "action",
     "error",
     "waiting",
     "signal",
@@ -79,8 +79,8 @@ pub enum Filter {
         values: Vec<Pattern>,
     },
     Status(Vec<RunStatus>),
-    /// Scheduled a call to a tool one of these matches.
-    Tool(Vec<Pattern>),
+    /// Scheduled a call to an action one of these matches.
+    Action(Vec<Pattern>),
     /// A call failed with this kind, or the run ended with this error name or abort kind.
     Error(Vec<String>),
     /// Waits for one of these; empty (`waiting:*`): for anything.
@@ -114,7 +114,7 @@ pub enum Filter {
     Text(String),
 }
 
-/// How a value of a label, a tool or a signal is matched.
+/// How a value of a label, an action or a signal is matched.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Pattern {
     /// `*`: any value.
@@ -134,7 +134,7 @@ pub enum WaitKind {
     Signal,
     /// A durable timer.
     Timer,
-    /// A tool call Rewind sends itself.
+    /// A call Rewind sends itself.
     Call,
     /// A host tool's call, answered by the harness's worker.
     Host,
@@ -373,7 +373,7 @@ fn field(name: &str, operand: &str) -> Result<Filter, String> {
                 .collect::<Result<_, _>>()?,
         ),
         "status" => Filter::Status(enumerated(name, operand, &STATUSES)?),
-        "tool" => Filter::Tool(patterns(operand)?),
+        "action" => Filter::Action(patterns(operand)?),
         "signal" => Filter::Signal(patterns(operand)?),
         "error" => Filter::Error(exact(name, operand)?),
         "waiting" if operand == "*" => Filter::Waiting(Vec::new()),
@@ -453,7 +453,7 @@ fn values(operand: &str) -> Result<Vec<(String, bool)>, String> {
             let value = &rest[..end];
             if value.contains('"') {
                 return Err(
-                    "a quote inside a value: quote the whole value, as tool:\"a b\"".into(),
+                    "a quote inside a value: quote the whole value, as action:\"a b\"".into(),
                 );
             }
             (value.to_owned(), false, &rest[end..])
@@ -815,14 +815,17 @@ mod tests {
     #[test]
     fn fields_take_lists_and_a_minus_excludes() {
         assert_eq!(
-            filters("status:failed,aborted -status:completed tool:github.* -@env:test"),
+            filters("status:failed,aborted -status:completed action:github.* -@env:test"),
             vec![
                 (
                     false,
                     Filter::Status(vec![RunStatus::Failed, RunStatus::Aborted])
                 ),
                 (true, Filter::Status(vec![RunStatus::Completed])),
-                (false, Filter::Tool(vec![Pattern::Prefix("github.".into())])),
+                (
+                    false,
+                    Filter::Action(vec![Pattern::Prefix("github.".into())])
+                ),
                 (
                     true,
                     Filter::Label {
@@ -1007,7 +1010,7 @@ mod tests {
         assert_eq!(e.span, QuerySpan { start: 14, end: 27 });
         assert!(
             e.message
-                .starts_with("unknown field \"stauts\": the fields are status, tool")
+                .starts_with("unknown field \"stauts\": the fields are status, action")
         );
         let e = error("status:faild");
         assert!(
@@ -1028,8 +1031,8 @@ mod tests {
         assert!(error("-").message.contains("lone"));
         assert!(error("@agent").message.contains("@key:value"));
         assert!(error("status:").message.contains("expected a value"));
-        assert!(error("tool:a,,b").message.contains("empty value"));
-        assert!(error("tool:a*b").message.contains("* only ends a value"));
+        assert!(error("action:a,,b").message.contains("empty value"));
+        assert!(error("action:a*b").message.contains("* only ends a value"));
         assert!(
             error("waiting:soon")
                 .message
@@ -1041,7 +1044,7 @@ mod tests {
 
     #[test]
     fn spans_count_characters_not_bytes() {
-        let query = parse("été tool:x").unwrap();
-        assert_eq!(query.terms[1].span, QuerySpan { start: 4, end: 10 });
+        let query = parse("été action:x").unwrap();
+        assert_eq!(query.terms[1].span, QuerySpan { start: 4, end: 12 });
     }
 }

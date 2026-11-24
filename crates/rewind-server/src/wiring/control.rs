@@ -31,16 +31,15 @@ use rewind_engine::adapters::{
 use rewind_engine::ports::catalog::{NamespaceFilter, NamespacePage};
 use rewind_engine::ports::cluster::Membership;
 use rewind_engine::ports::{
-    AccessStore, ApiKey, CatalogError, CatalogStore, ClientKind, Cluster, ClusterError,
-    CodeRedemption, CompiledScript, Connection, ConnectionToken, ControlPlaneChange, Day,
-    DeleteNamespace, Departed, DisplayName, DropNamespace, Grant, GrantClaim, GrantDeletion,
+    AccessStore, ActionDeclarations, ApiKey, CatalogError, CatalogStore, ClientKind, Cluster,
+    ClusterError, CodeRedemption, CompiledScript, Connection, ConnectionToken, ControlPlaneChange,
+    Day, DeleteNamespace, Departed, DisplayName, DropNamespace, Grant, GrantClaim, GrantDeletion,
     GrantWrite, MasterKeyId, Moves, Namespace, NamespaceName, NamespaceWrite, NewConnection,
     NewSecret, NewToken, NodeId, NodeInfo, OAuthClient, OAuthCode, OpenedOrganization,
     PartitionMap, Principal, PublicKey, PutSecret, Quotas, Role, RoleDeletion, Rotation, RunRef,
     ScriptTitle, Secret, SecretError, SecretId, SecretMeta, SecretNamespace, SecretReader,
     SecretStore, SigningKey, StoreError, StoredActionSet, StoredScript, StoredWorkflow,
-    Subscription, Tenant, TenantId, TestRecord, Token, TokenKey, ToolDeclarations, UserId,
-    WorkflowFilter,
+    Subscription, Tenant, TenantId, TestRecord, Token, TokenKey, UserId, WorkflowFilter,
 };
 use rewind_store_postgres::{PostgresCatalog, PostgresCluster, PostgresMembership, PostgresStore};
 use rewind_store_turso::{TursoCatalog, TursoCluster, TursoMembership, TursoStore};
@@ -652,7 +651,7 @@ impl CatalogStore for Catalog {
         &self,
         tenant: &TenantId,
         action_set: &ActionSet,
-        declarations: &ToolDeclarations,
+        declarations: &ActionDeclarations,
     ) -> Result<(), CatalogError> {
         catalog!(self, catalog => catalog.put_action_set(tenant, action_set, declarations).await)
     }
@@ -928,7 +927,7 @@ impl CatalogStore for ControlPlane {
         &self,
         tenant: &TenantId,
         action_set: &ActionSet,
-        declarations: &ToolDeclarations,
+        declarations: &ActionDeclarations,
     ) -> Result<(), CatalogError> {
         self.catalog()
             .put_action_set(tenant, action_set, declarations)

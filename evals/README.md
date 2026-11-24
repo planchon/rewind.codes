@@ -8,7 +8,7 @@ the numbers ([08](../archi/08-decisions.md#taken-while-building-the-evals-novemb
 ## What an episode is
 
 ```
-model ──► system prompt (introduction, the rewind module, the toolset in one rendering)
+model ──► system prompt (introduction, the rewind module, the action set in one rendering)
   │        + the agent tools: run_script, check_script, test_script, get_run, list_runs,
   │          signal_run, cancel_run, retry_run, search_tools, save_workflow, get_workflow,
   │          record_tests
@@ -21,18 +21,18 @@ agent tools (rewind-agent-tools) ──► Api: the world, as /v1 answers ──
                          tracker · chat · crm · shop · ops · office · shipping
 ```
 
-1. The task's world starts: its fake servers, the toolset pinned from them (discovery through
+1. The task's world starts: its fake servers, the action set pinned from them (discovery through
    `McpDispatcher`), the declarations from `rewind-codegen`, and the run plane at Monday
    2026-03-02T09:00:00Z in virtual time. The task's setup, if it has one, is played first, with
    the agent's labels: runs of scripts, workflows saved through the gate with their suite (on
-   the toolset as it was then, for a server that changed since), runs of those workflows.
+   the action set as it was then, for a server that changed since), runs of those workflows.
 2. The model gets the task and loops: generate a script, check it, run it, fix it. Each tool
    call is handled by `rewind-agent-tools`, the SDK's agent tools in Rust, with the same text
    back: 256 KiB pages, diagnostics with code frames, the trace up to a failure, the tests that
    did not pass. They reach the world through their port `Api`, which the world implements as
    the server answers (`src/api.rs`). A `wait` elapses in virtual time. The agent is a caller
    limited to its labels: the runs and workflows it creates carry them, a run without them is
-   not found, and `save_workflow` derives the toolset its later scripts use, as the SDK does.
+   not found, and `save_workflow` derives the action set its later scripts use, as the SDK does.
 3. When the model answers (or after 30 turns), the world goes on in virtual time, up to 60
    days: sleeping runs wake up, the world answers signal waits as the task says, servers call
    their webhooks. Then production runs the workflows the task names: the latest version the
@@ -43,7 +43,7 @@ agent tools (rewind-agent-tools) ──► Api: the world, as /v1 answers ──
 ## Tasks
 
 `cargo run -p evals -- list` lists them: 24 tasks from easy to hard, each exercising one or
-more of fan-out with `Promise.all`, pagination, `ToolError` and its `data`, results typed by
+more of fan-out with `Promise.all`, pagination, `ActionError` and its `data`, results typed by
 an output schema or read with `.json()`, `Date.now()`, bulk updates, outputs above 256 KB,
 sleeping and polling, signals with and without a timeout, webhooks, a rate limit with
 idempotent retries, several servers joined, and the runs of an earlier turn found, cancelled

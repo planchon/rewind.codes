@@ -15,7 +15,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
-use rewind_core::{ActionSet, Attachments, SecretRef, SecretScope, Timestamp, ToolAuth};
+use rewind_core::{ActionAuth, ActionSet, Attachments, SecretRef, SecretScope, Timestamp};
 
 use crate::ports::{
     Day, NamespaceName, SecretError, SecretId, SecretNamespace, SecretStore, TenantId,
@@ -146,7 +146,7 @@ pub(crate) struct AttachmentCheck<'a> {
     /// has none yet: its `ns/` secrets are checked by name only.
     pub(crate) namespace: Option<&'a NamespaceName>,
     pub(crate) action_set: &'a ActionSet,
-    /// What the script imports from `rewind:tools`; `None`: every name.
+    /// What the script imports from `rewind:actions`; `None`: every name.
     pub(crate) imports: Option<&'a BTreeSet<String>>,
     pub(crate) attachments: &'a Attachments,
     pub(crate) rights: &'a AttachRights,
@@ -170,7 +170,7 @@ pub(crate) async fn check<S: SecretStore>(
         let takes_secret = check
             .action_set
             .auth(server)
-            .is_some_and(ToolAuth::takes_secret);
+            .is_some_and(ActionAuth::takes_secret);
         if !takes_secret && !version {
             problems.push(AttachmentProblem::TakesNone {
                 server: server.to_owned(),

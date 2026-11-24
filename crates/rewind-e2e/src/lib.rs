@@ -5,7 +5,7 @@
 //! A case is a directory `corpus/epoch-<n>/<blue|red>/<name>/` holding:
 //!
 //! - `script.ts`, the script;
-//! - `scenario.json`, its input, tools, steps and expectations ([`Scenario`]);
+//! - `scenario.json`, its input, actions, steps and expectations ([`Scenario`]);
 //! - `journal.v1.json`, the journal document recorded from it (`rewind-format` v1): the run's id,
 //!   its script, its action set and its entries, committed.
 //!
@@ -30,9 +30,9 @@
 
 #![forbid(unsafe_code)]
 
+pub mod actions;
 pub mod live;
 pub mod scenario;
-pub mod tools;
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -40,9 +40,9 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use rewind_core::{
-    ActionSet, Attachments, Builtin, Command, Event, HistoryEntry, Interruption, JournalDocument,
-    Lifecycle, McpServer, McpTransport, RunId, RunOutcome, RunState, Script, SecretPlacement,
-    SecretRef, Timestamp, Tool, ToolAuth, ToolRoute, Workflow, WorkflowSchemas,
+    Action, ActionAuth, ActionRoute, ActionSet, Attachments, Builtin, Command, Event, HistoryEntry,
+    Interruption, JournalDocument, Lifecycle, McpServer, McpTransport, RunId, RunOutcome, RunState,
+    Script, SecretPlacement, SecretRef, Timestamp, Workflow, WorkflowSchemas,
 };
 use rewind_engine::adapters::SeededEntropy;
 use rewind_engine::ports::{Entropy, RunRef, ScriptExecutor, TenantId};
@@ -169,7 +169,7 @@ impl Case {
         Ok(case)
     }
 
-    /// The scenario's workflows, each with the scenario's tools as its action set.
+    /// The scenario's workflows, each with the scenario's actions as its action set.
     pub fn workflows(&self) -> Result<Vec<Workflow>, String> {
         let action_set = scenario_action_set(&self.scenario)?.digest();
         self.scenario
@@ -200,7 +200,7 @@ impl Case {
         self.dir.join("journal.v1.json")
     }
 
-    /// The scenario's tools: host tools, MCP tools, and the built-ins `http` and `webhook`, with
+    /// The scenario's actions: host tools, MCP actions, and the built-ins `http` and `webhook`, with
     /// the pinned schemas of `schemas` and `output_schemas` and the policies of `policies` (the
     /// default otherwise). In mock mode every call goes to the scenario's responses, whatever
     /// its route.
@@ -214,7 +214,7 @@ impl Case {
                     .with_workflows(workflows.iter().map(Workflow::pinned))
                     .map_err(|err| err.to_string())
             })
-            .expect("the tools were checked when the case was loaded")
+            .expect("the actions were checked when the case was loaded")
     }
 
     /// The id of the run the case records: the first id of the scenario's entropy, or the
@@ -272,18 +272,20 @@ impl Case {
     }
 }
 
-/// The scenario's tools: host tools, the tools of its MCP servers, and the built-ins: `http`
-/// as `rewind_mcp::http_tool` pins it, `webhook` with the schema of `rewind_runtime::builtins`.
-/// `schemas` pins the input schema of some tools, `output_schemas` the output schema of some
-/// MCP tools, and `policies` changes the default policy of some. The responses of `http` and of
-/// the MCP tools must be in the format their dispatcher returns.
+/// The scenario's actions: host tools, the actions of its MCP servers, and the built-ins: `http`
+/// as `rewind_mcp::http_action` pins it, `webhook` with the schema of `rewind_runtime::builtins`.
+/// `schemas` pins the input schema of some actions, `output_schemas` the output schema of some
+/// MCP actions, and `policies` changes the default policy of some. The responses of `http` and of
+/// the MCP actions must be in the format their dispatcher returns.
 fn scenario_action_set(scenario: &Scenario) -> Result<ActionSet, String> {
     if let Some(unknown) = scenario
         .schemas
         .keys()
-        .find(|name| !scenario.tools.contains_key(*name))
+        .find(|name| !scenario.actions.contains_key(*name))
     {
-        return Err(format!("schemas: {unknown} is not a tool of the scenario"));
+        return Err(format!(
+            "schemas: {unknown} is not an action of the scenario"
+        ));
     }
     if let Some(unknown) = scenario
         .auth
@@ -303,9 +305,9 @@ fn scenario_action_set(scenario: &Scenario) -> Result<ActionSet, String> {
                 },
             );
             pinned.auth = match scenario.auth.get(server).map(String::as_str) {
-                None => ToolAuth::None,
-                Some("secret") => ToolAuth::Secret(SecretPlacement::bearer()),
-                Some("rewind") => ToolAuth::Rewind,
+                None => ActionAuth::None,
+                Some("secret") => ActionAuth::Secret(SecretPlacement::bearer()),
+                Some("rewind") => ActionAuth::Rewind,
                 Some(other) => {
                     return Err(format!("auth: {server} is secret or rewind, not {other:?}"));
                 }
@@ -313,11 +315,11 @@ fn scenario_action_set(scenario: &Scenario) -> Result<ActionSet, String> {
             Ok(pinned)
         })
         .collect::<Result<_, String>>()?;
-    let mut tools = Vec::new();
-    for (name, response) in &scenario.tools {
+    let mut actions = Vec::new();
+    for (name, response) in &scenario.actions {
         // The built-ins of a workflow come from `workflows`; in mock mode, their answers are
         // here.
-        if rewind_core::WorkflowOp::of_tool(name).is_some() {
+        if rewind_core::WorkflowOp::of_action(name).is_some() {
             continue;
         }
         let server = name
@@ -329,54 +331,54 @@ fn scenario_action_set(scenario: &Scenario) -> Result<ActionSet, String> {
                     .iter()
                     .any(|server| server == namespace)
             });
-        let mut tool = match (name.as_str(), server) {
-            ("http", _) => rewind_mcp::http_tool(scenario.http_hosts.clone()),
-            ("webhook", _) => Tool::new(
+        let mut action = match (name.as_str(), server) {
+            ("http", _) => rewind_mcp::http_action(scenario.http_hosts.clone()),
+            ("webhook", _) => Action::new(
                 "webhook",
-                ToolRoute::Builtin(Builtin::Webhook),
+                ActionRoute::Builtin(Builtin::Webhook),
                 rewind_runtime::builtins::webhook_input_schema(),
             ),
             (_, Some(server)) => {
-                let mut tool = Tool::new(
+                let mut action = Action::new(
                     name.clone(),
-                    ToolRoute::Mcp {
+                    ActionRoute::Mcp {
                         server: server.to_owned(),
                     },
                     Value::Object(serde_json::Map::new()),
                 );
-                tool.output_schema = scenario.output_schemas.get(name).cloned();
-                tool
+                action.output_schema = scenario.output_schemas.get(name).cloned();
+                action
             }
-            _ => Tool::new(
+            _ => Action::new(
                 name.clone(),
-                ToolRoute::Host {
+                ActionRoute::Host {
                     group: name.split_once('.').map(|(group, _)| group.to_owned()),
                 },
                 Value::Object(serde_json::Map::new()),
             ),
         };
         if let Some(schema) = scenario.schemas.get(name) {
-            tool.input_schema = schema.clone();
+            action.input_schema = schema.clone();
         }
-        check_responses(&tool, response)?;
-        tools.push(tool);
+        check_responses(&action, response)?;
+        actions.push(action);
     }
     if let Some(unknown) = scenario.output_schemas.keys().find(|name| {
-        !tools
+        !actions
             .iter()
-            .any(|tool| &tool.name == *name && matches!(tool.route, ToolRoute::Mcp { .. }))
+            .any(|action| &action.name == *name && matches!(action.route, ActionRoute::Mcp { .. }))
     }) {
         return Err(format!(
-            "output_schemas: {unknown} is not an MCP tool of the scenario"
+            "output_schemas: {unknown} is not an MCP action of the scenario"
         ));
     }
     for (name, policy) in &scenario.policies {
-        let tool = tools
+        let action = actions
             .iter_mut()
-            .find(|tool| tool.name == *name)
-            .ok_or_else(|| format!("policies: {name} is not one of the tools"))?;
-        tool.policy.approval = policy.approval;
-        tool.policy.on_interruption = match policy.on_interruption.as_deref() {
+            .find(|action| action.name == *name)
+            .ok_or_else(|| format!("policies: {name} is not one of the actions"))?;
+        action.policy.approval = policy.approval;
+        action.policy.on_interruption = match policy.on_interruption.as_deref() {
             None | Some("retry") => Interruption::Retry,
             Some("at_most_once") => Interruption::AtMostOnce,
             Some(other) => {
@@ -386,13 +388,13 @@ fn scenario_action_set(scenario: &Scenario) -> Result<ActionSet, String> {
             }
         };
     }
-    ActionSet::new(servers, tools).map_err(|err| format!("tools: {err}"))
+    ActionSet::new(servers, actions).map_err(|err| format!("actions: {err}"))
 }
 
-/// The responses of a tool that are values are in the format its dispatcher returns: the
-/// result of the `http` tool of `rewind-mcp`, or the content of an MCP tool pinned without an
+/// The responses of an action that are values are in the format its dispatcher returns: the
+/// result of the `http` action of `rewind-mcp`, or the content of an MCP action pinned without an
 /// output schema.
-fn check_responses(tool: &Tool, response: &Value) -> Result<(), String> {
+fn check_responses(action: &Action, response: &Value) -> Result<(), String> {
     let responses = match response.get("$sequence") {
         Some(Value::Array(sequence)) => sequence.iter().collect(),
         _ => vec![response],
@@ -403,19 +405,19 @@ fn check_responses(tool: &Tool, response: &Value) -> Result<(), String> {
             .is_some_and(|fields| fields.keys().any(|key| key.starts_with('$')))
     });
     for value in values {
-        match &tool.route {
-            ToolRoute::Builtin(Builtin::Http { .. }) => {
+        match &action.route {
+            ActionRoute::Builtin(Builtin::Http { .. }) => {
                 let schema = rewind_mcp::http_output_schema();
                 let validator = jsonschema::validator_for(&schema)
                     .map_err(|err| format!("the output schema of http: {err}"))?;
                 if let Some(error) = validator.iter_errors(value).next() {
                     return Err(format!(
-                        "tools: http: {value} is not a result of the http tool: {error} at {}",
+                        "actions: http: {value} is not a result of the http action: {error} at {}",
                         error.instance_path()
                     ));
                 }
             }
-            ToolRoute::Mcp { .. } if tool.output_schema.is_none() => {
+            ActionRoute::Mcp { .. } if action.output_schema.is_none() => {
                 let content = value.as_object().is_some_and(|fields| {
                     fields.get("content").is_some_and(Value::is_array)
                         && fields
@@ -424,9 +426,9 @@ fn check_responses(tool: &Tool, response: &Value) -> Result<(), String> {
                 });
                 if !content {
                     return Err(format!(
-                        "tools: {}: {value} is not MCP content, {{\"content\": [blocks], \
+                        "actions: {}: {value} is not MCP content, {{\"content\": [blocks], \
                          \"structuredContent\"?: value}}",
-                        tool.name
+                        action.name
                     ));
                 }
             }
@@ -469,13 +471,13 @@ pub struct Recorded {
     /// With every payload loaded.
     pub journal: JournalDocument,
     pub state: RunState,
-    /// How many times each tool answered, across the case.
+    /// How many times each action answered, across the case.
     pub dispatched: BTreeMap<String, usize>,
     /// The statuses of the runs of workflows the run started, in the order of its calls.
     pub children: Vec<String>,
-    /// How each call the tools answered authenticated, in order.
+    /// How each call the actions answered authenticated, in order.
     pub auth: Vec<String>,
-    /// The idempotency keys of the calls the tools answered, in order.
+    /// The idempotency keys of the calls the actions answered, in order.
     pub keys: Vec<String>,
 }
 
@@ -666,7 +668,7 @@ fn check_expectations(case: &Case, recorded: &Recorded, failures: &mut Vec<Strin
         check(
             &recorded.dispatched == expected,
             format!(
-                "the tools answered {:?}, expected {expected:?}",
+                "the actions answered {:?}, expected {expected:?}",
                 recorded.dispatched
             ),
         );
@@ -674,8 +676,8 @@ fn check_expectations(case: &Case, recorded: &Recorded, failures: &mut Vec<Strin
     if let Some(expected) = &expect.calls {
         let mut calls: BTreeMap<String, usize> = BTreeMap::new();
         for entry in &recorded.journal.entries {
-            if let Event::Command(Command::ScheduleToolCall { tool, .. }) = &entry.event {
-                *calls.entry(tool.clone()).or_default() += 1;
+            if let Event::Command(Command::ScheduleCall { action, .. }) = &entry.event {
+                *calls.entry(action.clone()).or_default() += 1;
             }
         }
         check(

@@ -239,7 +239,7 @@ pub(super) async fn list(
             .iter()
             .map(|pair| input::label_filter(pair))
             .collect::<Result<_, _>>()?,
-        tool: args.tool,
+        action: args.action,
         script: args.script,
         error: args.error,
         quarantined: args.quarantined.then_some(true),

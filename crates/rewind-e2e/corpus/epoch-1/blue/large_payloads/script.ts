@@ -1,4 +1,4 @@
-import { storage } from "rewind:tools";
+import { storage } from "rewind:actions";
 
 export default async function main(input: { size: number }) {
   const blob = "x".repeat(input.size);

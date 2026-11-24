@@ -1,8 +1,12 @@
 //! The modules of an isolate, and the import rules.
 //!
-//! A script may only import `rewind`, `rewind:tools` and `rewind:workflows`; `rewind:internal` is reserved to the runtime's
-//! own modules; there is no dynamic `import()`, no npm, no relative import. A module of mock
-//! handlers imports nothing.
+//! A script may only import `rewind`, `rewind:actions` and `rewind:workflows`; `rewind:internal`
+//! is reserved to the runtime's own modules; there is no dynamic `import()`, no npm, no relative
+//! import. A module of mock handlers imports nothing.
+//!
+//! Code written before actions were named imports `rewind:tools`: it resolves to the module
+//! `rewind:actions` itself, so that both names give the same exports, and nothing declares it
+//! (`archi/08-decisions.md`, R1).
 
 use std::borrow::Cow;
 
@@ -16,6 +20,8 @@ use crate::compile::SCRIPT_SPECIFIER;
 use crate::epochs::Glue;
 
 pub(crate) const ENTRY_SPECIFIER: &str = "rewind:entry";
+/// The name `rewind:actions` had, which code already written imports (R1).
+pub(crate) const OLD_ACTIONS_SPECIFIER: &str = "rewind:tools";
 /// Specifier of a module of mock handlers.
 pub(crate) const MOCKS_SPECIFIER: &str = "file:///mocks.ts";
 
@@ -28,7 +34,7 @@ enum Modules {
     Script {
         glue: &'static Glue,
         script: String,
-        tools: String,
+        actions: String,
         workflows: String,
     },
     Mocks {
@@ -37,20 +43,20 @@ enum Modules {
 }
 
 impl Loader {
-    /// The modules of a run: its entry, the glue's `rewind` modules, its `rewind:tools` and
+    /// The modules of a run: its entry, the glue's `rewind` modules, its `rewind:actions` and
     /// `rewind:workflows`, its script.
     pub(crate) fn script(
         glue: &'static Glue,
         script: String,
         source_map: Vec<u8>,
-        tools: String,
+        actions: String,
         workflows: String,
     ) -> Self {
         Self {
             modules: Modules::Script {
                 glue,
                 script,
-                tools,
+                actions,
                 workflows,
             },
             source_map,
@@ -93,16 +99,20 @@ impl ModuleLoader for Loader {
             }
             (
                 Modules::Script { .. },
-                "rewind:std" | "rewind:tools" | "rewind:workflows",
+                "rewind:std" | "rewind:actions" | "rewind:workflows",
                 "rewind:internal",
             ) => specifier,
             (Modules::Script { .. }, SCRIPT_SPECIFIER, "rewind") => "rewind:std",
-            (Modules::Script { .. }, SCRIPT_SPECIFIER, "rewind:tools") => "rewind:tools",
+            (
+                Modules::Script { .. },
+                SCRIPT_SPECIFIER,
+                "rewind:actions" | OLD_ACTIONS_SPECIFIER,
+            ) => "rewind:actions",
             (Modules::Script { .. }, SCRIPT_SPECIFIER, "rewind:workflows") => "rewind:workflows",
             (Modules::Script { .. }, SCRIPT_SPECIFIER, other) => {
                 return Err(JsErrorBox::type_error(format!(
                     "cannot import {other:?}: scripts can only import \"rewind\", \
-                     \"rewind:tools\" and \"rewind:workflows\""
+                     \"rewind:actions\" and \"rewind:workflows\""
                 )));
             }
             (Modules::Mocks { .. }, _, MOCKS_SPECIFIER) if main => specifier,
@@ -130,7 +140,7 @@ impl ModuleLoader for Loader {
             (Modules::Script { glue, .. }, ENTRY_SPECIFIER) => glue.entry.to_owned(),
             (Modules::Script { glue, .. }, "rewind:internal") => glue.internal.to_owned(),
             (Modules::Script { glue, .. }, "rewind:std") => glue.std.to_owned(),
-            (Modules::Script { tools, .. }, "rewind:tools") => tools.clone(),
+            (Modules::Script { actions, .. }, "rewind:actions") => actions.clone(),
             (Modules::Script { workflows, .. }, "rewind:workflows") => workflows.clone(),
             (Modules::Script { script, .. }, SCRIPT_SPECIFIER) => script.clone(),
             (Modules::Mocks { javascript }, MOCKS_SPECIFIER) => javascript.clone(),

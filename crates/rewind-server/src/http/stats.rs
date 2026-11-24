@@ -1,5 +1,5 @@
 //! Statistics (`archi/05-testing-and-observability.md`, "Statistics"): `GET /v1/runs/stats`,
-//! `GET /v1/runs/failures`, `GET /v1/tools/stats` and `GET /v1/scripts`, from the hourly
+//! `GET /v1/runs/failures`, `GET /v1/actions/stats` and `GET /v1/scripts`, from the hourly
 //! counters of the partitions that hold their scope, added up at the edge.
 //!
 //! - The scope is the tenant, or one namespace: a token's, `Rewind-Namespace`'s, or the one `q`
@@ -19,7 +19,7 @@ use rewind_api::Problem;
 use rewind_api::access::Permission;
 use rewind_api::common::{Timestamp, timestamp};
 use rewind_api::query::{self, Filter, QueryError};
-use rewind_api::reading::{Latency, ToolStats, ToolStatsFilter, ToolStatsPage};
+use rewind_api::reading::{ActionStats, ActionStatsFilter, ActionStatsPage, Latency};
 use rewind_api::runs::{
     FacetValue, Facets, FailureGroup, FailureGroupPage, FailureQuery, FailureSample, RunStats,
     RunStatsQuery, SeriesBucket, StatusCounts,
@@ -231,11 +231,11 @@ pub(super) async fn runs(
                 .map(|(name, runs)| (name.clone(), runs.started)),
             top_n,
         ),
-        tools: top(
+        actions: top(
             counters
-                .tools
+                .actions
                 .iter()
-                .map(|(tool, calls)| (tool.clone(), calls.calls)),
+                .map(|(action, calls)| (action.clone(), calls.calls)),
             top_n,
         ),
         errors: top(failure_errors(&counters), top_n),
@@ -417,22 +417,25 @@ pub(super) async fn failures(
     }))
 }
 
-/// `GET /v1/tools/stats`: per tool, over the calls scheduled in the window (the last 24 hours
+/// `GET /v1/actions/stats`: per action, over the calls scheduled in the window (the last 24 hours
 /// by default).
-pub(super) async fn tools(
+pub(super) async fn actions(
     State(app): State<Arc<App>>,
     caller: Caller,
-    Query(filter): Query<ToolStatsFilter>,
-) -> Result<Json<ToolStatsPage>, ApiError> {
+    Query(filter): Query<ActionStatsFilter>,
+) -> Result<Json<ActionStatsPage>, ApiError> {
     caller.require(Permission::RunsRead)?;
     let scope = scope(&caller, filter.q.as_deref())?;
     if filter.action_set.is_some() {
         return Err(ApiError::invalid(
-            "action set: tool statistics are per tool, without a per-action-set breakdown",
+            "action set: action statistics are per action, without a per-action-set breakdown",
         ));
     }
-    for text in [&filter.prefix, &filter.tool].into_iter().flatten() {
-        refuse_nul_in_filter("tool", text)?;
+    if let Some(group) = &filter.group {
+        refuse_nul_in_filter("group", group)?;
+    }
+    if let Some(action) = &filter.action {
+        refuse_nul_in_filter("action", action)?;
     }
     let now = app.now();
     let until = filter.until.map_or(now, core_time);
@@ -450,20 +453,20 @@ pub(super) async fn tools(
         .edge
         .statistics(&mut app.gateway(), &scope, window)
         .await?;
-    let tools = counters
-        .tools
+    let actions = counters
+        .actions
         .iter()
-        .filter(|(tool, _)| {
-            filter
-                .prefix
-                .as_ref()
-                .is_none_or(|prefix| tool.starts_with(prefix.as_str()))
-                && filter.tool.as_ref().is_none_or(|only| *tool == only)
+        .filter(|(action, _)| {
+            filter.group.as_ref().is_none_or(|group| {
+                action
+                    .strip_prefix(group.as_str())
+                    .is_some_and(|rest| rest.starts_with('.'))
+            }) && filter.action.as_ref().is_none_or(|only| *action == only)
         })
-        .map(|(tool, calls)| {
+        .map(|(action, calls)| {
             let latency = calls.latency.latency();
-            ToolStats {
-                tool: tool.clone(),
+            ActionStats {
+                action: action.clone(),
                 calls: calls.calls,
                 errors: calls.failed,
                 error_kinds: calls
@@ -481,10 +484,10 @@ pub(super) async fn tools(
             }
         })
         .collect();
-    Ok(Json(ToolStatsPage {
+    Ok(Json(ActionStatsPage {
         since: timestamp(window.start()),
         until: timestamp(window.end()),
-        tools,
+        actions,
     }))
 }
 
@@ -512,8 +515,8 @@ pub(super) async fn scripts(
     caller.require(Permission::RunsRead)?;
     let scope = scope(&caller, query.q.as_deref())?;
     let limit = usize::try_from(query.limit.unwrap_or(PAGE).clamp(1, MAX_PAGE)).unwrap_or(50);
-    if let Some(tool) = &query.tool {
-        refuse_nul_in_filter("tool", tool)?;
+    if let Some(action) = &query.action {
+        refuse_nul_in_filter("action", action)?;
     }
     let digest = match &query.digest {
         Some(digest) => Some(
@@ -533,9 +536,9 @@ pub(super) async fn scripts(
         .filter(|(script, counts)| {
             digest.is_none_or(|digest| **script == digest)
                 && query
-                    .tool
+                    .action
                     .as_ref()
-                    .is_none_or(|tool| counts.tools.contains(tool))
+                    .is_none_or(|action| counts.actions.contains(action))
         })
         .collect();
     // Most recently run first; the digest breaks ties. The cursor is the last one sent.
@@ -584,7 +587,7 @@ pub(super) async fn scripts(
                 .last_started_at
                 .map_or(Timestamp::UNIX_EPOCH, timestamp),
             runs: run_counts(&counts.runs),
-            tools: counts.tools.iter().cloned().collect(),
+            actions: counts.actions.iter().cloned().collect(),
         });
     }
     Ok(Json(ScriptPage {

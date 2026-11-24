@@ -1,4 +1,4 @@
-import { ops } from "rewind:tools";
+import { ops } from "rewind:actions";
 
 type Page = { events: { id: string }[]; next_cursor?: string };
 

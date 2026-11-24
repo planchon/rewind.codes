@@ -246,9 +246,9 @@ impl<P: Plane> Owner<P> {
                 PartitionRequest::Shapes {
                     tenant,
                     namespace,
-                    tools,
+                    actions,
                 } => PartitionReply::Shapes(
-                    log.shapes(&tenant, namespace.as_ref(), &tools)
+                    log.shapes(&tenant, namespace.as_ref(), &actions)
                         .await
                         .map_err(unavailable),
                 ),

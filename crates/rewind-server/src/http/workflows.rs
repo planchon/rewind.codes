@@ -314,8 +314,8 @@ pub(crate) fn view(stored: &StoredWorkflow) -> ApiWorkflow {
         .map(|action_set| rewind_codegen::generate(&action_set, &BTreeMap::new()))
         .ok();
     let declaration = declarations.as_ref().and_then(|generated| {
-        let name = format!("{}.{}", rewind_core::WORKFLOWS_NAMESPACE, workflow.name());
-        generated.tools.iter().find(|tool| tool.name == name)
+        let name = format!("{}.{}", rewind_core::WORKFLOWS_GROUP, workflow.name());
+        generated.actions.iter().find(|action| action.name == name)
     });
     ApiWorkflow {
         name: workflow.name().to_owned(),

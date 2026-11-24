@@ -1,0 +1,9 @@
+{
+  "description": "A script that imports an action the run's action set does not have is refused at start, with the names it does have.",
+  "actions": {
+    "github.list_issues": []
+  },
+  "expect": {
+    "start_error": "the script is invalid: \"rewind:actions\" has no export named \"jira\" (script.ts:1:10); it exports github"
+  }
+}

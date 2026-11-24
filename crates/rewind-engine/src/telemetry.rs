@@ -10,7 +10,7 @@
 //! | --- | --- | --- |
 //! | Run | `H(run, "run")` | `run_started` → the terminal entry |
 //! | Activation (service telemetry) | `H(run, "activation", index of its first entry)` | leaving the ready queue → its batch durable |
-//! | Tool call | `H(run, seq)` | `schedule_tool_call` → its completion |
+//! | Call | `H(run, seq)` | `schedule_call` → its completion |
 //! | Timer | `H(run, seq)` | `start_timer` → `timer_fired` or `cancel_timer` |
 //! | Signal wait | `H(run, index of signal_awaited)` | → `signal_received` or its timeout |
 //!
@@ -64,7 +64,7 @@ pub enum SpanKey {
     /// An activation: the index of the first entry it committed (`archi/08-decisions.md`,
     /// "Taken while writing the object-storage spec").
     Activation(u64),
-    /// A tool call or a timer: its `seq`.
+    /// A call or a timer: its `seq`.
     Command(Seq),
     /// A signal wait: the index of its `signal_awaited`.
     Entry(u64),
@@ -143,9 +143,9 @@ pub fn sampled(trace: TraceId, config: &TelemetryConfig) -> bool {
     draw * 1_000_000 < u128::from(config.sampled_per_million) << 56
 }
 
-/// The trace context a tool call carries to its server (`_meta`) or host-tool handler: the run's
-/// trace, with the tool call span `H(run, seq)` as parent.
-pub fn tool_call_trace_context(
+/// The trace context a call carries to its server (`_meta`) or host-tool handler: the run's
+/// trace, with the call span `H(run, seq)` as parent.
+pub fn call_trace_context(
     run: RunId,
     metadata: &RunMetadata,
     seq: Seq,
@@ -196,7 +196,7 @@ impl RunTelemetry<'_> {
 
     /// What the entries within `from..to` measure, given the history up to `to` at least and
     /// `before`, the run's state after the entries before `from`: the run's start and end, and
-    /// the tool calls that end within the range, timed as their spans are. The calls pending
+    /// the calls that end within the range, timed as their spans are. The calls pending
     /// before the range are read at their opening entry: the cost is the range's.
     pub(crate) fn measurements<'h>(
         &self,
@@ -206,13 +206,13 @@ impl RunTelemetry<'_> {
         to: u64,
     ) -> Vec<RunMeasurement> {
         let mut scheduled: BTreeMap<Seq, (Timestamp, &'h str)> = before
-            .pending_tool_calls()
+            .pending_calls()
             .keys()
             .filter_map(|seq| {
                 let entry = crate::projector::opening(history, before, *seq)?;
                 match &entry.event {
-                    Event::Command(Command::ScheduleToolCall { tool, .. }) => {
-                        Some((*seq, (entry.recorded_at, tool.as_str())))
+                    Event::Command(Command::ScheduleCall { action, .. }) => {
+                        Some((*seq, (entry.recorded_at, action.as_str())))
                     }
                     _ => None,
                 }
@@ -222,28 +222,28 @@ impl RunTelemetry<'_> {
         for entry in range(history, from, to) {
             let at = entry.recorded_at;
             let mut call = |seq: &Seq, outcome: &'static str, error_kind: Option<&'static str>| {
-                if let Some((start, tool)) = scheduled.remove(seq) {
-                    measurements.push(tool_call(tool, outcome, error_kind, start, at));
+                if let Some((start, action)) = scheduled.remove(seq) {
+                    measurements.push(call_measurement(action, outcome, error_kind, start, at));
                 }
             };
             match &entry.event {
                 Event::Lifecycle(Lifecycle::RunStarted(_)) => {
                     measurements.push(RunMeasurement::Started);
                 }
-                Event::Command(Command::ScheduleToolCall { seq, tool, .. }) => {
-                    scheduled.insert(*seq, (at, tool.as_str()));
+                Event::Command(Command::ScheduleCall { seq, action, .. }) => {
+                    scheduled.insert(*seq, (at, action.as_str()));
                 }
-                Event::Completion(Completion::ToolCallCompleted { seq, .. }) => {
+                Event::Completion(Completion::CallCompleted { seq, .. }) => {
                     call(seq, "completed", None);
                 }
-                Event::Completion(Completion::ToolCallFailed { seq, error }) => {
+                Event::Completion(Completion::CallFailed { seq, error }) => {
                     call(seq, "failed", Some(error.kind.as_str()));
                 }
                 _ => {}
             }
             if entry.event.is_terminal() {
-                for (start, tool) in std::mem::take(&mut scheduled).into_values() {
-                    measurements.push(tool_call(tool, "no_outcome", None, start, at));
+                for (start, action) in std::mem::take(&mut scheduled).into_values() {
+                    measurements.push(call_measurement(action, "no_outcome", None, start, at));
                 }
                 measurements.push(RunMeasurement::Ended {
                     outcome: run_outcome(&entry.event).to_owned(),
@@ -354,15 +354,15 @@ impl RunTelemetry<'_> {
     }
 }
 
-fn tool_call(
-    tool: &str,
+fn call_measurement(
+    action: &str,
     outcome: &'static str,
     error_kind: Option<&'static str>,
     start: Timestamp,
     end: Timestamp,
 ) -> RunMeasurement {
-    RunMeasurement::ToolCall {
-        tool: tool.to_owned(),
+    RunMeasurement::Call {
+        action: action.to_owned(),
         outcome: outcome.to_owned(),
         error_kind: error_kind.map(str::to_owned),
         seconds: end.0.saturating_sub(start.0) as f64 / 1_000.0,
@@ -401,7 +401,7 @@ fn truncate(text: &str, max_chars: usize) -> String {
 
 struct OpenCall {
     start: Timestamp,
-    tool: String,
+    action: String,
     args: Payload,
     callsite: Option<Callsite>,
 }
@@ -461,10 +461,10 @@ impl<'t, 'a> Derivation<'t, 'a> {
             derivation.started_at = first.recorded_at;
         }
         let opening = |seq: &Seq| crate::projector::opening(history, before, *seq);
-        for seq in before.pending_tool_calls().keys() {
+        for seq in before.pending_calls().keys() {
             if let Some(entry) = opening(seq)
-                && let Event::Command(Command::ScheduleToolCall {
-                    tool,
+                && let Event::Command(Command::ScheduleCall {
+                    action,
                     args,
                     callsite,
                     ..
@@ -474,7 +474,7 @@ impl<'t, 'a> Derivation<'t, 'a> {
                     *seq,
                     OpenCall {
                         start: entry.recorded_at,
-                        tool: tool.clone(),
+                        action: action.clone(),
                         args: args.clone(),
                         callsite: *callsite,
                     },
@@ -549,9 +549,9 @@ impl<'t, 'a> Derivation<'t, 'a> {
         let at = entry.recorded_at;
         match &entry.event {
             Event::Lifecycle(Lifecycle::RunStarted(_)) => self.started_at = at,
-            Event::Command(Command::ScheduleToolCall {
+            Event::Command(Command::ScheduleCall {
                 seq,
-                tool,
+                action,
                 args,
                 callsite,
             }) => {
@@ -559,13 +559,13 @@ impl<'t, 'a> Derivation<'t, 'a> {
                     *seq,
                     OpenCall {
                         start: at,
-                        tool: tool.clone(),
+                        action: action.clone(),
                         args: args.clone(),
                         callsite: *callsite,
                     },
                 );
             }
-            Event::Completion(Completion::ToolCallCompleted { seq, result }) => {
+            Event::Completion(Completion::CallCompleted { seq, result }) => {
                 if let Some(call) = self.calls.remove(seq)
                     && export
                 {
@@ -576,7 +576,7 @@ impl<'t, 'a> Derivation<'t, 'a> {
                     self.call_span(*seq, call, at, SpanStatus::Ok, attributes);
                 }
             }
-            Event::Completion(Completion::ToolCallFailed { seq, error }) => {
+            Event::Completion(Completion::CallFailed { seq, error }) => {
                 if let Some(call) = self.calls.remove(seq)
                     && export
                 {
@@ -661,7 +661,7 @@ impl<'t, 'a> Derivation<'t, 'a> {
     fn call_attributes(&self, seq: Seq, call: &OpenCall) -> BTreeMap<String, AttributeValue> {
         let mut attributes = self.run.base_attributes();
         attributes.insert("rewind.seq".into(), int(u64::from(seq.0)));
-        attributes.insert("rewind.tool".into(), string(&call.tool));
+        attributes.insert("rewind.action".into(), string(&call.action));
         if let Some(callsite) = &call.callsite {
             attributes.insert("rewind.callsite".into(), callsite_attribute(callsite));
         }
@@ -680,7 +680,7 @@ impl<'t, 'a> Derivation<'t, 'a> {
     ) {
         self.span(
             SpanKey::Command(seq),
-            call.tool,
+            call.action,
             SpanKind::Client,
             (call.start, end),
             status,
@@ -886,7 +886,7 @@ mod tests {
             );
         }
 
-        let context = tool_call_trace_context(
+        let context = call_trace_context(
             harness.run.id,
             &harness.metadata,
             Seq(2),
@@ -932,19 +932,19 @@ mod tests {
         telemetry.measurements(&entries[..to], &before, from as u64, to as u64)
     }
 
-    fn schedule(seq: u32, tool: &str) -> Event {
-        Event::Command(Command::ScheduleToolCall {
+    fn schedule(seq: u32, action: &str) -> Event {
+        Event::Command(Command::ScheduleCall {
             seq: Seq(seq),
-            tool: tool.into(),
+            action: action.into(),
             args: Payload::Value(serde_json::json!({})),
             callsite: None,
         })
     }
 
     #[test]
-    fn a_run_measures_its_start_its_end_and_its_tool_calls() {
-        let failure = rewind_core::ToolFailure {
-            kind: rewind_core::ToolFailureKind::Timeout,
+    fn a_run_measures_its_start_its_end_and_its_calls() {
+        let failure = rewind_core::ActionFailure {
+            kind: rewind_core::ActionFailureKind::Timeout,
             message: "too slow".into(),
             data: None,
         };
@@ -956,14 +956,14 @@ mod tests {
                 (0, schedule(3, "slack.post")),
                 (
                     1_500,
-                    Event::Completion(Completion::ToolCallCompleted {
+                    Event::Completion(Completion::CallCompleted {
                         seq: Seq(1),
                         result: Payload::Value(serde_json::json!([])),
                     }),
                 ),
                 (
                     4_000,
-                    Event::Completion(Completion::ToolCallFailed {
+                    Event::Completion(Completion::CallFailed {
                         seq: Seq(2),
                         error: failure,
                     }),
@@ -988,14 +988,13 @@ mod tests {
             config: &config,
             payloads: &payloads,
         };
-        let call = |tool: &str, outcome: &str, error_kind: Option<&str>, seconds| {
-            RunMeasurement::ToolCall {
-                tool: tool.into(),
+        let call =
+            |action: &str, outcome: &str, error_kind: Option<&str>, seconds| RunMeasurement::Call {
+                action: action.into(),
                 outcome: outcome.into(),
                 error_kind: error_kind.map(str::to_owned),
                 seconds,
-            }
-        };
+            };
         assert!(telemetry.measured(&entries));
         // The first activation committed the start and the calls; the next ones, the rest.
         assert_eq!(

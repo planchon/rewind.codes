@@ -33,7 +33,7 @@ pub struct SandboxLimits {
     /// Commands and annotations (logs, signal waits) the script may emit reacting to one
     /// trigger. What it emits is kept outside V8's heap until the call ends.
     pub emitted_per_trigger: usize,
-    /// Bytes of text those may carry, reacting to one trigger: log messages, signal names, tool
+    /// Bytes of text those may carry, reacting to one trigger: log messages, signal names, action
     /// arguments and the output as JSON, the error of a failure.
     pub emitted_bytes_per_trigger: usize,
 }

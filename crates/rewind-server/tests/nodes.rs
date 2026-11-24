@@ -41,7 +41,7 @@ export default async function main(input: { n: number }) {
 }
 "#;
 
-const ASK: &str = r#"import { ask_user } from "rewind:tools";
+const ASK: &str = r#"import { ask_user } from "rewind:actions";
 export default async function main() {
   return { answer: await ask_user({ question: "ready?" }) };
 }

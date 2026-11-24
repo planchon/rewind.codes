@@ -26,7 +26,7 @@ pub(super) fn tasks() -> Vec<Task> {
         Task {
             id: "lifetime_value_fan_out",
             difficulty: Difficulty::Medium,
-            features: &["Promise.all", "ToolContent.json()"],
+            features: &["Promise.all", "ActionContent.json()"],
             world: || world(&["crm"]),
             setup: &[],
             prompt: |_| {
@@ -85,7 +85,7 @@ pub(super) fn tasks() -> Vec<Task> {
         Task {
             id: "missing_orders",
             difficulty: Difficulty::Medium,
-            features: &["ToolError", "try/catch", "fan-out"],
+            features: &["ActionError", "try/catch", "fan-out"],
             world: || world(&["crm"]),
             setup: &[],
             prompt: |_| {

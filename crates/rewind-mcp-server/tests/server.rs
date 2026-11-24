@@ -15,7 +15,7 @@ use rewind_agent_tools::definitions::MCP_TOOLS;
 use rewind_agent_tools::{Api, ApiError, McpApi, Organization};
 use rewind_api::access::Permission;
 use rewind_api::action_sets::{
-    ActionSet, ActionSetList, CreateActionSet, SearchQuery, ToolSearchResults,
+    ActionSearchResults, ActionSet, ActionSetList, CreateActionSet, SearchQuery,
 };
 use rewind_api::common::Duration;
 use rewind_api::events::Entry;
@@ -212,16 +212,18 @@ impl Api for FakeApi {
         Err(unused("create_action_set"))
     }
 
-    async fn search_tools(
+    async fn search_actions(
         &self,
         action_set: &str,
         query: &SearchQuery,
-    ) -> Result<ToolSearchResults, ApiError> {
+    ) -> Result<ActionSearchResults, ApiError> {
         self.saw(&format!(
-            "search_tools action_set={action_set} query={}",
+            "search_actions action_set={action_set} query={}",
             query.query
         ));
-        Ok(ToolSearchResults { tools: Vec::new() })
+        Ok(ActionSearchResults {
+            actions: Vec::new(),
+        })
     }
 
     async fn create_workflow(&self, _workflow: &CreateWorkflow) -> Result<Workflow, ApiError> {
@@ -286,8 +288,8 @@ impl McpApi for FakeApi {
         Ok(serde_json::from_value(json!({
             "actionSets": [{
                 "id": "9f2c".repeat(16),
-                "servers": [{ "name": "github", "transport": "http", "tools": 2 }],
-                "tools": ["github.list_issues", "github.close_issue"]
+                "servers": [{ "name": "github", "transport": "http", "actions": 2 }],
+                "actions": ["github.list_issues", "github.close_issue"]
             }]
         }))
         .unwrap())
@@ -379,7 +381,7 @@ async fn the_tools_listed_are_those_one_organization_of_the_caller_allows() {
             "list_orgs",
             "list_namespaces",
             "list_action_sets",
-            "search_tools",
+            "search_actions",
             "list_secrets",
             "get_run",
             "list_runs",
@@ -458,7 +460,7 @@ async fn initialize_names_rewind_and_says_how_to_go_from_an_organization_to_a_ru
         "list_orgs",
         "list_namespaces",
         "list_action_sets",
-        "search_tools",
+        "search_actions",
         "list_secrets",
         "check_script",
         "test_script",
@@ -644,10 +646,10 @@ async fn checking_testing_and_running_need_a_namespace() {
         "check action_set=- org=org_1 ns=alice"
     );
 
-    let search = call(&client, "search_tools", json!({ "query": "issues" })).await;
+    let search = call(&client, "search_actions", json!({ "query": "issues" })).await;
     assert_eq!(
         text(&search),
-        "search_tools: `action_set` must be a non-empty string: an action set's id, as list_action_sets gives it."
+        "search_actions: `action_set` must be a non-empty string: an action set's id, as list_action_sets gives it."
     );
 }
 

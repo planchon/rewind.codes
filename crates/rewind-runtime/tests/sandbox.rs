@@ -8,14 +8,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use rewind_core::{
-    AbortKind, ActionSet, Annotation, Builtin, Callsite, Command, Completion, Epoch, Event,
-    HistoryEntry, McpServer, McpTransport, RunId, RunOutcome, RunState, RunStatus, Script,
-    ScriptError, Seed, Seq, Timestamp, Tool, ToolFailure, ToolFailureKind, ToolRoute,
+    AbortKind, Action, ActionFailure, ActionFailureKind, ActionRoute, ActionSet, Annotation,
+    Builtin, Callsite, Command, Completion, Epoch, Event, HistoryEntry, McpServer, McpTransport,
+    RunId, RunOutcome, RunState, RunStatus, Script, ScriptError, Seed, Seq, Timestamp,
     canonical_json,
 };
 use rewind_engine::ports::{
-    CallAuth, CompiledScript, Dispatched, ExecutorError, RunRef, ScriptExecutor, StartScript,
-    ToolCall, ToolDispatcher,
+    ActionDispatcher, Call, CallAuth, CompiledScript, Dispatched, ExecutorError, RunRef,
+    ScriptExecutor, StartScript,
 };
 use rewind_engine::replay::ReplayEnd;
 use rewind_engine::{ReplayVerdict, StartError, StartRun};
@@ -29,39 +29,42 @@ use support::{T0, World};
 const HOUR: u64 = 3_600_000;
 const DAY: u64 = 24 * HOUR;
 
-type Handler = dyn Fn(&ToolCall) -> Dispatched + Send + Sync;
+type Handler = dyn Fn(&Call) -> Dispatched + Send + Sync;
 
 #[derive(Clone)]
-struct Tools(Arc<Handler>);
+struct Actions(Arc<Handler>);
 
-impl ToolDispatcher for Tools {
-    async fn dispatch(&self, call: ToolCall, _auth: CallAuth) -> Dispatched {
+impl ActionDispatcher for Actions {
+    async fn dispatch(&self, call: Call, _auth: CallAuth) -> Dispatched {
         (self.0)(&call)
     }
 }
 
-/// Tools that answer every call at once, as `tools` says.
+/// Actions that answer every call at once, as `actions` says.
 fn answered_by(
-    tools: impl Fn(&ToolCall) -> Result<Value, ToolFailure> + Send + Sync + 'static,
-) -> Tools {
-    Tools(Arc::new(move |call| match tools(call) {
+    actions: impl Fn(&Call) -> Result<Value, ActionFailure> + Send + Sync + 'static,
+) -> Actions {
+    Actions(Arc::new(move |call| match actions(call) {
         Ok(result) => Dispatched::Result(result),
         Err(failure) => Dispatched::Failed(failure),
     }))
 }
 
-fn issue_tools(call: &ToolCall) -> Result<Value, ToolFailure> {
-    let failure = |kind, message: &str| ToolFailure {
+fn issue_actions(call: &Call) -> Result<Value, ActionFailure> {
+    let failure = |kind, message: &str| ActionFailure {
         kind,
         message: message.into(),
         data: Some(json!({ "status": 503 })),
     };
-    match call.tool.name.as_str() {
+    match call.action.name.as_str() {
         "github.get_issue" => Ok(json!({
             "number": call.args["number"],
             "title": format!("issue {}", call.args["number"]),
         })),
-        "flaky" => Err(failure(ToolFailureKind::OutcomeUnknown, "connection reset")),
+        "flaky" => Err(failure(
+            ActionFailureKind::OutcomeUnknown,
+            "connection reset",
+        )),
         "webhook" => Ok(json!({
             "url": format!("https://rewind.example.com/hooks/tok_{}", call.args["name"].as_str().unwrap_or_default()),
         })),
@@ -74,8 +77,8 @@ fn issue_tools(call: &ToolCall) -> Result<Value, ToolFailure> {
             "redirected": false,
             "body": call.args.to_string(),
         })),
-        "failing" => Err(failure(ToolFailureKind::Error, "boom")),
-        // MCP content, as `rewind-mcp` returns it for a tool pinned without an output schema.
+        "failing" => Err(failure(ActionFailureKind::Error, "boom")),
+        // MCP content, as `rewind-mcp` returns it for an action pinned without an output schema.
         "crm.lookup" => Ok(json!({
             "content": [
                 { "type": "text", "text": "{\"name\":\"Ada\"}" },
@@ -86,14 +89,14 @@ fn issue_tools(call: &ToolCall) -> Result<Value, ToolFailure> {
             "content": [{ "type": "text", "text": "Ada" }, { "type": "text", "text": "VIP" }],
             "structuredContent": { "name": "Ada", "vip": true },
         })),
-        // The structured content of a tool pinned with an output schema.
+        // The structured content of an action pinned with an output schema.
         "crm.score" => Ok(json!({ "score": 42 })),
         _ => Ok(json!({ "ok": true })),
     }
 }
 
 struct Harness {
-    world: World<Tools>,
+    world: World<Actions>,
 }
 
 async fn harness() -> Harness {
@@ -101,7 +104,7 @@ async fn harness() -> Harness {
 }
 
 async fn harness_with(limits: SandboxLimits, entropy: u64) -> Harness {
-    Harness::new(limits, entropy, answered_by(issue_tools), |_| {}).await
+    Harness::new(limits, entropy, answered_by(issue_actions), |_| {}).await
 }
 
 struct Run {
@@ -169,17 +172,17 @@ fn action_set() -> ActionSet {
 }
 
 impl Harness {
-    /// A node running the V8 executor under `limits` and `tools`, its entropy seeded with
+    /// A node running the V8 executor under `limits` and `actions`, its entropy seeded with
     /// `entropy`, configured by `configure`.
     async fn new(
         limits: SandboxLimits,
         entropy: u64,
-        tools: Tools,
+        actions: Actions,
         configure: impl FnOnce(&mut rewind_engine::plane::NodeConfig),
     ) -> Self {
         let executor = V8Executor::new(limits).expect("TZ=UTC (see .cargo/config.toml)");
         Self {
-            world: World::new(executor, tools, entropy, configure).await,
+            world: World::new(executor, actions, entropy, configure).await,
         }
     }
 
@@ -237,7 +240,7 @@ impl Harness {
 }
 
 const FAN_OUT: &str = r#"
-import { github } from "rewind:tools";
+import { github } from "rewind:actions";
 
 export default async function main(input: { repo: string }) {
   const issues = await Promise.all([1, 2, 3].map((number) => github.get_issue({ repo: input.repo, number })));
@@ -250,7 +253,7 @@ async fn promise_all_with_out_of_order_completions_replays_identically() {
     let harness = Harness::new(
         SandboxLimits::default(),
         1,
-        answered_by(issue_tools),
+        answered_by(issue_actions),
         |config| config.reversed_calls = true,
     )
     .await;
@@ -264,7 +267,7 @@ async fn promise_all_with_out_of_order_completions_replays_identically() {
         .history
         .iter()
         .filter_map(|entry| match &entry.event {
-            Event::Completion(Completion::ToolCallCompleted { seq, .. }) => Some(*seq),
+            Event::Completion(Completion::CallCompleted { seq, .. }) => Some(*seq),
             _ => None,
         })
         .collect();
@@ -277,7 +280,7 @@ async fn promise_all_with_out_of_order_completions_replays_identically() {
 }
 
 const NON_DETERMINISTIC_SOURCES: &str = r#"
-import { audit } from "rewind:tools";
+import { audit } from "rewind:actions";
 import { run } from "rewind";
 
 export default async function main() {
@@ -344,7 +347,7 @@ async fn time_and_randomness_are_deterministic_and_keyed_by_the_seed() {
 #[tokio::test]
 async fn the_depth_of_a_stack_overflow_does_not_vary() {
     const RECURSES: &str = r#"
-import { audit } from "rewind:tools";
+import { audit } from "rewind:actions";
 
 function depth(n: number): number {
   try {
@@ -422,8 +425,8 @@ async fn replay_detects_a_changed_script_at_the_diverging_entry() {
     };
     assert_eq!(
         mismatch.to_string(),
-        "history entry 3 is tool call #3 github.get_issue({\"number\":3,\"repo\":\"acme/api\"}), \
-         but the script emitted tool call #3 github.get_issue({\"number\":4,\"repo\":\"acme/api\"})"
+        "history entry 3 is call #3 github.get_issue({\"number\":3,\"repo\":\"acme/api\"}), \
+         but the script emitted call #3 github.get_issue({\"number\":4,\"repo\":\"acme/api\"})"
     );
 
     let extra_call = Script::new(FAN_OUT.replace(
@@ -550,7 +553,7 @@ export default async function main() {
 
 /// What type-checks is what exists (`archi/04-tools.md`, "Type-checking"): the isolate's global
 /// names are exactly those `lib/globals.json` declares, with `fetch` only for an action set that
-/// enables the `http` tool.
+/// enables the `http` action.
 #[tokio::test]
 async fn the_sandbox_has_exactly_the_declared_globals() {
     const SCRIPT: &str = r#"
@@ -568,9 +571,9 @@ export default async function main() {
 }
 "#;
     let declared = rewind_runtime::sandbox_lib::declared_globals();
-    for http_tool in [false, true] {
+    for http_action in [false, true] {
         let harness = harness().await;
-        let action_set = if http_tool {
+        let action_set = if http_action {
             builtins_action_set()
         } else {
             action_set()
@@ -589,7 +592,11 @@ export default async function main() {
             .iter()
             .filter_map(Value::as_str)
             .collect();
-        assert_eq!(globals, declared.names(http_tool), "http tool: {http_tool}");
+        assert_eq!(
+            globals,
+            declared.names(http_action),
+            "http action: {http_action}"
+        );
     }
 }
 
@@ -600,21 +607,21 @@ fn builtins_action_set() -> ActionSet {
     ActionSet::new(
         [],
         [
-            Tool::new(
+            Action::new(
                 "http",
-                ToolRoute::Builtin(Builtin::Http {
+                ActionRoute::Builtin(Builtin::Http {
                     allowed_hosts: vec!["api.example.com".into()],
                 }),
                 json!({}),
             ),
-            Tool::new(
+            Action::new(
                 "webhook",
-                ToolRoute::Builtin(Builtin::Webhook),
+                ActionRoute::Builtin(Builtin::Webhook),
                 rewind_runtime::builtins::webhook_input_schema(),
             ),
-            Tool::new(
+            Action::new(
                 "github.get_issue",
-                ToolRoute::Host {
+                ActionRoute::Host {
                     group: Some("github".into()),
                 },
                 json!({
@@ -642,8 +649,8 @@ async fn scripts_that_cannot_load_are_refused_at_start() {
             "scripts can only import",
         ),
         (
-            "import { jira } from \"rewind:tools\";\nexport default async () => jira;",
-            "\"rewind:tools\" has no export named \"jira\" (script.ts:1:10); it exports audit, \
+            "import { jira } from \"rewind:actions\";\nexport default async () => jira;",
+            "\"rewind:actions\" has no export named \"jira\" (script.ts:1:10); it exports audit, \
              failing, flaky, github, slow",
         ),
         (
@@ -699,20 +706,20 @@ async fn scripts_that_fail_while_loading_are_aborted_as_invalid() {
 }
 
 #[tokio::test]
-async fn tool_errors_reach_the_script_and_can_be_caught() {
+async fn action_errors_reach_the_script_and_can_be_caught() {
     let harness = harness().await;
     let run = harness
         .run(
             r#"
-import { flaky } from "rewind:tools";
-import { ToolError } from "rewind";
+import { flaky } from "rewind:actions";
+import { ActionError } from "rewind";
 
 export default async function main() {
   try {
     await flaky({});
   } catch (error) {
-    if (error instanceof ToolError && error.outcomeUnknown) {
-      throw new TypeError(`gave up: ${error.message} (${error.tool}, ${JSON.stringify(error.data)})`);
+    if (error instanceof ActionError && error.outcomeUnknown) {
+      throw new TypeError(`gave up: ${error.message} (${error.action}, ${JSON.stringify(error.data)})`);
     }
   }
 }
@@ -740,7 +747,7 @@ async fn callsites_point_to_typescript_lines() {
     let run = harness
         .run(
             r#"
-import { github } from "rewind:tools";
+import { github } from "rewind:actions";
 
 interface Issue { number: number; title: string }
 type Repo = `${string}/${string}`;
@@ -756,7 +763,7 @@ export default async function main(input: { repo: Repo }): Promise<string> {
         .await;
 
     let call = run.history.iter().find_map(|entry| match &entry.event {
-        Event::Command(Command::ScheduleToolCall { callsite, .. }) => *callsite,
+        Event::Command(Command::ScheduleCall { callsite, .. }) => *callsite,
         _ => None,
     });
     assert_eq!(call.map(|c| c.line), Some(8));
@@ -781,11 +788,11 @@ export default async function main(input: { repo: Repo }): Promise<string> {
 #[tokio::test]
 async fn cancellation_rejects_pending_awaits_and_the_script_can_clean_up() {
     // `slow` never answers by itself: its call is in flight when the cancellations arrive.
-    let tools = Tools(Arc::new(|call: &ToolCall| match call.tool.name.as_str() {
+    let actions = Actions(Arc::new(|call: &Call| match call.action.name.as_str() {
         "slow" => Dispatched::Deferred,
         _ => Dispatched::Result(json!({ "ok": true })),
     }));
-    let harness = Harness::new(SandboxLimits::default(), 1, tools, |_| {}).await;
+    let harness = Harness::new(SandboxLimits::default(), 1, actions, |_| {}).await;
     let polite = harness
         .start(
             r#"
@@ -806,7 +813,7 @@ export default async function main() {
     let blunt = harness
         .start(
             r#"
-import { slow } from "rewind:tools";
+import { slow } from "rewind:actions";
 export default async function main() { await slow({}); }
 "#,
             json!({}),
@@ -819,7 +826,7 @@ export default async function main() { await slow({}); }
         .await
         .unwrap();
     harness.world.cancel(&blunt, None).await.unwrap();
-    // The cancellations are delivered before the tool answers: it is not waited for.
+    // The cancellations are delivered before the action answers: it is not waited for.
     harness.drive().await;
 
     let polite = harness.get(&polite).await;
@@ -834,7 +841,7 @@ export default async function main() { await slow({}); }
         blunt.events(),
         [
             "run_started",
-            "schedule_tool_call",
+            "schedule_call",
             "cancel_requested",
             "fail_run"
         ]
@@ -852,7 +859,7 @@ async fn a_forgotten_await_is_harmless_the_run_waits_for_the_call() {
     let run = harness
         .run(
             r#"
-import { audit } from "rewind:tools";
+import { audit } from "rewind:actions";
 export default async function main() {
   audit.record({ event: "done" });   // no await
   return "returned first";
@@ -866,8 +873,8 @@ export default async function main() {
         run.events(),
         [
             "run_started",
-            "schedule_tool_call",
-            "tool_call_completed",
+            "schedule_call",
+            "call_completed",
             "complete_run"
         ],
         "complete_run waits for the call in flight"
@@ -881,7 +888,7 @@ async fn a_forgotten_await_that_fails_fails_the_run() {
     let run = harness
         .run(
             r#"
-import { failing } from "rewind:tools";
+import { failing } from "rewind:actions";
 export default async function main() {
   failing({});
   return "returned";
@@ -893,7 +900,7 @@ export default async function main() {
     let error = run.error();
     assert_eq!(
         (error.name.as_str(), error.message.as_str()),
-        ("ToolError", "failing failed: boom")
+        ("ActionError", "failing failed: boom")
     );
     harness.assert_replays(&run).await;
 }
@@ -904,7 +911,7 @@ async fn a_rejection_left_unhandled_fails_the_run_as_in_node() {
     let run = harness
         .run(
             r#"
-import { failing, audit } from "rewind:tools";
+import { failing, audit } from "rewind:actions";
 export default async function main() {
   const p = failing({});
   await audit.record({});   // p is rejected before it is awaited
@@ -949,7 +956,7 @@ async fn after_a_failure_no_script_code_runs_and_fail_run_waits_for_calls_in_fli
     let run = harness
         .run(
             r#"
-import { audit } from "rewind:tools";
+import { audit } from "rewind:actions";
 export default async function main() {
   audit.record({ n: 1 }).then(() => console.log("must not run"));
   throw new RangeError("bad input");
@@ -961,12 +968,7 @@ export default async function main() {
     assert_eq!(run.error().name, "RangeError");
     assert_eq!(
         run.events(),
-        [
-            "run_started",
-            "schedule_tool_call",
-            "tool_call_completed",
-            "fail_run"
-        ]
+        ["run_started", "schedule_call", "call_completed", "fail_run"]
     );
     harness.assert_replays(&run).await;
 }
@@ -991,24 +993,24 @@ export default async function main() {
 }
 
 #[tokio::test]
-async fn a_raced_slow_tool_is_still_awaited() {
+async fn a_raced_slow_action_is_still_awaited() {
     let harness = harness().await;
     let run = harness
         .run(
             r#"
-import { slow } from "rewind:tools";
+import { slow } from "rewind:actions";
 import { sleep } from "rewind";
 export default async function main() {
-  return await Promise.race([slow({}).then(() => "tool"), sleep(10).then(() => "timer")]);
+  return await Promise.race([slow({}).then(() => "action"), sleep(10).then(() => "timer")]);
 }
 "#,
             json!({}),
         )
         .await;
-    // The tool answers first in virtual time here; either way the call has an outcome.
+    // The action answers first in virtual time here; either way the call has an outcome.
     let state = &run.state;
     assert_eq!(state.status(), RunStatus::Completed);
-    assert!(run.events().contains(&"tool_call_completed"));
+    assert!(run.events().contains(&"call_completed"));
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1323,7 +1325,7 @@ async fn one_allocation_past_the_heap_limit_ends_the_call_not_the_process() {
     assert_eq!(message, "the script used more than 64 MiB of heap");
 }
 
-/// What a script emits is kept outside V8's heap until the call ends: a flood of logs, of tool
+/// What a script emits is kept outside V8's heap until the call ends: a flood of logs, of action
 /// arguments or of signal names is stopped once one trigger's response holds more than its
 /// bound, and nothing of it is recorded.
 #[tokio::test]
@@ -1346,7 +1348,7 @@ async fn what_one_trigger_emits_is_bounded_in_bytes() {
         let run = harness
             .run(
                 &format!(
-                    "import {{ signal }} from \"rewind\";\nimport {{ audit }} from \"rewind:tools\";\n\
+                    "import {{ signal }} from \"rewind\";\nimport {{ audit }} from \"rewind:actions\";\n\
                      export default async function main() {{\n  \
                        const big = \"x\".repeat(1 << 20);\n  {flood}\n}}"
                 ),
@@ -1519,7 +1521,7 @@ async fn only_the_action_set_is_callable() {
     let harness = harness().await;
     let run = harness
         .run(
-            "import * as tools from \"rewind:tools\";\nexport default async function main() { return Object.keys(tools).sort(); }",
+            "import * as actions from \"rewind:actions\";\nexport default async function main() { return Object.keys(actions).sort(); }",
             json!({}),
         )
         .await;
@@ -1542,7 +1544,7 @@ async fn object_keys_are_the_same_live_and_on_replay() {
     let run = harness
         .run(
             r#"
-import { audit } from "rewind:tools";
+import { audit } from "rewind:actions";
 export default async function main(input: Record<string, unknown>) {
   await audit.record({ first: Object.keys(input)[0] });   // a second activation replays this
   return Object.keys(input);
@@ -1607,7 +1609,7 @@ async fn serializing_the_output_cannot_schedule_a_call_after_the_end() {
     let run = harness
         .run(
             r#"
-import { audit } from "rewind:tools";
+import { audit } from "rewind:actions";
 export default async function main() {
   return { toJSON() { audit.record({ late: true }); return "out"; } };
 }
@@ -1620,8 +1622,8 @@ export default async function main() {
         run.events(),
         [
             "run_started",
-            "schedule_tool_call",
-            "tool_call_completed",
+            "schedule_call",
+            "call_completed",
             "complete_run"
         ],
         "the call made while serializing the output has an outcome before the run ends"
@@ -1635,7 +1637,7 @@ async fn lone_surrogates_become_replacement_characters() {
     let run = harness
         .run(
             r#"
-import { audit } from "rewind:tools";
+import { audit } from "rewind:actions";
 export default async function main() {
   const cut = "😀 hi".slice(0, 1);   // half of a surrogate pair
   await audit.record({ text: cut, [cut]: 1, escaped: "\\ud800" });
@@ -1650,7 +1652,7 @@ export default async function main() {
         .commands()
         .into_iter()
         .find_map(|command| match command {
-            Command::ScheduleToolCall { args, .. } => args.value().cloned(),
+            Command::ScheduleCall { args, .. } => args.value().cloned(),
             _ => None,
         });
     assert_eq!(
@@ -1797,7 +1799,7 @@ export default async function main() {
 async fn invalid_args_throw_a_type_error_at_the_call_site_and_record_nothing() {
     let harness = harness().await;
     let script = r#"
-import { github } from "rewind:tools";
+import { github } from "rewind:actions";
 
 export default async function main() {
   let caught = "";
@@ -1832,7 +1834,7 @@ export default async function main() {
     let calls: Vec<&Command> = run
         .commands()
         .into_iter()
-        .filter(|command| matches!(command, Command::ScheduleToolCall { .. }))
+        .filter(|command| matches!(command, Command::ScheduleCall { .. }))
         .collect();
     assert_eq!(calls.len(), 1, "{:#?}", run.history);
     harness.assert_replays(&run).await;
@@ -1840,7 +1842,7 @@ export default async function main() {
     let caught = harness
         .start_with(
             r#"
-import { github } from "rewind:tools";
+import { github } from "rewind:actions";
 export default async function main() {
   const p = github.get_issue({ number: 0, extra: true } as any);
   return await p.then(() => "resolved", (e: Error) => `${e.name}: ${e.message}`);
@@ -1890,8 +1892,8 @@ export default async function main() {
         run.output(),
         &json!({ "url": "https://rewind.example.com/hooks/tok_pr_merged", "merged": true })
     );
-    let Command::ScheduleToolCall {
-        tool,
+    let Command::ScheduleCall {
+        action,
         args,
         callsite,
         ..
@@ -1899,7 +1901,7 @@ export default async function main() {
     else {
         panic!("{:#?}", run.history);
     };
-    assert_eq!(tool, "webhook");
+    assert_eq!(action, "webhook");
     assert_eq!(args.value(), Some(&json!({ "name": "pr_merged" })));
     assert_eq!(callsite.map(|c| c.line), Some(5));
     harness.assert_replays(&run).await;
@@ -1919,14 +1921,14 @@ export default async function main() {
     assert_eq!(
         run.output(),
         &json!(
-            "TypeError: webhook() needs the built-in webhook tool, which this run's action set does \
+            "TypeError: webhook() needs the built-in webhook action, which this run's action set does \
              not have"
         )
     );
     assert_eq!(run.events(), ["run_started", "complete_run"]);
 }
 
-/// The tools of an MCP server `crm`: two pinned without an output schema, one with.
+/// The actions of an MCP server `crm`: two pinned without an output schema, one with.
 fn crm_action_set() -> ActionSet {
     let server = McpServer::new(
         "crm",
@@ -1934,16 +1936,16 @@ fn crm_action_set() -> ActionSet {
             url: "https://mcp.example.com/crm".into(),
         },
     );
-    let route = || ToolRoute::Mcp {
+    let route = || ActionRoute::Mcp {
         server: "crm".into(),
     };
-    let mut score = Tool::new("crm.score", route(), json!({}));
+    let mut score = Action::new("crm.score", route(), json!({}));
     score.output_schema = Some(json!({ "type": "object" }));
     ActionSet::new(
         [server],
         [
-            Tool::new("crm.lookup", route(), json!({})),
-            Tool::new("crm.profile", route(), json!({})),
+            Action::new("crm.lookup", route(), json!({})),
+            Action::new("crm.profile", route(), json!({})),
             score,
         ],
     )
@@ -1956,7 +1958,7 @@ async fn mcp_content_gets_the_text_and_json_helpers() {
     let id = harness
         .start_with(
             r#"
-import { crm } from "rewind:tools";
+import { crm } from "rewind:actions";
 
 export default async function main() {
   const found = await crm.lookup({ id: "c-1" });
@@ -1997,7 +1999,7 @@ export default async function main() {
         .commands()
         .into_iter()
         .filter_map(|command| match command {
-            Command::ScheduleToolCall { args, .. } => args.value().cloned(),
+            Command::ScheduleCall { args, .. } => args.value().cloned(),
             _ => None,
         })
         .collect();
@@ -2009,7 +2011,7 @@ export default async function main() {
 }
 
 #[tokio::test]
-async fn fetch_is_a_journaled_call_of_the_http_tool() {
+async fn fetch_is_a_journaled_call_of_the_http_action() {
     let harness = harness().await;
     let id = harness
         .start_with(
@@ -2103,14 +2105,14 @@ export default async function main() {
         "TypeError: fetch only sends http and https requests, not ftp:"
     );
     assert_eq!(output["getBody"], "a GET request cannot have a body");
-    let tools: Vec<&str> = run
+    let actions: Vec<&str> = run
         .commands()
         .into_iter()
         .filter_map(|command| match command {
-            Command::ScheduleToolCall { tool, .. } => Some(tool.as_str()),
+            Command::ScheduleCall { action, .. } => Some(action.as_str()),
             _ => None,
         })
         .collect();
-    assert_eq!(tools, ["http", "http", "http", "http"]);
+    assert_eq!(actions, ["http", "http", "http", "http"]);
     harness.assert_replays(&run).await;
 }

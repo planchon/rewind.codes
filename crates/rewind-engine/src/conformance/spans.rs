@@ -126,7 +126,7 @@ fn run_span() -> Span {
     }
 }
 
-/// A tool call span under the run span.
+/// A call span under the run span.
 fn call_span(seq: u32) -> Span {
     let (trace, _) = harness();
     Span {
@@ -140,7 +140,7 @@ fn call_span(seq: u32) -> Span {
         status: SpanStatus::Ok,
         attributes: attributes([
             ("rewind.seq", AttributeValue::Int(i64::from(seq))),
-            ("rewind.tool", string("github.list_issues")),
+            ("rewind.action", string("github.list_issues")),
             ("rewind.callsite", string("script.ts:5")),
             ("rewind.outcome", string("completed")),
             ("rewind.args.digest", string(&"ef".repeat(32))),
@@ -153,7 +153,7 @@ fn call_span(seq: u32) -> Span {
     }
 }
 
-/// A failed tool call span.
+/// A failed call span.
 fn failed_span() -> Span {
     let mut span = call_span(2);
     span.status = SpanStatus::Error {

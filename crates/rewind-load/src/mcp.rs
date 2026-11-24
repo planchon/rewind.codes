@@ -1,7 +1,7 @@
-//! The fake MCP server of the load: two tools, served over streamable HTTP with `rmcp`, which
+//! The fake MCP server of the load: two actions, served over streamable HTTP with `rmcp`, which
 //! record every call by its idempotency key.
 //!
-//! | Tool | Answers |
+//! | Action | Answers |
 //! | --- | --- |
 //! | `echo` | its arguments, `{ n, pad }` |
 //! | `flaky` | a JSON-RPC internal error (a transient failure) at the first call of each key, then `{ n, calls }` |
@@ -35,7 +35,7 @@ pub(crate) const IDEMPOTENCY_KEY_META: &str = "codes.rewind/idempotency-key";
 /// The calls of one idempotency key.
 #[derive(Debug, Clone)]
 pub(crate) struct Calls {
-    pub(crate) tool: String,
+    pub(crate) action: String,
     pub(crate) count: u32,
     /// When the first call arrived.
     pub(crate) first: Instant,
@@ -62,14 +62,14 @@ impl FakeServer {
     }
 
     /// Records a call; returns how many times this key was called, this call included.
-    pub(crate) fn called(&self, key: Option<&str>, tool: &str) -> u32 {
+    pub(crate) fn called(&self, key: Option<&str>, action: &str) -> u32 {
         let mut record = self.record();
         let Some(key) = key else {
             record.without_key += 1;
             return 1;
         };
         let calls = record.calls.entry(key.to_owned()).or_insert_with(|| Calls {
-            tool: tool.to_owned(),
+            action: action.to_owned(),
             count: 0,
             first: Instant::now(),
         });
@@ -85,7 +85,7 @@ fn schema(value: Value) -> Arc<Map<String, Value>> {
     }
 }
 
-/// The tools, with output schemas: a script gets their structured content as it is.
+/// The actions, with output schemas: a script gets their structured content as it is.
 fn tools() -> Vec<Tool> {
     let input = json!({
         "type": "object",
@@ -144,9 +144,9 @@ impl ServerHandler for FakeServer {
                 .unwrap_or(Value::Null)
         };
         let n = argument("n");
-        let tool = request.name.as_ref();
-        let calls = self.called(key, tool);
-        let structured = match tool {
+        let action = request.name.as_ref();
+        let calls = self.called(key, action);
+        let structured = match action {
             "echo" => json!({ "n": n, "pad": argument("pad") }),
             "flaky" if calls == 1 => {
                 return Err(ErrorData::internal_error(
@@ -157,7 +157,7 @@ impl ServerHandler for FakeServer {
             "flaky" => json!({ "n": n, "calls": calls }),
             other => {
                 return Err(ErrorData::invalid_params(
-                    format!("unknown tool {other}"),
+                    format!("unknown action {other}"),
                     None,
                 ));
             }
@@ -216,7 +216,7 @@ mod tests {
         assert_eq!(server.called(None, "echo"), 1);
         let record = server.record();
         assert_eq!(record.calls["r/2"].count, 2);
-        assert_eq!(record.calls["r/2"].tool, "flaky");
+        assert_eq!(record.calls["r/2"].action, "flaky");
         assert_eq!(record.without_key, 1);
     }
 }

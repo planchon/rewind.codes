@@ -35,8 +35,8 @@ impl ScriptExecutor for Executor {
         self.v8.compile(script, action_set)
     }
 
-    fn tool_imports(&self, script: &Script) -> Option<BTreeSet<String>> {
-        self.v8.tool_imports(script)
+    fn action_imports(&self, script: &Script) -> Option<BTreeSet<String>> {
+        self.v8.action_imports(script)
     }
 
     async fn start(&self, start: StartScript) -> Result<(Instance, Vec<Emitted>), ExecutorError> {

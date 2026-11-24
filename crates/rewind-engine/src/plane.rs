@@ -16,8 +16,8 @@ use rewind_core::Epoch;
 use crate::cache::CacheConfig;
 use crate::payloads::PayloadTiers;
 use crate::ports::{
-    BlobStore, CatalogStore, Clock, Entropy, NodeId, PartitionStore, RunArchive, ScriptExecutor,
-    SecretStore, SpanExporter, TenantId, ToolDispatcher, WebhookSender,
+    ActionDispatcher, BlobStore, CatalogStore, Clock, Entropy, NodeId, PartitionStore, RunArchive,
+    ScriptExecutor, SecretStore, SpanExporter, TenantId, WebhookSender,
 };
 use crate::tasks::Backoff;
 use crate::telemetry::TelemetryConfig;
@@ -29,7 +29,7 @@ pub trait Plane: Send + Sync + 'static {
     type Archive: RunArchive + 'static;
     type Blobs: BlobStore + 'static;
     type Executor: ScriptExecutor<Instance: 'static> + 'static;
-    type Dispatcher: ToolDispatcher + 'static;
+    type Dispatcher: ActionDispatcher + 'static;
     type Secrets: SecretStore + 'static;
     type Spans: SpanExporter + 'static;
     type Webhooks: WebhookSender + 'static;
@@ -83,7 +83,7 @@ where
     A: RunArchive + 'static,
     B: BlobStore + 'static,
     X: ScriptExecutor<Instance: 'static> + 'static,
-    D: ToolDispatcher + 'static,
+    D: ActionDispatcher + 'static,
     S: SecretStore + 'static,
     T: SpanExporter + 'static,
     W: WebhookSender + 'static,
@@ -144,7 +144,7 @@ pub enum HostTools {
     #[default]
     Streams,
     /// To the dispatcher, as every other call: mock mode and the engine's tests, where the
-    /// mocks answer every tool.
+    /// mocks answer every action.
     Dispatched,
 }
 
@@ -156,7 +156,7 @@ pub struct Limits {
     pub max_history_len: u64,
     /// Commands the script may emit in one activation.
     pub max_commands_per_activation: usize,
-    /// Size of one payload the script emits (tool args, output), as canonical JSON.
+    /// Size of one payload the script emits (action args, output), as canonical JSON.
     pub max_payload_bytes: usize,
 }
 
@@ -192,7 +192,7 @@ pub struct NodeConfig {
     pub limits: Limits,
     pub payloads: PayloadTiers,
     pub backoff: Backoff,
-    /// Attempts at a tool call (`archi/04-tools.md`, "Policies").
+    /// Attempts at a call (`archi/04-tools.md`, "Policies").
     pub max_tool_attempts: u32,
     /// The server's public URL, for `webhook(name)` and the issuer of signed calls.
     pub public_url: Option<String>,

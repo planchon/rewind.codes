@@ -7,23 +7,29 @@ use std::time::Duration;
 
 use rewind_core::Script;
 use rewind_engine::ports::{
-    CheckerError, Diagnostic, DiagnosticSource, Severity, ToolDeclarations, TypeChecker,
+    ActionDeclarations, CheckerError, Diagnostic, DiagnosticSource, Severity, TypeChecker,
     WorkflowDeclarations,
 };
 use tokio::sync::{OnceCell, Semaphore};
 
 use crate::error::CheckError;
 use crate::rules::{self, Finding};
-use crate::sandbox::{self, ENTRY, FETCH, SCRIPT, TOOLS, WORKFLOW};
+use crate::sandbox::{self, ACTIONS, ENTRY, FETCH, SCRIPT, WORKFLOW};
 use crate::source::{SourceText, blank_directives};
 use crate::tsgo::{self, Reported};
 
-/// The first line of the `rewind-tools.d.ts` of an action set that enables the `http` tool. The
+/// The first line of the `rewind-actions.d.ts` of an action set that enables the `http` action. The
 /// checker then gives tsgo `fetch.d.ts`, and `fetch` is not an absent global.
-pub const HTTP_TOOL_REFERENCE: &str = "/// <reference path=\"fetch.d.ts\" />";
+pub const HTTP_ACTION_REFERENCE: &str = "/// <reference path=\"fetch.d.ts\" />";
 
-/// The declarations of an action set without tools: `rewind:tools` exists, and exports nothing.
-const NO_TOOLS: &str = "declare module \"rewind:tools\" {}\n";
+/// The declarations of an action set without actions: `rewind:actions` exists, and exports nothing.
+const NO_ACTIONS: &str = "declare module \"rewind:actions\" {}\n";
+
+/// `ToolContent`, the name `ActionContent` had, for code already written (`archi/08-decisions.md`,
+/// R1): given to tsgo when the action set's declarations have `ActionContent`, and shown nowhere.
+const OLD_CONTENT: &str = "declare module \"rewind:tools\" {\n  \
+    import type { ActionContent } from \"rewind:actions\";\n  \
+    export type ToolContent<T = unknown> = ActionContent<T>;\n}\n";
 
 /// The declarations of an action set that pins no workflow: `rewind:workflows` exists, and exports
 /// nothing.
@@ -41,7 +47,7 @@ struct Workflow<'a> {
 /// "Type-checking").
 ///
 /// A check writes the script as `script.ts` in a directory of its own, next to the sandbox lib
-/// and the action set's `rewind-tools.d.ts`, and runs tsgo there in strict mode. tsgo is extracted to
+/// and the action set's `rewind-actions.d.ts`, and runs tsgo there in strict mode. tsgo is extracted to
 /// the cache directory at first use. Diagnostics are written for a model: a location in
 /// `script.ts` (columns count characters), the message, a hint for the checker's own rules,
 /// and a short code frame. They come sorted by position, and the same script and declarations
@@ -116,11 +122,11 @@ impl TsgoChecker {
     }
 
     /// Type-checks a script against the sandbox lib and `declarations`, the action set's
-    /// `rewind-tools.d.ts`, and runs the checker's own rules.
+    /// `rewind-actions.d.ts`, and runs the checker's own rules.
     ///
-    /// `declarations` declare the module `rewind:tools` (`declare module "rewind:tools" { … }`);
-    /// empty, the module exports nothing. When they start with [`HTTP_TOOL_REFERENCE`], the
-    /// action set enables the `http` tool, and the script has `fetch`.
+    /// `declarations` declare the module `rewind:actions` (`declare module "rewind:actions" { … }`);
+    /// empty, the module exports nothing. When they start with [`HTTP_ACTION_REFERENCE`], the
+    /// action set enables the `http` action, and the script has `fetch`.
     pub async fn check_source(
         &self,
         source: &str,
@@ -155,11 +161,11 @@ impl TsgoChecker {
         // Neither the script nor the declarations may add files or libs to the check: the DOM
         // lib would declare what does not exist.
         let (declarations, directives) = blank_directives(declarations);
-        let http_tool = directives.iter().any(|directive| {
+        let http_action = directives.iter().any(|directive| {
             directive.kind == "path" && matches!(directive.value.as_str(), FETCH | "./fetch.d.ts")
         });
         let mut declarations = if declarations.trim().is_empty() {
-            Cow::Borrowed(NO_TOOLS)
+            Cow::Borrowed(NO_ACTIONS)
         } else {
             declarations
         };
@@ -185,9 +191,15 @@ impl TsgoChecker {
             files
         };
 
-        let findings = rules::check(source, http_tool);
+        let findings = rules::check(source, http_action);
         let reported = self
-            .tsgo(executable, &script, &declarations, http_tool, extra(entry))
+            .tsgo(
+                executable,
+                &script,
+                &declarations,
+                http_action,
+                extra(entry),
+            )
             .await?;
         let (in_script, rest): (Vec<_>, Vec<_>) = reported.into_iter().partition(
             |reported| matches!(&reported.location, Some((file, _, _)) if file == SCRIPT),
@@ -203,7 +215,7 @@ impl TsgoChecker {
                     executable,
                     "export {};\n",
                     &declarations,
-                    http_tool,
+                    http_action,
                     extra(None),
                 )
                 .await?;
@@ -225,7 +237,7 @@ impl TsgoChecker {
         executable: &Path,
         script: &str,
         declarations: &str,
-        http_tool: bool,
+        http_action: bool,
         extra: Vec<(&'static str, String)>,
     ) -> Result<Vec<Reported>, CheckError> {
         let _slot = self.slots.acquire().await.map_err(|_| CheckError::Failed {
@@ -236,9 +248,13 @@ impl TsgoChecker {
             .prefix("rewind-check-")
             .tempdir()
             .map_err(CheckError::Files)?;
-        let files = sandbox::files(http_tool)
+        let old_content = declarations
+            .contains("export interface ActionContent<")
+            .then_some(("old-content.d.ts", OLD_CONTENT));
+        let files = sandbox::files(http_action)
             .into_iter()
-            .chain([(TOOLS, declarations), (SCRIPT, script)]);
+            .chain(old_content)
+            .chain([(ACTIONS, declarations), (SCRIPT, script)]);
         for (name, text) in files {
             fs::write(dir.path().join(name), text).map_err(CheckError::Files)?;
         }
@@ -265,7 +281,7 @@ impl TypeChecker for TsgoChecker {
     async fn check(
         &self,
         script: &Script,
-        declarations: &ToolDeclarations,
+        declarations: &ActionDeclarations,
     ) -> Result<Vec<Diagnostic>, CheckerError> {
         Ok(self
             .check_source(script.source(), &declarations.typescript)
@@ -275,7 +291,7 @@ impl TypeChecker for TsgoChecker {
     async fn check_workflow(
         &self,
         script: &Script,
-        declarations: &ToolDeclarations,
+        declarations: &ActionDeclarations,
         workflow: &WorkflowDeclarations,
     ) -> Result<Vec<Diagnostic>, CheckerError> {
         Ok(self

@@ -1,6 +1,6 @@
 {
-  "description": "A run cancelled while an at_most_once call was in flight leaves it without an outcome. Its fork never calls such a tool twice: the call fails with outcomeUnknown, and the script, which does not catch it, fails.",
-  "tools": {
+  "description": "A run cancelled while an at_most_once call was in flight leaves it without an outcome. Its fork never calls such an action twice: the call fails with outcomeUnknown, and the script, which does not catch it, fails.",
+  "actions": {
     "payments.charge": {
       "$defer": true
     }
@@ -21,13 +21,13 @@
   "expect": {
     "status": "failed",
     "error": {
-      "name": "ToolError",
+      "name": "ActionError",
       "message": "left this call without an outcome"
     },
     "events": [
       "run_started",
-      "schedule_tool_call",
-      "tool_call_failed",
+      "schedule_call",
+      "call_failed",
       "fail_run"
     ],
     "dispatched": {

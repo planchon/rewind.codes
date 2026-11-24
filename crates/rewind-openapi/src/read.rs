@@ -1,19 +1,19 @@
-//! An OpenAPI 3.0 or 3.1 document read into a pinned API and its tools (`archi/04-tools.md`,
-//! "API tools").
+//! An OpenAPI 3.0 or 3.1 document read into a pinned API and its actions (`archi/04-tools.md`,
+//! "API actions").
 //!
 //! | From the document | The pinned action set |
 //! | --- | --- |
 //! | The first `servers[]` (its variables at their defaults, a relative URL against the document's), unless `baseUrl` is given | The API's `base_url`: `https`, or `http` on the embedded server; no user, query nor fragment |
-//! | Each operation of `paths` | A tool `<api>.<operationId>`, or `<api>.<method>_<path>` without one (`post_v1_measures`) |
+//! | Each operation of `paths` | An action `<api>.<operationId>`, or `<api>.<method>_<path>` without one (`post_v1_measures`) |
 //! | Its path, query and header parameters (the path item's, overridden by the operation's) | Args of the same names, and the operation's `parameters`, sorted |
 //! | Its `application/json` request body | The arg `body`, required when the body is |
 //! | The header `Idempotency-Key` | Not an arg: the operation's `idempotency_key`, which Rewind fills |
 //! | The headers of the authentication, `Accept`, `Content-Type`, `Authorization`, `traceparent`, `tracestate` | Not args: Rewind sets them |
-//! | The first `2xx` response with an `application/json` schema | The output schema; without one, the tool gets an observed type |
+//! | The first `2xx` response with an `application/json` schema | The output schema; without one, the action gets an observed type |
 //! | `summary` and `description` | The description |
 //! | The security requirement (the document's, else its operations' when they agree), when `auth` is not given | The API's `auth`: `bearer`, `oauth2` and `openIdConnect` are `Authorization: Bearer {secret}`; `basic` is `Authorization: Basic` with the secret in base64; an `apiKey` in a header is that header |
 //!
-//! Refused (`invalid-action-set`), naming the operation's path: a name that is no tool name, two
+//! Refused (`invalid-action-set`), naming the operation's path: a name that is no action name, two
 //! operations of one name, two parameters of one name or one named `body`, a `$ref` to another
 //! document, an `apiKey` in the query or a cookie or several schemes at once without `auth`, an
 //! `operations` entry the document does not have. Left out (`skipped`): an operation with a body
@@ -22,8 +22,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use rewind_core::{
-    Api, ApiOperation, ApiParameter, HttpMethod, ParameterLocation, RESERVED_HEADERS,
-    SecretPlacement, Tool, ToolAuth,
+    Action, ActionAuth, Api, ApiOperation, ApiParameter, HttpMethod, ParameterLocation,
+    RESERVED_HEADERS, SecretPlacement,
 };
 use serde_json::{Map, Value, json};
 use url::Url;
@@ -33,14 +33,14 @@ use crate::schema::{Defs, Document};
 /// How to read one API of an action set: what its registration gives beside the document.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReadOptions {
-    /// Its namespace in `rewind:tools`.
+    /// Its namespace in `rewind:actions`.
     pub name: String,
     /// Where its calls go; the document's first `servers[]` when `None`.
     pub base_url: Option<String>,
-    /// Its `auth` as given; `Some(ToolAuth::None)` sets aside the document's security
+    /// Its `auth` as given; `Some(ActionAuth::None)` sets aside the document's security
     /// requirement, `None` follows it.
-    pub auth: Option<ToolAuth>,
-    /// The operations to keep, by tool name (the `operationId`, or the name made from the method
+    pub auth: Option<ActionAuth>,
+    /// The operations to keep, by action name (the `operationId`, or the name made from the method
     /// and the path); every one when `None`.
     pub operations: Option<Vec<String>>,
     /// Its calls in flight on each worker; [`Api::DEFAULT_CONCURRENCY`] when `None`.
@@ -66,12 +66,12 @@ impl ReadOptions {
     }
 }
 
-/// An API read from its document: the API as pinned, one tool per kept operation (sorted by
+/// An API read from its document: the API as pinned, one action per kept operation (sorted by
 /// name, with the default policy of their method), and the operations left out.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ReadApi {
     pub api: Api,
-    pub tools: Vec<Tool>,
+    pub actions: Vec<Action>,
     pub skipped: Vec<Skipped>,
 }
 
@@ -116,7 +116,7 @@ impl Found<'_> {
     }
 }
 
-/// Reads `document` into the API `options.name` and its tools.
+/// Reads `document` into the API `options.name` and its actions.
 pub fn read(document: &Value, options: &ReadOptions) -> Result<ReadApi, ReadError> {
     let fail = |message: String| ReadError {
         api: options.name.clone(),
@@ -158,24 +158,24 @@ pub fn read(document: &Value, options: &ReadOptions) -> Result<ReadApi, ReadErro
         None => security(&doc, &found).map_err(fail)?,
     };
     let auth_header = match &auth {
-        ToolAuth::Secret(SecretPlacement::Header { name, .. }) => Some(name.to_ascii_lowercase()),
-        ToolAuth::Rewind => Some("authorization".to_owned()),
+        ActionAuth::Secret(SecretPlacement::Header { name, .. }) => Some(name.to_ascii_lowercase()),
+        ActionAuth::Rewind => Some("authorization".to_owned()),
         _ => None,
     };
 
-    let mut tools = Vec::new();
+    let mut actions = Vec::new();
     let mut skipped = Vec::new();
     let mut names: BTreeMap<String, String> = BTreeMap::new();
     for operation in &found {
         if let Some(other) = names.insert(operation.name.clone(), operation.label()) {
             return Err(fail(format!(
-                "{other} and {} are both named {:?}: two tools cannot share a name",
+                "{other} and {} are both named {:?}: two actions cannot share a name",
                 operation.label(),
                 operation.name
             )));
         }
-        match tool(&doc, &options.name, operation, auth_header.as_deref()) {
-            Ok(Read::Tool(tool)) => tools.push(*tool),
+        match action(&doc, &options.name, operation, auth_header.as_deref()) {
+            Ok(Read::Action(action)) => actions.push(*action),
             Ok(Read::Skipped(reason)) => skipped.push(Skipped {
                 method: operation.method.as_str().to_owned(),
                 path: operation.path.to_owned(),
@@ -185,7 +185,7 @@ pub fn read(document: &Value, options: &ReadOptions) -> Result<ReadApi, ReadErro
             Err(message) => return Err(fail(format!("{}: {message}", operation.label()))),
         }
     }
-    tools.sort_by(|a, b| a.name.cmp(&b.name));
+    actions.sort_by(|a, b| a.name.cmp(&b.name));
     let mut api = Api::new(options.name.clone(), base_url);
     api.auth = auth;
     if let Some(concurrency) = options.concurrency {
@@ -193,7 +193,7 @@ pub fn read(document: &Value, options: &ReadOptions) -> Result<ReadApi, ReadErro
     }
     Ok(ReadApi {
         api,
-        tools,
+        actions,
         skipped,
     })
 }
@@ -329,9 +329,9 @@ fn derived_name(method: HttpMethod, path: &str) -> String {
     name
 }
 
-/// A tool's name inside its namespace: 1 to 128 ASCII letters, digits, `_`, `-` and `.`, as MCP
-/// names its tools.
-fn is_tool_name(name: &str) -> bool {
+/// An action's name inside its namespace: 1 to 128 ASCII letters, digits, `_`, `-` and `.`, as MCP
+/// names its actions.
+fn is_action_name(name: &str) -> bool {
     (1..=128).contains(&name.len())
         && name
             .bytes()
@@ -361,11 +361,11 @@ fn keep<'a>(
 
 /// The `auth` of the document's security requirement: the document's own, else the kept
 /// operations', when they agree.
-fn security(doc: &Document<'_>, found: &[Found<'_>]) -> Result<ToolAuth, String> {
+fn security(doc: &Document<'_>, found: &[Found<'_>]) -> Result<ActionAuth, String> {
     if let Some(requirements) = doc.root.get("security") {
         return requirement(doc, requirements).map(Option::unwrap_or_default);
     }
-    let mut chosen: Vec<ToolAuth> = Vec::new();
+    let mut chosen: Vec<ActionAuth> = Vec::new();
     for operation in found {
         let Some(requirements) = operation.operation.get("security") else {
             continue;
@@ -391,7 +391,7 @@ fn security(doc: &Document<'_>, found: &[Found<'_>]) -> Result<ToolAuth, String>
 /// The `auth` a list of security requirements means: the first alternative Rewind can follow;
 /// `None` when the list is empty or every alternative is empty. Refused when no alternative
 /// can be followed.
-fn requirement(doc: &Document<'_>, requirements: &Value) -> Result<Option<ToolAuth>, String> {
+fn requirement(doc: &Document<'_>, requirements: &Value) -> Result<Option<ActionAuth>, String> {
     let Value::Array(alternatives) = requirements else {
         return Err("its security is not a list of requirements".into());
     };
@@ -430,7 +430,7 @@ fn requirement(doc: &Document<'_>, requirements: &Value) -> Result<Option<ToolAu
 }
 
 /// The `auth` of the security scheme `name`, or why Rewind cannot follow it.
-fn scheme(doc: &Document<'_>, name: &str) -> Result<Result<ToolAuth, String>, String> {
+fn scheme(doc: &Document<'_>, name: &str) -> Result<Result<ActionAuth, String>, String> {
     let scheme = doc
         .root
         .pointer("/components/securitySchemes")
@@ -454,15 +454,15 @@ fn scheme(doc: &Document<'_>, name: &str) -> Result<Result<ToolAuth, String>, St
                 .unwrap_or_default()
                 .to_ascii_lowercase();
             match http.as_str() {
-                "bearer" => Ok(ToolAuth::Secret(SecretPlacement::bearer())),
-                "basic" => Ok(ToolAuth::Secret(SecretPlacement::basic())),
+                "bearer" => Ok(ActionAuth::Secret(SecretPlacement::bearer())),
+                "basic" => Ok(ActionAuth::Secret(SecretPlacement::basic())),
                 other => Err(format!("{name} is HTTP {other} authentication")),
             }
         }
-        "oauth2" | "openIdConnect" => Ok(ToolAuth::Secret(SecretPlacement::bearer())),
+        "oauth2" | "openIdConnect" => Ok(ActionAuth::Secret(SecretPlacement::bearer())),
         "apiKey" => match scheme.get("in").and_then(Value::as_str) {
             Some("header") => match scheme.get("name").and_then(Value::as_str) {
-                Some(header) => Ok(ToolAuth::Secret(SecretPlacement::header(header))),
+                Some(header) => Ok(ActionAuth::Secret(SecretPlacement::header(header))),
                 None => Err(format!("{name} is an apiKey without a name")),
             },
             Some(place @ ("query" | "cookie")) => Err(format!(
@@ -476,24 +476,24 @@ fn scheme(doc: &Document<'_>, name: &str) -> Result<Result<ToolAuth, String>, St
 
 /// What an operation becomes.
 enum Read {
-    Tool(Box<Tool>),
+    Action(Box<Action>),
     Skipped(String),
 }
 
-/// The tool of `operation`, or why it is left out.
-fn tool(
+/// The action of `operation`, or why it is left out.
+fn action(
     doc: &Document<'_>,
     api: &str,
     operation: &Found<'_>,
     auth_header: Option<&str>,
 ) -> Result<Read, String> {
-    if !is_tool_name(&operation.name) {
+    if !is_action_name(&operation.name) {
         return Err(match operation.operation_id {
             Some(id) => format!(
-                "its operationId {id:?} is not a tool name: 1 to 128 letters, digits, _, - and ."
+                "its operationId {id:?} is not an action name: 1 to 128 letters, digits, _, - and ."
             ),
             None => format!(
-                "the name made from its method and path, {:?}, is not a tool name: give it an \
+                "the name made from its method and path, {:?}, is not an action name: give it an \
                  operationId",
                 operation.name
             ),
@@ -652,15 +652,15 @@ fn tool(
         body,
         idempotency_key,
     };
-    let mut tool = Tool::api(
+    let mut action = Action::api(
         format!("{api}.{}", operation.name),
         api,
         pinned_operation,
         input,
     );
-    tool.description = description(operation.operation);
-    tool.output_schema = output(doc, operation.operation)?;
-    Ok(Read::Tool(Box::new(tool)))
+    action.description = description(operation.operation);
+    action.output_schema = output(doc, operation.operation)?;
+    Ok(Read::Action(Box::new(action)))
 }
 
 /// Whether a media type of a request body is `application/json`, its parameters aside.
@@ -691,7 +691,7 @@ fn described(schema: Value, description: Option<&Value>) -> Value {
     }
 }
 
-/// `summary` and `description`, as the tool's description.
+/// `summary` and `description`, as the action's description.
 fn description(operation: &Value) -> Option<String> {
     let parts: Vec<&str> = ["summary", "description"]
         .iter()

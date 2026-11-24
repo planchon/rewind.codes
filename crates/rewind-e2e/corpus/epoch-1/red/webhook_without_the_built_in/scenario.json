@@ -1,10 +1,10 @@
 {
-  "description": "webhook() needs the built-in webhook tool in the run's action set: without it, the call is refused at its line with a TypeError, and nothing is recorded.",
+  "description": "webhook() needs the built-in webhook action in the run's action set: without it, the call is refused at its line with a TypeError, and nothing is recorded.",
   "expect": {
     "status": "failed",
     "error": {
       "name": "TypeError",
-      "message": "webhook() needs the built-in webhook tool, which this run's action set does not have"
+      "message": "webhook() needs the built-in webhook action, which this run's action set does not have"
     },
     "events": ["run_started", "fail_run"]
   }

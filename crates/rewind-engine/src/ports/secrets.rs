@@ -190,7 +190,7 @@ pub enum SecretReader {
         run: RunId,
         namespace: NamespaceName,
     },
-    /// An action set's registration, listing the tools of an MCP server the secret is attached for
+    /// An action set's registration, listing the actions of an MCP server the secret is attached for
     /// (`POST /v1/action-sets`): no run exists yet.
     Registration,
 }

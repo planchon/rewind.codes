@@ -61,7 +61,7 @@ hmac = "0.13"
 http = "1"
 # `Retry-After` as an HTTP date, in rewind-openapi's answers (the crate hyper already builds).
 httpdate = "1"
-# The networks of the internal MCP servers and APIs an operator allows (`--allow-internal-tools 10.0.0.0/8`).
+# The networks of the internal MCP servers and APIs an operator allows (`--allow-internal-addresses 10.0.0.0/8`).
 ipnet = "2"
 # Timestamps of the HTTP API (RFC 3339).
 jiff = { version = "0.2", default-features = false, features = ["std", "serde"] }

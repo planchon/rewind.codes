@@ -1,9 +1,9 @@
 //! Events and journal entries, v1.
 
 use rewind_core::{
-    AbortKind, AbortReason, Annotation, Callsite, CancelReason, Command, Completion, Digest, Epoch,
-    Event, HistoryEntry, Lifecycle, LogLevel, Payload, RunMode, RunStarted, ScriptError, Seed, Seq,
-    Timestamp, ToolFailure, ToolFailureKind, canonical_json,
+    AbortKind, AbortReason, ActionFailure, ActionFailureKind, Annotation, Callsite, CancelReason,
+    Command, Completion, Digest, Epoch, Event, HistoryEntry, Lifecycle, LogLevel, Payload, RunMode,
+    RunStarted, ScriptError, Seed, Seq, Timestamp, canonical_json,
 };
 use serde::de::Deserializer;
 use serde::ser::{Error as _, Serializer};
@@ -39,9 +39,9 @@ pub(crate) enum EventV1 {
         reason: AbortReasonV1,
     },
     // Commands
-    ScheduleToolCall {
+    ScheduleCall {
         seq: u32,
-        tool: String,
+        action: String,
         args: PayloadV1,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         callsite: Option<CallsiteV1>,
@@ -63,13 +63,13 @@ pub(crate) enum EventV1 {
         error: ScriptErrorV1,
     },
     // Completions
-    ToolCallCompleted {
+    CallCompleted {
         seq: u32,
         result: PayloadV1,
     },
-    ToolCallFailed {
+    CallFailed {
         seq: u32,
-        error: ToolFailureV1,
+        error: ActionFailureV1,
     },
     TimerFired {
         seq: u32,
@@ -166,8 +166,8 @@ pub(crate) struct ScriptErrorV1 {
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct ToolFailureV1 {
-    kind: ToolFailureKindV1,
+pub(crate) struct ActionFailureV1 {
+    kind: ActionFailureKindV1,
     message: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     data: Option<CanonicalJson>,
@@ -175,7 +175,7 @@ pub(crate) struct ToolFailureV1 {
 
 #[derive(Serialize, Deserialize, Clone, Copy)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum ToolFailureKindV1 {
+pub(crate) enum ActionFailureKindV1 {
     Error,
     Unavailable,
     Timeout,
@@ -262,14 +262,14 @@ impl From<&Event> for EventV1 {
 impl From<&Command> for EventV1 {
     fn from(command: &Command) -> Self {
         match command {
-            Command::ScheduleToolCall {
+            Command::ScheduleCall {
                 seq,
-                tool,
+                action,
                 args,
                 callsite,
-            } => EventV1::ScheduleToolCall {
+            } => EventV1::ScheduleCall {
                 seq: seq.0,
-                tool: tool.clone(),
+                action: action.clone(),
                 args: args.into(),
                 callsite: callsite.map(Into::into),
             },
@@ -302,11 +302,11 @@ impl From<&Command> for EventV1 {
 impl From<&Completion> for EventV1 {
     fn from(completion: &Completion) -> Self {
         match completion {
-            Completion::ToolCallCompleted { seq, result } => EventV1::ToolCallCompleted {
+            Completion::CallCompleted { seq, result } => EventV1::CallCompleted {
                 seq: seq.0,
                 result: result.into(),
             },
-            Completion::ToolCallFailed { seq, error } => EventV1::ToolCallFailed {
+            Completion::CallFailed { seq, error } => EventV1::CallFailed {
                 seq: seq.0,
                 error: error.into(),
             },
@@ -361,8 +361,8 @@ impl From<&Payload> for PayloadV1 {
     }
 }
 
-impl From<&ToolFailure> for ToolFailureV1 {
-    fn from(failure: &ToolFailure) -> Self {
+impl From<&ActionFailure> for ActionFailureV1 {
+    fn from(failure: &ActionFailure) -> Self {
         Self {
             kind: failure.kind.into(),
             message: failure.message.clone(),
@@ -401,13 +401,13 @@ impl From<Callsite> for CallsiteV1 {
     }
 }
 
-impl From<ToolFailureKind> for ToolFailureKindV1 {
-    fn from(kind: ToolFailureKind) -> Self {
+impl From<ActionFailureKind> for ActionFailureKindV1 {
+    fn from(kind: ActionFailureKind) -> Self {
         match kind {
-            ToolFailureKind::Error => ToolFailureKindV1::Error,
-            ToolFailureKind::Unavailable => ToolFailureKindV1::Unavailable,
-            ToolFailureKind::Timeout => ToolFailureKindV1::Timeout,
-            ToolFailureKind::OutcomeUnknown => ToolFailureKindV1::OutcomeUnknown,
+            ActionFailureKind::Error => ActionFailureKindV1::Error,
+            ActionFailureKind::Unavailable => ActionFailureKindV1::Unavailable,
+            ActionFailureKind::Timeout => ActionFailureKindV1::Timeout,
+            ActionFailureKind::OutcomeUnknown => ActionFailureKindV1::OutcomeUnknown,
         }
     }
 }
@@ -456,14 +456,14 @@ impl TryFrom<EventV1> for Event {
                     message: reason.message,
                 }))
             }
-            EventV1::ScheduleToolCall {
+            EventV1::ScheduleCall {
                 seq,
-                tool,
+                action,
                 args,
                 callsite,
-            } => Event::Command(Command::ScheduleToolCall {
+            } => Event::Command(Command::ScheduleCall {
                 seq: Seq(seq),
-                tool,
+                action,
                 args: args.try_into()?,
                 callsite: callsite.map(Into::into),
             }),
@@ -489,18 +489,16 @@ impl TryFrom<EventV1> for Event {
                     stack: error.stack,
                 },
             }),
-            EventV1::ToolCallCompleted { seq, result } => {
-                Event::Completion(Completion::ToolCallCompleted {
+            EventV1::CallCompleted { seq, result } => {
+                Event::Completion(Completion::CallCompleted {
                     seq: Seq(seq),
                     result: result.try_into()?,
                 })
             }
-            EventV1::ToolCallFailed { seq, error } => {
-                Event::Completion(Completion::ToolCallFailed {
-                    seq: Seq(seq),
-                    error: error.into(),
-                })
-            }
+            EventV1::CallFailed { seq, error } => Event::Completion(Completion::CallFailed {
+                seq: Seq(seq),
+                error: error.into(),
+            }),
             EventV1::TimerFired { seq } => {
                 Event::Completion(Completion::TimerFired { seq: Seq(seq) })
             }
@@ -549,8 +547,8 @@ impl TryFrom<PayloadV1> for Payload {
     }
 }
 
-impl From<ToolFailureV1> for ToolFailure {
-    fn from(dto: ToolFailureV1) -> Self {
+impl From<ActionFailureV1> for ActionFailure {
+    fn from(dto: ActionFailureV1) -> Self {
         Self {
             kind: dto.kind.into(),
             message: dto.message,
@@ -589,13 +587,13 @@ impl From<CallsiteV1> for Callsite {
     }
 }
 
-impl From<ToolFailureKindV1> for ToolFailureKind {
-    fn from(kind: ToolFailureKindV1) -> Self {
+impl From<ActionFailureKindV1> for ActionFailureKind {
+    fn from(kind: ActionFailureKindV1) -> Self {
         match kind {
-            ToolFailureKindV1::Error => ToolFailureKind::Error,
-            ToolFailureKindV1::Unavailable => ToolFailureKind::Unavailable,
-            ToolFailureKindV1::Timeout => ToolFailureKind::Timeout,
-            ToolFailureKindV1::OutcomeUnknown => ToolFailureKind::OutcomeUnknown,
+            ActionFailureKindV1::Error => ActionFailureKind::Error,
+            ActionFailureKindV1::Unavailable => ActionFailureKind::Unavailable,
+            ActionFailureKindV1::Timeout => ActionFailureKind::Timeout,
+            ActionFailureKindV1::OutcomeUnknown => ActionFailureKind::OutcomeUnknown,
         }
     }
 }

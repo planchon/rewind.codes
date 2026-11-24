@@ -1,7 +1,7 @@
 //! Where a server's MCP client goes (`archi/04-tools.md`, "Action sets and code generation";
 //! `archi/06-storage-and-scale.md`, "Security"). The MCP servers of these tests listen on
 //! 127.0.0.1: for a deployed server, an internal service, refused unless the operator allows it
-//! (`--allow-internal-tools`), and never quoted to the tenant once allowed. The embedded server
+//! (`--allow-internal-addresses`), and never quoted to the tenant once allowed. The embedded server
 //! reaches any address.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -29,7 +29,7 @@ use rmcp::transport::streamable_http_server::{
 use serde_json::json;
 use support::TestServer;
 
-/// An MCP server with one tool, `find`, counting the sessions opened.
+/// An MCP server with one action, `find`, counting the sessions opened.
 #[derive(Debug, Clone, Default)]
 struct Finder {
     sessions: Arc<AtomicUsize>,
@@ -142,14 +142,14 @@ async fn a_deployed_server_refuses_mcp_servers_on_internal_addresses() {
 async fn an_operator_allows_internal_mcp_servers_whose_answers_stay_unquoted() {
     let finder = Finder::default();
     let (url, admin) = serve(finder.clone()).await;
-    let server = TestServer::start(&["--allow-internal-tools", "127.0.0.1"]).await;
+    let server = TestServer::start(&["--allow-internal-addresses", "127.0.0.1"]).await;
     let harness = server.key(BuiltInRole::Harness, &[]).await;
 
     let registered = harness.create_action_set(&action_set(&url)).await.unwrap();
     let names: Vec<&str> = registered
-        .tools
+        .actions
         .iter()
-        .map(|tool| tool.name.as_str())
+        .map(|action| action.name.as_str())
         .collect();
     assert_eq!(names, ["finder.find", "webhook"]);
     assert_eq!(finder.sessions.load(Ordering::SeqCst), 1);
@@ -186,7 +186,7 @@ async fn the_embedded_server_reaches_mcp_servers_anywhere() {
     let client = Client::embedded(running.socket().unwrap()).unwrap();
 
     let registered = client.create_action_set(&action_set(&url)).await.unwrap();
-    assert_eq!(registered.tools.len(), 2);
+    assert_eq!(registered.actions.len(), 2);
     assert_eq!(finder.sessions.load(Ordering::SeqCst), 1);
     // Its developer reads what their own server answered.
     let refused = problem(

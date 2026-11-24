@@ -15,7 +15,7 @@
 //! | [`Edge::signal`], [`Edge::cancel`], [`Edge::webhook`] | NUL characters | the run, its workflow's signals, the signal key |
 //! | [`Edge::release`], [`Edge::give_up`], [`Edge::erase`] | | the quarantine, the archive, the records |
 //! | [`Edge::complete_task`], [`Edge::fail_task`], [`Edge::defer_task`], [`Edge::approve_task`], [`Edge::reject_task`] | the token's run | the task's state |
-//! | [`Edge::get_run`], [`Edge::find_run`], [`Edge::history`], [`Edge::export_journal`], [`Edge::tool_tasks`] | | the partition, or the archive |
+//! | [`Edge::get_run`], [`Edge::find_run`], [`Edge::history`], [`Edge::export_journal`], [`Edge::call_tasks`] | | the partition, or the archive |
 //! | [`Edge::search`], [`Edge::statistics`], [`Edge::series`], [`Edge::usage`], [`Edge::shapes`] | the partitions of the scope, merged | each partition's index and counters |
 //! | [`Edge::quota_alerts`] | | the owner of the tenant's home partition, from its organization actor |
 //! | [`Edge::trace`], [`Edge::trace_entry`] | | the run's head and history |
@@ -48,10 +48,10 @@ use crate::ports::link::{
     SignalAtOwner, StartAtOwner, TaskAnswer,
 };
 use crate::ports::{
-    BlobOwner, CatalogStore, Clock, Counters, Created, Enqueued, Entropy, Found, Gauges, Month,
-    NamespaceName, NamespaceWrite, Page, QuotaAlert, RunOrder, RunQuery, RunRef, RunWorkflow,
-    Scope, ScriptExecutor, SearchPosition, StoreError, TaskRecord, TaskRef, TaskToken, TenantId,
-    ToolTask, TypeChecker, Usage, Window, home_partition, namespace_partition,
+    BlobOwner, CallTask, CatalogStore, Clock, Counters, Created, Enqueued, Entropy, Found, Gauges,
+    Month, NamespaceName, NamespaceWrite, Page, QuotaAlert, RunOrder, RunQuery, RunRef,
+    RunWorkflow, Scope, ScriptExecutor, SearchPosition, StoreError, TaskRecord, TaskRef, TaskToken,
+    TenantId, TypeChecker, Usage, Window, home_partition, namespace_partition,
 };
 use crate::start::{StartError, StartRun, refuse_nul_in_metadata, type_check};
 use crate::text::{self, NulCharacter};
@@ -628,7 +628,7 @@ impl<P: Plane> Edge<P> {
         if attachments.is_empty() && action_set.taking_secrets().next().is_none() {
             return Ok(());
         }
-        let imports = self.plane.executor().tool_imports(script);
+        let imports = self.plane.executor().action_imports(script);
         let check = AttachmentCheck {
             tenant,
             namespace: Some(namespace),
@@ -825,7 +825,7 @@ impl<P: Plane> Edge<P> {
         self.decide(gateway, task, Decision::Approve).await
     }
 
-    /// Refuses a task that waits for the harness: the call fails with a `ToolError`.
+    /// Refuses a task that waits for the harness: the call fails with an `ActionError`.
     pub async fn reject_task<G: Gateway>(
         &self,
         gateway: &mut G,
@@ -852,12 +852,12 @@ impl<P: Plane> Edge<P> {
         }
     }
 
-    /// The run's tool tasks, by seq.
-    pub async fn tool_tasks<G: Gateway>(
+    /// The run's call tasks, by seq.
+    pub async fn call_tasks<G: Gateway>(
         &self,
         gateway: &mut G,
         run: &RunRef,
-    ) -> Result<Vec<ToolTask>, EdgeError> {
+    ) -> Result<Vec<CallTask>, EdgeError> {
         Ok(self
             .task_records(gateway, run)
             .await?
@@ -866,7 +866,7 @@ impl<P: Plane> Edge<P> {
             .collect())
     }
 
-    /// The run's tool tasks as its partition keeps them.
+    /// The run's call tasks as its partition keeps them.
     pub async fn task_records<G: Gateway>(
         &self,
         gateway: &mut G,
@@ -1000,7 +1000,7 @@ impl<P: Plane> Edge<P> {
     }
 
     /// Replays a run's journal with its script, or another one, on this node's executor:
-    /// whether it reproduces the history. Nothing is written and no tool is called.
+    /// whether it reproduces the history. Nothing is written and no action is called.
     pub async fn replay<G: Gateway>(
         &self,
         gateway: &mut G,
@@ -1218,28 +1218,28 @@ impl<P: Plane> Edge<P> {
         }
     }
 
-    /// The shapes observed for some tools, merged from the partitions of the scope.
+    /// The shapes observed for some actions, merged from the partitions of the scope.
     pub async fn shapes<G: Gateway>(
         &self,
         gateway: &mut G,
         scope: &Scope,
-        tools: &[String],
+        actions: &[String],
     ) -> Result<BTreeMap<String, Shape>, EdgeError> {
         let mut merged: BTreeMap<String, Shape> = BTreeMap::new();
         for partition in self.partitions_of(scope).await? {
             let request = PartitionRequest::Shapes {
                 tenant: scope.tenant().clone(),
                 namespace: scope.namespace().cloned(),
-                tools: tools.to_vec(),
+                actions: actions.to_vec(),
             };
             match ask(gateway, partition, request).await? {
                 PartitionReply::Shapes(shapes) => {
-                    for (tool, shape) in shapes? {
-                        let shape = match merged.remove(&tool) {
+                    for (action, shape) in shapes? {
+                        let shape = match merged.remove(&action) {
                             Some(known) => known.merge(shape),
                             None => shape,
                         };
-                        merged.insert(tool, shape);
+                        merged.insert(action, shape);
                     }
                 }
                 other => return Err(unexpected(&other)),

@@ -495,12 +495,12 @@ impl<A: Api> Session<'_, A> {
         Ok(result(content, false))
     }
 
-    pub(crate) async fn search_tools(&self, input: &Values) -> Handled {
+    pub(crate) async fn search_actions(&self, input: &Values) -> Handled {
         let query = require_string(input, "query")?;
-        let action_set = self.needs_action_set("search_tools")?;
+        let action_set = self.needs_action_set("search_actions")?;
         let found = self
             .api
-            .search_tools(
+            .search_actions(
                 &action_set,
                 &SearchQuery {
                     query: query.clone(),
@@ -508,7 +508,7 @@ impl<A: Api> Session<'_, A> {
                 },
             )
             .await?;
-        Ok(result(describe_matches(&query, &found.tools), false))
+        Ok(result(describe_matches(&query, &found.actions), false))
     }
 
     /// `POST /v1/workflows` with the session's action set. The workflow, or what the model reads of
@@ -769,7 +769,7 @@ fn has_labels(labels: &Labels, required: &BTreeMap<String, String>) -> bool {
 /// How the agent tools of the SDK's set behave: the SDK's `AgentToolsOptions`.
 #[derive(Debug, Clone)]
 pub struct AgentOptions {
-    /// The action set the model's scripts import from `rewind:tools`. `search_tools`,
+    /// The action set the model's scripts import from `rewind:actions`. `search_actions`,
     /// `save_workflow`, `get_workflow` and `record_tests` need one. Each workflow
     /// `save_workflow` saves derives a new action set from it, which the later calls use.
     pub action_set: Option<String>,
@@ -914,7 +914,7 @@ impl<A: Api> AgentTools<A> {
                 "signal_run" => session.signal_run(&values).await,
                 "cancel_run" => session.cancel_run(&values).await,
                 "retry_run" => session.retry_run(&values).await,
-                "search_tools" => session.search_tools(&values).await,
+                "search_actions" => session.search_actions(&values).await,
                 "list_secrets" => {
                     let namespace = self.api.namespace();
                     session.list_secrets(namespace.as_deref()).await

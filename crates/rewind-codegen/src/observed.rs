@@ -36,7 +36,7 @@ pub(crate) fn type_of(shape: &Shape) -> Ty {
     }
 }
 
-/// What an MCP tool without an output schema returned in `structuredContent`, when its
+/// What an MCP action without an output schema returned in `structuredContent`, when its
 /// recorded results had some: the result itself is the content, and `json()` returns this.
 pub(crate) fn structured_content(shape: &Shape) -> Option<&Shape> {
     let object = match shape {

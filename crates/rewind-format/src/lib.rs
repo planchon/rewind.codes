@@ -9,7 +9,7 @@
 //! Seven documents are defined (`archi/02-journal.md`, "Stored format v1"):
 //!
 //! - one **event**, as stored in a row (`history.event`, `inbox.event`):
-//!   `{"v":1,"type":"schedule_tool_call","seq":1,…}`;
+//!   `{"v":1,"type":"schedule_call","seq":1,…}`;
 //! - a **journal document** (exports, the archive of a finished run, the epoch corpus):
 //!   `{"v":1,"run":"…","script":"…","action_set":{…},"entries":[{"index":0,"recorded_at":…,
 //!   "event":{"type":"run_started",…}},…]}`: the run's id, its TypeScript source, its pinned
@@ -17,7 +17,7 @@
 //!   readable. It replays on its own;
 //! - a **cassette** (mocks recorded from a run, replayed by `rewind test`):
 //!   `{"v":1,"matching":"sequential","calls":[…],"signals":[…]}`, one call or signal per line;
-//! - a **pinned action set** (the `action_sets` table): `{"servers":[…],"tools":[…],"v":1}`, with
+//! - a **pinned action set** (the `action_sets` table): `{"servers":[…],"actions":[…],"v":1}`, with
 //!   `"apis":[…]` when it calls APIs, a server's or an API's `"auth":{…}` when its calls carry a
 //!   secret or a signature, and `"workflows":[…]` when it pins workflows, in its canonical form,
 //!   so that its bytes hash to the action set's digest;
@@ -196,7 +196,7 @@ pub fn encode_action_set(action_set: &ActionSet) -> String {
     canonical_json(&v1::action_set_document(action_set))
 }
 
-/// Decodes a pinned action set document, of any supported version. Servers and tools may come in
+/// Decodes a pinned action set document, of any supported version. Servers and actions may come in
 /// any order, and the action set's invariants are checked ([`ActionSet::new`]).
 pub fn decode_action_set(json: &str) -> Result<ActionSet, FormatError> {
     let mut object = parse_object(json)?;
@@ -234,7 +234,7 @@ pub fn test_digest(test: &Test) -> Digest {
     Digest::of(encode_test(test).as_bytes())
 }
 
-/// Decodes a test document, of any supported version. A tool's single rule may be given without
+/// Decodes a test document, of any supported version. An action's single rule may be given without
 /// its array, and the test's invariants are checked ([`Test::check`]).
 pub fn decode_test(json: &str) -> Result<Test, FormatError> {
     let mut object = parse_object(json)?;

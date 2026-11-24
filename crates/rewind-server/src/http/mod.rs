@@ -98,7 +98,7 @@ pub(crate) fn router(app: Arc<App>, socket: bool, mcp: Option<Router>) -> Router
             post(subscriptions::create).get(subscriptions::list),
         )
         .route(routes::SUBSCRIPTION, delete(subscriptions::delete))
-        .route(routes::TOOL_STATS, get(stats::tools))
+        .route(routes::ACTION_STATS, get(stats::actions))
         .route(routes::PAYLOAD, get(reading::payload))
         .route(
             routes::API_KEYS,

@@ -97,7 +97,7 @@ pub struct DailyReads {
 }
 
 /// The last read of a secret: by which run, of which namespace, when. An action set's registration
-/// reads an organization's secret to list the tools of the MCP server it is attached for, before
+/// reads an organization's secret to list the actions of the MCP server it is attached for, before
 /// any run exists: such a read names neither run nor namespace.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]

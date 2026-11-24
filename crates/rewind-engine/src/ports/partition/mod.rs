@@ -11,7 +11,7 @@
 //! ```
 //!
 //! A partition holds, for each run of its namespaces: its head, its history per attempt, its
-//! inbox, its signal keys, its tool tasks, its timers, its payload records, its watchers, its
+//! inbox, its signal keys, its call tasks, its timers, its payload records, its watchers, its
 //! webhook tokens, its summary in the run index, and its start key; and for the partition: the
 //! counters, the outbox, and the states of the organizations homed there. The keys they are
 //! stored under belong to the adapter: the engine never composes one.
@@ -29,8 +29,8 @@ use std::num::NonZeroU16;
 use rewind_core::{Digest, HistoryEntry, PartitionId, RunId, Seq, Shape, Timestamp};
 
 pub use counters::{
-    CounterDelta, Counters, FailureCounts, Gauges, Hour, LATEST_RUNS, LatestRun, RunCounts, Scope,
-    ScriptCounts, Sketch, ToolCounts, Window,
+    ActionCounts, CounterDelta, Counters, FailureCounts, Gauges, Hour, LATEST_RUNS, LatestRun,
+    RunCounts, Scope, ScriptCounts, Sketch, Window,
 };
 pub use outbox::{Admission, OrganizationState, OutboxChange, OutboxEntry, OutboxId, Projection};
 pub use run::{Attempt, RunHead, TaskChange, TaskRecord, Watcher};
@@ -103,12 +103,12 @@ pub trait PartitionStore: Send + Sync {
 /// - **Signal keys.** An `Enqueue` with a signal key already seen for that run, or recorded by a
 ///   `SignalKey`, changes nothing.
 /// - **Ends.** A terminal `Activation` (its head's status is terminal) clears the run's timers
-///   of the attempt, tool tasks and inbox, and its webhook tokens stop resolving; nothing is
+///   of the attempt, call tasks and inbox, and its webhook tokens stop resolving; nothing is
 ///   enqueued for an ended attempt (an `Enqueue` changes nothing).
 /// - **Activations** write, with the entries, the payload records of the payloads that left the
 ///   events, the run's head and summary, its index entries, the counters it moves and its
 ///   outbox entries.
-/// - **Seal and erase.** `Seal` deletes the attempt's history, inbox, tool tasks and payload
+/// - **Seal and erase.** `Seal` deletes the attempt's history, inbox, call tasks and payload
 ///   records, and keeps the run's head (sealed), summary, index entries and signal keys: a key
 ///   is kept for the life of the run, so a late retry of a signal is acknowledged
 ///   (`archi/06-storage-and-scale.md`, "Idempotency of the API"). `Erase` deletes everything of
@@ -170,7 +170,7 @@ pub trait PartitionLog: Send + Sync {
         run: &RunRef,
     ) -> impl Future<Output = Result<Vec<InboxItem>, PartitionError>> + Send;
 
-    /// The run's tool tasks, by seq.
+    /// The run's call tasks, by seq.
     fn tasks(
         &self,
         run: &RunRef,
@@ -237,13 +237,13 @@ pub trait PartitionLog: Send + Sync {
 
     fn gauges(&self, scope: &Scope) -> impl Future<Output = Result<Gauges, PartitionError>> + Send;
 
-    /// The shapes observed in the results of these tools, in a namespace or across the
+    /// The shapes observed in the results of these actions, in a namespace or across the
     /// tenant's, for those observed at least once.
     fn shapes(
         &self,
         tenant: &TenantId,
         namespace: Option<&NamespaceName>,
-        tools: &[String],
+        actions: &[String],
     ) -> impl Future<Output = Result<BTreeMap<String, Shape>, PartitionError>> + Send;
 
     /// The state of an organization homed in the partition.
@@ -268,7 +268,7 @@ pub struct Recovery {
     pub quarantined: Vec<RunHead>,
     /// The timers due before the horizon, in order.
     pub timers: Vec<DueTimer>,
-    /// The tool tasks `ready`, `deferred` or waiting for their approval, by run and seq.
+    /// The call tasks `ready`, `deferred` or waiting for their approval, by run and seq.
     pub tasks: Vec<TaskRecord>,
     /// The attempts that ended and are not sealed, by run.
     pub unsealed: Vec<(RunRef, Attempt)>,
@@ -339,7 +339,7 @@ pub enum Change {
         key: String,
     },
     Activation(Box<Activation>),
-    /// Writes or deletes one tool task. Changes nothing for an ended attempt.
+    /// Writes or deletes one call task. Changes nothing for an ended attempt.
     Task {
         run: RunRef,
         seq: Seq,
@@ -400,7 +400,7 @@ pub enum Change {
         erased: NamespaceName,
     },
     /// Writes the run's summary in the index as it is now, outside an activation: what its
-    /// waits' tool tasks became (approved, parked, deferred, in flight again). A change to a run
+    /// waits' call tasks became (approved, parked, deferred, in flight again). A change to a run
     /// that does not exist or has been erased is refused, as any other.
     Summary {
         run: RunRef,
@@ -450,7 +450,7 @@ pub struct Activation {
     pub consumed: Vec<u64>,
     /// The payloads that left the entries: digest, size, preview, the value up to 64 KiB.
     pub payloads: Vec<PayloadRecord>,
-    /// The tool tasks the new calls created.
+    /// The call tasks the new calls created.
     pub tasks: Vec<TaskRecord>,
     pub timers: Vec<TimerChange>,
     /// The run's head after the activation, written as it is but for `history_len` and

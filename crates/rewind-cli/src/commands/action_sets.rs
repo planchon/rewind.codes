@@ -26,19 +26,19 @@ pub(super) async fn action_sets(
             } else {
                 console.line(format!("action set {}", action_set.id));
                 let mut rows = vec![[
-                    "TOOL".to_owned(),
+                    "ACTION".to_owned(),
                     "ROUTE".to_owned(),
                     "DESCRIPTION".to_owned(),
                 ]];
-                for tool in &action_set.tools {
-                    let route = match tool.route {
-                        Route::Mcp => format!("mcp {}", tool.server.as_deref().unwrap_or("")),
-                        Route::Api => format!("api {}", tool.api.as_deref().unwrap_or("")),
+                for action in &action_set.actions {
+                    let route = match action.route {
+                        Route::Mcp => format!("mcp {}", action.server.as_deref().unwrap_or("")),
+                        Route::Api => format!("api {}", action.api.as_deref().unwrap_or("")),
                         Route::Host => "host".to_owned(),
                         Route::Builtin => "built-in".to_owned(),
                     };
-                    let description = tool.description.lines().next().unwrap_or("").to_owned();
-                    rows.push([tool.name.clone(), route, description]);
+                    let description = action.description.lines().next().unwrap_or("").to_owned();
+                    rows.push([action.name.clone(), route, description]);
                 }
                 console.text(&render::table(&rows));
             }
@@ -59,15 +59,15 @@ pub(super) async fn action_sets(
         ActionSetsCommand::Search { id, query, limit } => {
             let client = server.client().await?;
             let results = client
-                .search_tools(&id, &SearchQuery { query, limit })
+                .search_actions(&id, &SearchQuery { query, limit })
                 .await?;
             if console.json() {
                 console.print_json(&results)?;
-            } else if results.tools.is_empty() {
-                console.line("no tool matches");
+            } else if results.actions.is_empty() {
+                console.line("no action matches");
             } else {
-                for tool in &results.tools {
-                    console.line(&tool.prompt);
+                for action in &results.actions {
+                    console.line(&action.prompt);
                 }
             }
         }

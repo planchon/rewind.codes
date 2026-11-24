@@ -242,7 +242,7 @@ impl ToSchema for Duration {
 /// model to the same size.
 pub const PAYLOAD_VALUE_LIMIT: u64 = 256 * 1024;
 
-/// A JSON value carried by a run (its input and output, tool arguments and results, signal
+/// A JSON value carried by a run (its input and output, action arguments and results, signal
 /// payloads), identified by the SHA-256 of its canonical JSON (RFC 8785).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
@@ -315,9 +315,9 @@ pub(crate) fn present<'de, D: Deserializer<'de>>(
 pub enum RunStatus {
     /// Started, not activated yet.
     Pending,
-    /// Running, or waiting for tool calls, timers or signals.
+    /// Running, or waiting for calls, timers or signals.
     Active,
-    /// `main` returned and every tool call settled.
+    /// `main` returned and every call settled.
     Completed,
     /// The script failed.
     Failed,
@@ -376,7 +376,7 @@ impl From<rewind_core::RunStatus> for RunStatus {
     }
 }
 
-/// `live`: tools are really called and time is real. `mock`: tools are answered by cassettes
+/// `live`: actions are really called and time is real. `mock`: actions are answered by cassettes
 /// and mocks, and time is virtual.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
@@ -438,18 +438,18 @@ impl From<&rewind_core::ScriptError> for ScriptError {
     }
 }
 
-/// How a tool call failed, as the script sees it (a thrown `ToolError`).
+/// How a call failed, as the script sees it (a thrown `ActionError`).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct ToolFailure {
-    pub kind: ToolFailureKind,
+pub struct ActionFailure {
+    pub kind: ActionFailureKind,
     pub message: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub data: Option<Value>,
 }
 
-impl From<&rewind_core::ToolFailure> for ToolFailure {
-    fn from(failure: &rewind_core::ToolFailure) -> Self {
+impl From<&rewind_core::ActionFailure> for ActionFailure {
+    fn from(failure: &rewind_core::ActionFailure) -> Self {
         Self {
             kind: failure.kind.into(),
             message: failure.message.clone(),
@@ -460,35 +460,35 @@ impl From<&rewind_core::ToolFailure> for ToolFailure {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
-pub enum ToolFailureKind {
-    /// The tool ran and reported an error.
+pub enum ActionFailureKind {
+    /// The action ran and reported an error.
     Error,
-    /// The tool could not be reached, after retries.
+    /// The action could not be reached, after retries.
     Unavailable,
-    /// The tool did not answer in time.
+    /// The action did not answer in time.
     Timeout,
-    /// The call may or may not have taken effect (`ToolError.outcomeUnknown`).
+    /// The call may or may not have taken effect (`ActionError.outcomeUnknown`).
     OutcomeUnknown,
 }
 
-impl From<ToolFailureKind> for rewind_core::ToolFailureKind {
-    fn from(kind: ToolFailureKind) -> Self {
+impl From<ActionFailureKind> for rewind_core::ActionFailureKind {
+    fn from(kind: ActionFailureKind) -> Self {
         match kind {
-            ToolFailureKind::Error => rewind_core::ToolFailureKind::Error,
-            ToolFailureKind::Unavailable => rewind_core::ToolFailureKind::Unavailable,
-            ToolFailureKind::Timeout => rewind_core::ToolFailureKind::Timeout,
-            ToolFailureKind::OutcomeUnknown => rewind_core::ToolFailureKind::OutcomeUnknown,
+            ActionFailureKind::Error => rewind_core::ActionFailureKind::Error,
+            ActionFailureKind::Unavailable => rewind_core::ActionFailureKind::Unavailable,
+            ActionFailureKind::Timeout => rewind_core::ActionFailureKind::Timeout,
+            ActionFailureKind::OutcomeUnknown => rewind_core::ActionFailureKind::OutcomeUnknown,
         }
     }
 }
 
-impl From<rewind_core::ToolFailureKind> for ToolFailureKind {
-    fn from(kind: rewind_core::ToolFailureKind) -> Self {
+impl From<rewind_core::ActionFailureKind> for ActionFailureKind {
+    fn from(kind: rewind_core::ActionFailureKind) -> Self {
         match kind {
-            rewind_core::ToolFailureKind::Error => ToolFailureKind::Error,
-            rewind_core::ToolFailureKind::Unavailable => ToolFailureKind::Unavailable,
-            rewind_core::ToolFailureKind::Timeout => ToolFailureKind::Timeout,
-            rewind_core::ToolFailureKind::OutcomeUnknown => ToolFailureKind::OutcomeUnknown,
+            rewind_core::ActionFailureKind::Error => ActionFailureKind::Error,
+            rewind_core::ActionFailureKind::Unavailable => ActionFailureKind::Unavailable,
+            rewind_core::ActionFailureKind::Timeout => ActionFailureKind::Timeout,
+            rewind_core::ActionFailureKind::OutcomeUnknown => ActionFailureKind::OutcomeUnknown,
         }
     }
 }

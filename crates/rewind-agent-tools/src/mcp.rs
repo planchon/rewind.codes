@@ -144,7 +144,7 @@ impl McpTools {
             _ => {}
         }
         let action_set = match name {
-            "search_tools" => Some(require_action_set(values)?),
+            "search_actions" => Some(require_action_set(values)?),
             "check_script" | "test_script" | "run_script" => optional_string(values, "action_set")?,
             _ => None,
         };
@@ -163,7 +163,7 @@ impl McpTools {
                 let namespace = optional_string(values, "namespace")?;
                 session.list_secrets(namespace.as_deref()).await
             }
-            "search_tools" => session.search_tools(values).await,
+            "search_actions" => session.search_actions(values).await,
             "check_script" => session.check_script(values).await,
             "test_script" => session.test_script(values).await,
             "run_script" => session.run_script(values).await,

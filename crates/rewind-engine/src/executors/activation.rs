@@ -24,8 +24,8 @@ use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
 use rewind_core::{
-    AbortKind, AbortReason, Completion, Digest, Event, HistoryEntry, JsonValue, Lifecycle, RunEnd,
-    RunOutcome, RunState, Timestamp, ToolFailure, ToolFailureKind,
+    AbortKind, AbortReason, ActionFailure, ActionFailureKind, Completion, Digest, Event,
+    HistoryEntry, JsonValue, Lifecycle, RunEnd, RunOutcome, RunState, Timestamp,
 };
 
 use crate::batch::EngineError;
@@ -566,9 +566,9 @@ async fn commit<P: Plane, B: BlobStore>(
     )
     .await?;
     let (new_tasks, timers) = derive::effects_of(head, history, from, state, action_set, now)
-        .map_err(|tool| EngineError::UnknownTool {
+        .map_err(|action| EngineError::UnknownAction {
             run_id: run.id,
-            tool,
+            action,
         })?;
     let mut by_seq: BTreeMap<_, _> = tasks
         .iter()
@@ -686,15 +686,15 @@ where
         return Ok(None);
     };
     let unknown = followed.unknown.into_iter().map(|seq| {
-        let error = ToolFailure {
-            kind: ToolFailureKind::OutcomeUnknown,
+        let error = ActionFailure {
+            kind: ActionFailureKind::OutcomeUnknown,
             message: format!(
-                "the parent run {parent_id} left this call without an outcome, and the tool's \
+                "the parent run {parent_id} left this call without an outcome, and the action's \
                  policy is at_most_once: it may or may not have taken effect"
             ),
             data: None,
         };
-        Completion::ToolCallFailed { seq, error }
+        Completion::CallFailed { seq, error }
     });
     for completion in followed.reused.into_iter().chain(unknown) {
         if batch.state.is_terminal() {

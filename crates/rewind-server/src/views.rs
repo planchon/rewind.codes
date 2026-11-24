@@ -52,9 +52,9 @@ pub(crate) fn parse_task_id(tenant: &TenantId, id: &str) -> Option<TaskRef> {
 pub(crate) fn payload_of(event: &Event) -> Option<&rewind_core::Payload> {
     match event {
         Event::Lifecycle(Lifecycle::RunStarted(started)) => Some(&started.input),
-        Event::Command(Command::ScheduleToolCall { args, .. }) => Some(args),
+        Event::Command(Command::ScheduleCall { args, .. }) => Some(args),
         Event::Command(Command::CompleteRun { output }) => Some(output),
-        Event::Completion(Completion::ToolCallCompleted { result, .. }) => Some(result),
+        Event::Completion(Completion::CallCompleted { result, .. }) => Some(result),
         Event::Completion(Completion::SignalReceived { payload, .. }) => Some(payload),
         _ => None,
     }
@@ -111,7 +111,7 @@ impl Views<'_> {
         self.history_from(run, 0).await
     }
 
-    /// The run's tool tasks, by seq: what its owner records, the calls in flight `claimed`.
+    /// The run's call tasks, by seq: what its owner records, the calls in flight `claimed`.
     pub(crate) async fn tasks(&self, run: &RunRef) -> Result<Vec<TaskRecord>, ApiError> {
         Ok(self
             .app
@@ -398,7 +398,7 @@ fn waiting(
     let mut timers = BTreeMap::new();
     for entry in history {
         match &entry.event {
-            Event::Command(Command::ScheduleToolCall {
+            Event::Command(Command::ScheduleCall {
                 seq,
                 args,
                 callsite,
@@ -422,7 +422,7 @@ fn waiting(
         .map(|record| (record.task.task.seq, &record.task))
         .collect();
     let mut waiting = Vec::new();
-    for (seq, tool) in state.pending_tool_calls() {
+    for (seq, action) in state.pending_calls() {
         let (args, callsite) = calls.get(seq).map_or((None, None), |(args, callsite)| {
             (Some(payload(args)), *callsite)
         });
@@ -442,9 +442,9 @@ fn waiting(
                 }),
             ),
         };
-        waiting.push(Waiting::ToolCall {
+        waiting.push(Waiting::Call {
             seq: seq.0,
-            tool: tool.clone(),
+            action: action.clone(),
             args: args.unwrap_or_else(|| Payload::reference("", 0, "")),
             task_id: task_id(&TaskRef {
                 run: run.clone(),
@@ -548,20 +548,20 @@ fn failed_call(
     payload: &impl Fn(&rewind_core::Payload) -> Payload,
 ) -> Option<FailedCall> {
     let error = history.iter().find_map(|entry| match &entry.event {
-        Event::Completion(Completion::ToolCallFailed { seq: failed, error }) if *failed == seq => {
+        Event::Completion(Completion::CallFailed { seq: failed, error }) if *failed == seq => {
             Some(error)
         }
         _ => None,
     })?;
     history.iter().find_map(|entry| match &entry.event {
-        Event::Command(Command::ScheduleToolCall {
+        Event::Command(Command::ScheduleCall {
             seq: scheduled,
-            tool,
+            action,
             args,
             callsite,
         }) if *scheduled == seq => Some(FailedCall {
             seq: seq.0,
-            tool: tool.clone(),
+            action: action.clone(),
             args: payload(args),
             error: error.into(),
             callsite: callsite.map(Callsite::from),

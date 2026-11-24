@@ -1,12 +1,12 @@
 //! TypeScript mock handlers (`archi/05-testing-and-observability.md`, "Testing and mocks"), as a
-//! [`ToolDispatcher`] for mock mode.
+//! [`ActionDispatcher`] for mock mode.
 //!
 //! The handlers run in an isolate of their own, on a thread of their own: nothing they do can
 //! reach the script's isolate, so they cannot break its determinism, and what they return is
-//! journaled like any tool result. Their isolate is the sandbox of the latest epoch: the same
+//! journaled like any action result. Their isolate is the sandbox of the latest epoch: the same
 //! globals, randomness seeded with zeros, and the time of the clock the dispatcher is given.
 //!
-//! A module of mock handlers imports nothing, and default-exports its handlers, by full tool
+//! A module of mock handlers imports nothing, and default-exports its handlers, by full action
 //! name or by namespace:
 //!
 //! ```ts
@@ -18,11 +18,11 @@
 //! };
 //! ```
 //!
-//! A handler receives the call's arguments and `{ tool, runId, seq, attempt, idempotencyKey }`,
+//! A handler receives the call's arguments and `{ action, runId, seq, attempt, idempotencyKey }`,
 //! and returns the result, or a promise of it. What it throws fails the call, with the error's
 //! message, its `data`, and its `kind`: `error` (the default), `unavailable`, `timeout` or
-//! `outcome_unknown`. A handler cannot wait for anything (no timer, signal or tool): a promise
-//! still pending once its microtasks are drained fails the call. A tool without a handler fails
+//! `outcome_unknown`. A handler cannot wait for anything (no timer, signal or action): a promise
+//! still pending once its microtasks are drained fails the call. An action without a handler fails
 //! with `unavailable`; [`TsMocks::handles`] lets mock mode try another source first. `console`
 //! goes to `tracing`, at the debug level.
 
@@ -32,11 +32,11 @@ use std::sync::{Arc, Mutex, mpsc};
 
 use deno_core::{ModuleSpecifier, PollEventLoopOptions, v8};
 use rewind_core::{
-    ActionSet, Annotation, RunId, Script, Seed, Timestamp, ToolFailure, ToolFailureKind,
+    ActionFailure, ActionFailureKind, ActionSet, Annotation, RunId, Script, Seed, Timestamp,
 };
 use rewind_engine::adapters::VirtualClock;
 use rewind_engine::mock::Mocks as Answering;
-use rewind_engine::ports::{CallAuth, Clock, Dispatched, Emitted, ToolCall, ToolDispatcher};
+use rewind_engine::ports::{ActionDispatcher, Call, CallAuth, Clock, Dispatched, Emitted};
 use rewind_engine::testing::{MockLoadError, MockLoader};
 use serde_json::{Value, json};
 use tokio::sync::oneshot;
@@ -74,8 +74,8 @@ impl MockLoader for TsMockLoader {
                 MockError::Invalid(message) => MockLoadError::Invalid(message),
                 MockError::Internal(message) => MockLoadError::Internal(message),
             })?;
-        let tools = handlers.tools().clone();
-        Ok(Answering { handlers, tools })
+        let actions = handlers.actions().clone();
+        Ok(Answering { handlers, actions })
     }
 }
 
@@ -94,19 +94,19 @@ pub enum MockError {
 pub struct TsMocks {
     // `mpsc::Sender` is `Send` but not `Sync`; the mutex makes the dispatcher `Sync`.
     requests: Mutex<mpsc::Sender<Request>>,
-    tools: BTreeSet<String>,
+    actions: BTreeSet<String>,
 }
 
 impl std::fmt::Debug for TsMocks {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TsMocks")
-            .field("tools", &self.tools)
+            .field("actions", &self.actions)
             .finish_non_exhaustive()
     }
 }
 
 struct Request {
-    tool: String,
+    action: String,
     args: String,
     call: String,
     reply: oneshot::Sender<Dispatched>,
@@ -123,46 +123,48 @@ impl TsMocks {
         let compiled = compile::transpile(source, MOCKS_SPECIFIER)
             .map_err(|invalid| MockError::Invalid(invalid.message))?;
         let (requests, inbox) = mpsc::channel();
-        let (loaded, tools) = oneshot::channel();
+        let (loaded, actions) = oneshot::channel();
         let started_at = clock.now();
         std::thread::Builder::new()
             .name("rewind-mocks".into())
             .stack_size(memory::ISOLATE_THREAD_STACK)
             .spawn(move || serve(compiled, limits, started_at, clock, loaded, inbox))
             .map_err(|err| MockError::Internal(format!("cannot spawn the mock thread: {err}")))?;
-        let tools = tools
+        let actions = actions
             .await
             .map_err(|_| MockError::Internal("the mock thread has stopped".into()))??;
         Ok(Self {
             requests: Mutex::new(requests),
-            tools,
+            actions,
         })
     }
 
-    /// The tools that have a handler, sorted.
-    pub fn tools(&self) -> &BTreeSet<String> {
-        &self.tools
+    /// The actions that have a handler, sorted.
+    pub fn actions(&self) -> &BTreeSet<String> {
+        &self.actions
     }
 
-    /// Whether `tool` has a handler.
-    pub fn handles(&self, tool: &str) -> bool {
-        self.tools.contains(tool)
+    /// Whether `action` has a handler.
+    pub fn handles(&self, action: &str) -> bool {
+        self.actions.contains(action)
     }
 }
 
-impl ToolDispatcher for TsMocks {
-    /// The handler's result or failure. A tool without a handler fails with `unavailable`, for
+impl ActionDispatcher for TsMocks {
+    /// The handler's result or failure. An action without a handler fails with `unavailable`, for
     /// good: retrying would not make one appear.
-    async fn dispatch(&self, call: ToolCall, _auth: CallAuth) -> Dispatched {
-        let tool = call.tool.name.clone();
-        if !self.handles(&tool) {
+    async fn dispatch(&self, call: Call, _auth: CallAuth) -> Dispatched {
+        let action = call.action.name.clone();
+        if !self.handles(&action) {
             return failed(
-                ToolFailureKind::Unavailable,
-                format!("no mock handler for {tool}"),
+                ActionFailureKind::Unavailable,
+                format!("no mock handler for {action}"),
             );
         }
         let context = json!({
-            "tool": tool,
+            "action": action,
+            // The name `action` had, for handlers already written (`archi/08-decisions.md`).
+            "tool": action,
             "runId": call.run.id.to_string(),
             "seq": call.seq.0,
             "attempt": call.attempt,
@@ -170,7 +172,7 @@ impl ToolDispatcher for TsMocks {
         });
         let (reply, answer) = oneshot::channel();
         let request = Request {
-            tool,
+            action,
             args: call.args.to_string(),
             call: context.to_string(),
             reply,
@@ -186,8 +188,8 @@ impl ToolDispatcher for TsMocks {
     }
 }
 
-fn failed(kind: ToolFailureKind, message: String) -> Dispatched {
-    Dispatched::Failed(ToolFailure {
+fn failed(kind: ActionFailureKind, message: String) -> Dispatched {
+    Dispatched::Failed(ActionFailure {
         kind,
         message,
         data: None,
@@ -196,7 +198,7 @@ fn failed(kind: ToolFailureKind, message: String) -> Dispatched {
 
 fn stopped() -> Dispatched {
     failed(
-        ToolFailureKind::Error,
+        ActionFailureKind::Error,
         "the mock handlers have stopped: a previous call exceeded a limit".into(),
     )
 }
@@ -228,7 +230,7 @@ fn serve(
             return;
         }
     };
-    if loaded.send(Ok(mocks.tools.clone())).is_err() {
+    if loaded.send(Ok(mocks.actions.clone())).is_err() {
         return;
     }
     while let Ok(request) = inbox.recv() {
@@ -244,7 +246,7 @@ fn serve(
 struct Mocks {
     isolate: Isolate,
     call: v8::Global<v8::Function>,
-    tools: BTreeSet<String>,
+    actions: BTreeSet<String>,
     dead: bool,
 }
 
@@ -299,7 +301,7 @@ impl Mocks {
             .map_err(|err| MockError::Invalid(err.to_string()))?;
         let namespace = evaluated?;
 
-        let (call, tools) = {
+        let (call, actions) = {
             let runtime = isolate.runtime();
             deno_core::scope!(scope, runtime);
             v8::tc_scope!(let scope, scope);
@@ -323,21 +325,21 @@ impl Mocks {
             let mocks = v8::Local::<v8::Object>::try_from(mocks)
                 .map_err(|err| MockError::Internal(err.to_string()))?;
             let call = crate::isolate::function(scope, mocks, "call").map_err(internal)?;
-            let key = v8::String::new(scope, "tools")
+            let key = v8::String::new(scope, "actions")
                 .ok_or_else(|| MockError::Internal("cannot create a string".into()))?;
-            let tools = mocks
+            let actions = mocks
                 .get(scope, key.into())
-                .and_then(|tools| v8::json::stringify(scope, tools))
+                .and_then(|actions| v8::json::stringify(scope, actions))
                 .map(|json| json.to_rust_string_lossy(scope))
-                .ok_or_else(|| MockError::Internal("the mock tools cannot be read".into()))?;
-            let tools: BTreeSet<String> =
-                serde_json::from_str(&tools).map_err(|err| MockError::Internal(err.to_string()))?;
-            (call, tools)
+                .ok_or_else(|| MockError::Internal("the mock actions cannot be read".into()))?;
+            let actions: BTreeSet<String> = serde_json::from_str(&actions)
+                .map_err(|err| MockError::Internal(err.to_string()))?;
+            (call, actions)
         };
         Ok(Self {
             isolate,
             call,
-            tools,
+            actions,
             dead: false,
         })
     }
@@ -345,10 +347,10 @@ impl Mocks {
     fn call(&mut self, request: &Request, now: Timestamp) -> Dispatched {
         self.isolate.state(|state| state.now = now);
         let answer = self.run(request);
-        self.forward_logs(&request.tool);
+        self.forward_logs(&request.action);
         match answer {
             Ok(dispatched) => dispatched,
-            Err(message) => failed(ToolFailureKind::Error, message),
+            Err(message) => failed(ActionFailureKind::Error, message),
         }
     }
 
@@ -359,15 +361,15 @@ impl Mocks {
             self.dead = true;
             return Err(format!(
                 "the mock handler of {} {}",
-                request.tool,
+                request.action,
                 limit.to_string().trim_start_matches("the script ")
             ));
         }
         let json = settled?.ok_or_else(|| {
             format!(
                 "the mock handler of {} did not settle: mock handlers cannot wait for timers, \
-                 signals or tools",
-                request.tool
+                 signals or actions",
+                request.action
             )
         })?;
         let answer: Value = serde_json::from_str(&json).map_err(|err| err.to_string())?;
@@ -376,12 +378,12 @@ impl Mocks {
         }
         let failure = &answer["failure"];
         let kind = match failure["kind"].as_str() {
-            Some("unavailable") => ToolFailureKind::Unavailable,
-            Some("timeout") => ToolFailureKind::Timeout,
-            Some("outcome_unknown") => ToolFailureKind::OutcomeUnknown,
-            _ => ToolFailureKind::Error,
+            Some("unavailable") => ActionFailureKind::Unavailable,
+            Some("timeout") => ActionFailureKind::Timeout,
+            Some("outcome_unknown") => ActionFailureKind::OutcomeUnknown,
+            _ => ActionFailureKind::Error,
         };
-        Ok(Dispatched::Failed(ToolFailure {
+        Ok(Dispatched::Failed(ActionFailure {
             kind,
             message: failure["message"].as_str().unwrap_or_default().to_owned(),
             data: failure.get("data").cloned().filter(|data| !data.is_null()),
@@ -397,7 +399,7 @@ impl Mocks {
         let call = v8::Local::new(scope, &self.call);
         let receiver = v8::undefined(scope).into();
         let mut args: Vec<v8::Local<v8::Value>> = Vec::with_capacity(3);
-        for arg in [&request.tool, &request.args, &request.call] {
+        for arg in [&request.action, &request.args, &request.call] {
             let arg = v8::String::new(scope, arg).ok_or("the call is too large for V8")?;
             args.push(arg.into());
         }
@@ -420,10 +422,10 @@ impl Mocks {
         }
     }
 
-    fn forward_logs(&mut self, tool: &str) {
+    fn forward_logs(&mut self, action: &str) {
         for emitted in self.isolate.state(ExecState::take_emitted) {
             if let Emitted::Annotation(Annotation::Log { message, .. }) = emitted {
-                tracing::debug!(target: "rewind_runtime::mocks", tool, "{message}");
+                tracing::debug!(target: "rewind_runtime::mocks", action, "{message}");
             }
         }
     }

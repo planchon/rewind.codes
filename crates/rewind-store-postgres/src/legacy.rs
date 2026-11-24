@@ -229,7 +229,7 @@ fn task_from_row(row: &PgRow) -> Result<LegacyTask, Error> {
     };
     Ok(LegacyTask {
         seq: Seq(u32_of(row.u64(0)?)?),
-        tool: row.text(1)?,
+        action: row.text(1)?,
         args,
         state,
         attempt: u32_of(row.u64(10)?)?,

@@ -1,0 +1,23 @@
+{
+  "description": "An action failure reaches the script as an ActionError; an unknown outcome (the call may have taken effect) is checked rather than retried.",
+  "actions": {
+    "payments.charge": {
+      "$error": "connection reset",
+      "$kind": "outcome_unknown"
+    },
+    "payments.status": {
+      "charged": true
+    }
+  },
+  "expect": {
+    "status": "completed",
+    "output": {
+      "charged": true,
+      "checked": true
+    },
+    "calls": {
+      "payments.charge": 1,
+      "payments.status": 1
+    }
+  }
+}

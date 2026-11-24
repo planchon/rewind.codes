@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use rewind_core::{
-    Event, Lifecycle, RunStatus, Script, Seq, Timestamp, ToolFailure, ToolFailureKind,
+    ActionFailure, ActionFailureKind, Event, Lifecycle, RunStatus, Script, Seq, Timestamp,
 };
 use rewind_engine::adapters::StaticTypeChecker;
 use rewind_engine::ports::{
@@ -27,8 +27,8 @@ use support::{FakeExecutor, HOUR, RecordingDispatcher, request};
 fn dispatcher() -> RecordingDispatcher {
     RecordingDispatcher::new(|call| {
         if call.args == json!("bad") {
-            return Err(ToolFailure {
-                kind: ToolFailureKind::Error,
+            return Err(ActionFailure {
+                kind: ActionFailureKind::Error,
                 message: "bad argument".into(),
                 data: None,
             });
@@ -45,11 +45,11 @@ fn two_steps(executor: FakeExecutor, name: &str, arg: &'static str) -> FakeExecu
             run.call("a", json!(1));
         },
         move |run, delivery| match delivery {
-            Delivery::ToolCallCompleted { seq: Seq(1), .. } => {
+            Delivery::CallCompleted { seq: Seq(1), .. } => {
                 run.call("b", json!(arg));
             }
-            Delivery::ToolCallCompleted { result, .. } => run.complete(result.clone()),
-            _ => run.fail("ToolError", "b failed"),
+            Delivery::CallCompleted { result, .. } => run.complete(result.clone()),
+            _ => run.fail("ActionError", "b failed"),
         },
     )
 }
@@ -220,10 +220,10 @@ async fn a_fork_reuses_the_recorded_calls_and_goes_live_where_it_differs() {
             .collect::<Vec<_>>(),
         [
             "run_started",
-            "schedule_tool_call",
-            "tool_call_completed",
-            "schedule_tool_call",
-            "tool_call_completed",
+            "schedule_call",
+            "call_completed",
+            "schedule_call",
+            "call_completed",
             "complete_run"
         ]
     );
@@ -246,8 +246,8 @@ async fn a_fork_reuses_the_recorded_calls_and_goes_live_where_it_differs() {
 
     // `a` was called once, by the parent; `b` twice, the fork's call with the fork's key.
     let calls = world.plane.dispatcher.calls();
-    let tools: Vec<&str> = calls.iter().map(|call| call.tool.name.as_str()).collect();
-    assert_eq!(tools, ["a", "b", "b"]);
+    let actions: Vec<&str> = calls.iter().map(|call| call.action.name.as_str()).collect();
+    assert_eq!(actions, ["a", "b", "b"]);
     assert_eq!(calls[2].idempotency_key, format!("{}/2", fork.id));
     assert_eq!(calls[2].args, json!("good"));
     assert_eq!(
@@ -322,7 +322,7 @@ async fn compatibility_tells_where_a_corrected_script_diverges_and_what_a_fork_r
     };
     assert_eq!(
         mismatch.to_string(),
-        "history entry 3 is tool call #2 b(\"bad\"), but the script emitted tool call #2 b(\"good\")"
+        "history entry 3 is call #2 b(\"bad\"), but the script emitted call #2 b(\"good\")"
     );
     assert_eq!(fixed.status, RunStatus::Active);
 

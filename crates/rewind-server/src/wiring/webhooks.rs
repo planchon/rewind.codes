@@ -9,7 +9,7 @@
 //! (`archi/06-storage-and-scale.md`, "The outbox").
 //!
 //! Where a delivery may go is [`WebhookEgress`]: a deployed server sends only to `https://`
-//! URLs whose addresses are public, with the egress checks of the `http` tool (`rewind-mcp`'s
+//! URLs whose addresses are public, with the egress checks of the `http` action (`rewind-mcp`'s
 //! [`Egress`]): the name is resolved once, a private, loopback, link-local or cloud-metadata
 //! address is refused, and the connection goes to the address that was checked.
 
@@ -20,7 +20,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use reqwest::Url;
 use rewind_api::common::{Labels, timestamp};
 use rewind_api::webhooks::{
-    CredentialsExpired, RunEvent, ToolSchemaChanged, WEBHOOK_ID, WEBHOOK_SIGNATURE,
+    ActionSchemaChanged, CredentialsExpired, RunEvent, WEBHOOK_ID, WEBHOOK_SIGNATURE,
     WEBHOOK_TIMESTAMP, WebhookSecret,
 };
 use rewind_engine::ports::{
@@ -225,25 +225,27 @@ impl Render for ServerRender {
             })
         };
         let body = match &event.kind {
-            WebhookEventKind::ToolSchemaChanged { seq, tool, message } => {
-                rewind_api::webhooks::WebhookEvent::ToolSchemaChanged {
-                    timestamp: at,
-                    data: ToolSchemaChanged {
-                        run_id: run.id.to_string(),
-                        namespace: crate::views::namespace(&record.namespace),
-                        labels: Labels::from(event.labels.clone()),
-                        task_id: task(*seq),
-                        seq: seq.0,
-                        tool: tool.clone(),
-                        server: mcp_server(&app, record, tool).await,
-                        action_set: record.action_set.to_hex(),
-                        message: message.clone(),
-                    },
-                }
-            }
+            WebhookEventKind::ActionSchemaChanged {
+                seq,
+                action,
+                message,
+            } => rewind_api::webhooks::WebhookEvent::ActionSchemaChanged {
+                timestamp: at,
+                data: ActionSchemaChanged {
+                    run_id: run.id.to_string(),
+                    namespace: crate::views::namespace(&record.namespace),
+                    labels: Labels::from(event.labels.clone()),
+                    task_id: task(*seq),
+                    seq: seq.0,
+                    action: action.clone(),
+                    server: mcp_server(&app, record, action).await,
+                    action_set: record.action_set.to_hex(),
+                    message: message.clone(),
+                },
+            },
             WebhookEventKind::CredentialsExpired {
                 seq,
-                tool,
+                action,
                 message,
                 reason,
                 secret,
@@ -255,8 +257,8 @@ impl Render for ServerRender {
                     labels: Labels::from(event.labels.clone()),
                     task_id: task(*seq),
                     seq: seq.0,
-                    tool: tool.clone(),
-                    server: mcp_server(&app, record, tool).await,
+                    action: action.clone(),
+                    server: mcp_server(&app, record, action).await,
                     action_set: record.action_set.to_hex(),
                     reason: match reason {
                         CredentialsExpiredReason::Refused => {
@@ -312,8 +314,12 @@ impl Render for ServerRender {
     }
 }
 
-/// The MCP server of a tool of the run's action set.
-async fn mcp_server(app: &App, head: &rewind_engine::ports::RunHead, tool: &str) -> Option<String> {
+/// The MCP server of an action of the run's action set.
+async fn mcp_server(
+    app: &App,
+    head: &rewind_engine::ports::RunHead,
+    action: &str,
+) -> Option<String> {
     use rewind_engine::ports::CatalogStore as _;
     let stored = app
         .catalog()
@@ -322,7 +328,7 @@ async fn mcp_server(app: &App, head: &rewind_engine::ports::RunHead, tool: &str)
         .ok()??;
     stored
         .action_set
-        .tool(tool)?
+        .action(action)?
         .route
         .server()
         .map(str::to_owned)

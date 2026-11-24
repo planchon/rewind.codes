@@ -14,7 +14,7 @@ use axum::body::Bytes;
 use axum::http::HeaderMap;
 use futures_util::StreamExt;
 use rewind_api::access::BuiltInRole;
-use rewind_api::action_sets::{CreateActionSet, HostTool, ToolPolicy};
+use rewind_api::action_sets::{ActionPolicy, CreateActionSet, HostTool};
 use rewind_api::common::{Labels, RunStatus};
 use rewind_api::events::{Event, EventsQuery, StreamEvent};
 use rewind_api::headers::IdempotencyKey;
@@ -48,7 +48,7 @@ export default async function main() {
 }
 "#;
 
-const ASK: &str = r#"import { ask_user } from "rewind:tools";
+const ASK: &str = r#"import { ask_user } from "rewind:actions";
 export default async function main() {
   const answer = await ask_user({ question: "ready?" });
   return { answer };
@@ -77,7 +77,7 @@ fn start(script: &str) -> StartRun {
     StartRun::new(script)
 }
 
-fn ask_action_set(policy: ToolPolicy) -> CreateActionSet {
+fn ask_action_set(policy: ActionPolicy) -> CreateActionSet {
     CreateActionSet {
         host: vec![HostTool {
             name: "ask_user".into(),
@@ -223,13 +223,18 @@ async fn host_tools_are_handed_on_a_stream_and_answered() {
     let harness = server.key(BuiltInRole::Harness, &[]).await;
     let worker = server.key(BuiltInRole::Worker, &[]).await;
     let action_set = harness
-        .create_action_set(&ask_action_set(ToolPolicy {
+        .create_action_set(&ask_action_set(ActionPolicy {
             heartbeat_timeout: Some("5s".parse().unwrap()),
-            ..ToolPolicy::default()
+            ..ActionPolicy::default()
         }))
         .await
         .unwrap();
-    assert!(action_set.tools.iter().any(|tool| tool.name == "webhook"));
+    assert!(
+        action_set
+            .actions
+            .iter()
+            .any(|action| action.name == "webhook")
+    );
     assert_eq!(
         harness.list_action_sets().await.unwrap().action_sets.len(),
         1
@@ -255,7 +260,7 @@ async fn host_tools_are_handed_on_a_stream_and_answered() {
 
     let query = TaskStreamQuery {
         action_set: Some(action_set.id.clone()),
-        tools: vec!["ask_user".into()],
+        actions: vec!["ask_user".into()],
         slots: Some(1),
         worker: Some("worker-1".into()),
         ..TaskStreamQuery::default()
@@ -278,7 +283,7 @@ async fn host_tools_are_handed_on_a_stream_and_answered() {
     let state = harness.get_run(&run.id, None).await.unwrap();
     assert!(matches!(
         &state.waiting_for[0],
-        Waiting::ToolCall {
+        Waiting::Call {
             state: TaskState::Deferred,
             ..
         }
@@ -349,20 +354,20 @@ async fn host_tools_are_handed_on_a_stream_and_answered() {
     server.stop().await;
 }
 
-/// A run that fails on a `ToolError` it did not catch says which call failed: the runtime's
-/// message (`ask_user failed: …`) is not the tool's, so the call is found through its recorded
+/// A run that fails on an `ActionError` it did not catch says which call failed: the runtime's
+/// message (`ask_user failed: …`) is not the action's, so the call is found through its recorded
 /// failure.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_run_failed_by_an_uncaught_tool_error_names_the_call() {
+async fn a_run_failed_by_an_uncaught_action_error_names_the_call() {
     let server = TestServer::start(&[]).await;
     let harness = server.key(BuiltInRole::Harness, &[]).await;
     let worker = server.key(BuiltInRole::Worker, &[]).await;
     let action_set = harness
-        .create_action_set(&ask_action_set(ToolPolicy::default()))
+        .create_action_set(&ask_action_set(ActionPolicy::default()))
         .await
         .unwrap();
     // The first failure is caught; the second is not.
-    let script = r#"import { ask_user } from "rewind:tools";
+    let script = r#"import { ask_user } from "rewind:actions";
 export default async function main() {
   try {
     await ask_user({ question: "first?" });
@@ -376,7 +381,7 @@ export default async function main() {
     let run = harness.start_run(&request, None).await.unwrap();
     let query = TaskStreamQuery {
         action_set: Some(action_set.id.clone()),
-        tools: vec!["ask_user".into()],
+        actions: vec!["ask_user".into()],
         ..TaskStreamQuery::default()
     };
     let mut stream = TaskWorker::open(&worker, &query).await;
@@ -397,10 +402,10 @@ export default async function main() {
     let ended = harness.get_run(&run.id, wait("20s")).await.unwrap();
     assert_eq!(ended.status, RunStatus::Failed, "{ended:?}");
     let error = ended.error.unwrap();
-    assert_eq!(error.name, "ToolError");
+    assert_eq!(error.name, "ActionError");
     assert_eq!(error.message, "ask_user failed: the user left");
     let call = error.failed_call.expect("the call that failed");
-    assert_eq!((call.seq, call.tool.as_str()), (2, "ask_user"));
+    assert_eq!((call.seq, call.action.as_str()), (2, "ask_user"));
     assert_eq!(call.args.value, Some(json!({ "question": "second?" })));
     assert_eq!(call.error.message, "the user left");
     assert_eq!(call.error.data, Some(json!({ "retryAfter": "1h" })));
@@ -413,16 +418,16 @@ async fn a_call_under_approval_waits_for_the_harness_with_its_arguments() {
     let server = TestServer::start(&[]).await;
     let harness = server.key(BuiltInRole::Harness, &[]).await;
     let action_set = harness
-        .create_action_set(&ask_action_set(ToolPolicy {
+        .create_action_set(&ask_action_set(ActionPolicy {
             approval: Some(true),
-            ..ToolPolicy::default()
+            ..ActionPolicy::default()
         }))
         .await
         .unwrap();
     let mut request = start(ASK);
     request.action_set = Some(action_set.id.clone());
 
-    // Rejected: the call fails with a ToolError, and the run fails.
+    // Rejected: the call fails with an ActionError, and the run fails.
     let run = harness.start_run(&request, None).await.unwrap();
     let (task_id, args) = eventually(|| async {
         let state = harness.get_run(&run.id, None).await.unwrap();
@@ -430,7 +435,7 @@ async fn a_call_under_approval_waits_for_the_harness_with_its_arguments() {
             .waiting_for
             .into_iter()
             .find_map(|waiting| match waiting {
-                Waiting::ToolCall {
+                Waiting::Call {
                     task_id,
                     state: TaskState::Approval,
                     args,
@@ -453,7 +458,7 @@ async fn a_call_under_approval_waits_for_the_harness_with_its_arguments() {
     let ended = harness.get_run(&run.id, wait("20s")).await.unwrap();
     assert_eq!(ended.status, RunStatus::Failed);
     let error = ended.error.unwrap();
-    assert_eq!(error.name, "ToolError");
+    assert_eq!(error.name, "ActionError");
     assert!(error.message.contains("not now"), "{}", error.message);
 
     // Approved: the worker gets it.
@@ -464,7 +469,7 @@ async fn a_call_under_approval_waits_for_the_harness_with_its_arguments() {
             .waiting_for
             .into_iter()
             .find_map(|waiting| match waiting {
-                Waiting::ToolCall { task_id, .. } => Some(task_id),
+                Waiting::Call { task_id, .. } => Some(task_id),
                 _ => None,
             })
     })
@@ -1035,12 +1040,12 @@ async fn the_server_serves_its_dashboard_and_says_what_it_is() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn the_http_tool_is_pinned_with_its_allow_list_only() {
+async fn the_http_action_is_pinned_with_its_allow_list_only() {
     let server = TestServer::start(&[]).await;
     let harness = server.key(BuiltInRole::Harness, &[]).await;
     let action_set = harness
         .create_action_set(&CreateActionSet {
-            http: Some(rewind_api::action_sets::HttpTool {
+            http: Some(rewind_api::action_sets::HttpAction {
                 allow: vec!["api.example.com".into()],
                 policy: None,
             }),
@@ -1049,16 +1054,16 @@ async fn the_http_tool_is_pinned_with_its_allow_list_only() {
         .await
         .unwrap();
     let names: Vec<&str> = action_set
-        .tools
+        .actions
         .iter()
-        .map(|tool| tool.name.as_str())
+        .map(|action| action.name.as_str())
         .collect();
     assert_eq!(names, ["http", "webhook"]);
     assert!(
         action_set
             .declarations
             .dts
-            .starts_with(rewind_check::HTTP_TOOL_REFERENCE),
+            .starts_with(rewind_check::HTTP_ACTION_REFERENCE),
         "the declarations bring fetch to the type-checker"
     );
     let checked = harness
@@ -1076,11 +1081,11 @@ async fn the_http_tool_is_pinned_with_its_allow_list_only() {
         })
         .await
         .unwrap();
-    assert!(!without.ok, "no http tool, no fetch");
+    assert!(!without.ok, "no http action, no fetch");
     let empty = problem(
         harness
             .create_action_set(&CreateActionSet {
-                http: Some(rewind_api::action_sets::HttpTool {
+                http: Some(rewind_api::action_sets::HttpAction {
                     allow: Vec::new(),
                     policy: None,
                 }),
@@ -1190,7 +1195,7 @@ async fn host_tool_failures_are_bounded_like_results() {
     let server = TestServer::start(&[]).await;
     let harness = server.key(BuiltInRole::Harness, &[]).await;
     let action_set = harness
-        .create_action_set(&ask_action_set(ToolPolicy::default()))
+        .create_action_set(&ask_action_set(ActionPolicy::default()))
         .await
         .unwrap();
     let mut request = start(ASK);
@@ -1244,13 +1249,13 @@ async fn host_tool_failures_are_bounded_like_results() {
         .unwrap();
     let ended = harness.get_run(&run.id, wait("20s")).await.unwrap();
     assert_eq!(ended.status, RunStatus::Failed);
-    assert_eq!(ended.error.unwrap().name, "ToolError");
+    assert_eq!(ended.error.unwrap().name, "ActionError");
 
     // A rejection's message is a failure's message.
     let approved = harness
-        .create_action_set(&ask_action_set(ToolPolicy {
+        .create_action_set(&ask_action_set(ActionPolicy {
             approval: Some(true),
-            ..ToolPolicy::default()
+            ..ActionPolicy::default()
         }))
         .await
         .unwrap();
@@ -1262,7 +1267,7 @@ async fn host_tool_failures_are_bounded_like_results() {
             .waiting_for
             .into_iter()
             .find_map(|waiting| match waiting {
-                Waiting::ToolCall { task_id, .. } => Some(task_id),
+                Waiting::Call { task_id, .. } => Some(task_id),
                 _ => None,
             })
     })
@@ -1390,7 +1395,7 @@ async fn text_with_a_nul_character_is_refused_with_400() {
     let mut source = start(&format!("{SLEEP}// \u{0}\n"));
     source.input = json!({ "ms": 1 });
     invalid(harness.start_run(&source, None).await.unwrap_err());
-    let mut action_set = ask_action_set(ToolPolicy::default());
+    let mut action_set = ask_action_set(ActionPolicy::default());
     action_set.host[0].description = "Ask the end user\u{0}".into();
     invalid(harness.create_action_set(&action_set).await.unwrap_err());
     let subscription = CreateSubscription {
@@ -1468,9 +1473,9 @@ async fn runs_are_searched_counted_and_grouped_by_failure() {
     done.wait = wait("20s");
     let done = harness.start_run(&done, None).await.unwrap();
     let action_set = harness
-        .create_action_set(&ask_action_set(ToolPolicy {
+        .create_action_set(&ask_action_set(ActionPolicy {
             approval: Some(true),
-            ..ToolPolicy::default()
+            ..ActionPolicy::default()
         }))
         .await
         .unwrap();

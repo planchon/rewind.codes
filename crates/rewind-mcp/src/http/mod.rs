@@ -1,4 +1,4 @@
-//! The built-in `http` tool (`archi/04-tools.md`, "The http tool and egress"): the only way a
+//! The built-in `http` action (`archi/04-tools.md`, "The `http` action and egress"): the only way a
 //! script reaches the network, through `fetch`. Requests leave from the dispatcher, never from
 //! the isolate, and each goes through these steps, in order:
 //!
@@ -27,8 +27,8 @@ use std::time::Duration;
 
 use reqwest::header::{self, HeaderName};
 use reqwest::{Method, StatusCode};
-use rewind_core::{Builtin, Tool, ToolFailureKind, ToolRoute};
-use rewind_engine::ports::{CallAuth, Dispatched, ToolCall, ToolDispatcher};
+use rewind_core::{Action, ActionFailureKind, ActionRoute, Builtin};
+use rewind_engine::ports::{ActionDispatcher, Call, CallAuth, Dispatched};
 use rewind_outbound::{AddressPolicy, Egress, NameResolver, Refused, SystemResolver};
 use url::Url;
 
@@ -36,17 +36,17 @@ pub use wire::{http_input_schema, http_output_schema};
 
 use crate::McpError;
 use crate::failure::{Failure, human};
-use allow::{AllowList, HTTP_TOOL};
+use allow::{AllowList, HTTP_ACTION};
 use wire::Request;
 
-/// The bounds of the `http` tool.
+/// The bounds of the `http` action.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HttpConfig {
     /// Redirects followed at most.
     pub max_redirects: usize,
     /// Bytes of a response body at most.
     pub max_response_bytes: usize,
-    /// How long a request may take, redirects included. The tool's execution timeout bounds it
+    /// How long a request may take, redirects included. The action's execution timeout bounds it
     /// too.
     pub timeout: Duration,
     /// Sent when the script sets no `User-Agent`: some APIs refuse requests without one.
@@ -64,39 +64,39 @@ impl Default for HttpConfig {
     }
 }
 
-/// The `http` tool as an action set pins it: the built-in with its allow-list and its schemas.
-pub fn http_tool(allowed_hosts: Vec<String>) -> Tool {
-    let mut tool = Tool::new(
+/// The `http` action as an action set pins it: the built-in with its allow-list and its schemas.
+pub fn http_action(allowed_hosts: Vec<String>) -> Action {
+    let mut action = Action::new(
         "http",
-        ToolRoute::Builtin(Builtin::Http { allowed_hosts }),
+        ActionRoute::Builtin(Builtin::Http { allowed_hosts }),
         http_input_schema(),
     );
-    tool.description = Some(
+    action.description = Some(
         "HTTP requests, sent by Rewind to the hosts of the action set's allow-list; scripts call it \
          through fetch."
             .to_owned(),
     );
-    tool.output_schema = Some(http_output_schema());
-    tool
+    action.output_schema = Some(http_output_schema());
+    action
 }
 
-/// Answers the built-in tools: the `builtins` route of the engine's `RoutingDispatcher`. It
+/// Answers the built-in actions: the `builtins` route of the engine's `RoutingDispatcher`. It
 /// sends the requests of `http`; `webhook` is answered by the engine, which holds the webhook
 /// tokens, and fails here. Cheap to clone: clones share their connections.
 #[derive(Debug, Clone)]
-pub struct HttpTool {
+pub struct HttpAction {
     client: reqwest::Client,
     config: Arc<HttpConfig>,
     policy: AddressPolicy,
 }
 
-impl HttpTool {
-    /// The tool, resolving names with the system's resolver.
+impl HttpAction {
+    /// The action, resolving names with the system's resolver.
     pub fn new(config: HttpConfig) -> Result<Self, McpError> {
         Self::with_resolver(config, Arc::new(SystemResolver))
     }
 
-    /// The tool, resolving names with `resolver`. Its answers are checked like the system's.
+    /// The action, resolving names with `resolver`. Its answers are checked like the system's.
     pub fn with_resolver(
         config: HttpConfig,
         resolver: Arc<dyn NameResolver>,
@@ -110,15 +110,15 @@ impl HttpTool {
         policy: AddressPolicy,
     ) -> Result<Self, McpError> {
         // The egress checks without exceptions: the operator's internal hosts are for MCP
-        // servers and APIs, never for the http tool.
-        let client = Egress::with_policy(resolver, policy, HTTP_TOOL)
+        // servers and APIs, never for the http action.
+        let client = Egress::with_policy(resolver, policy, HTTP_ACTION)
             .apply(reqwest::Client::builder())
             .redirect(reqwest::redirect::Policy::none())
             .user_agent(config.user_agent.as_str())
             .connect_timeout(config.timeout)
             .build()
             .map_err(|error| McpError::Client {
-                message: format!("the client of the http tool cannot be built: {error}"),
+                message: format!("the client of the http action cannot be built: {error}"),
             })?;
         Ok(Self {
             client,
@@ -200,7 +200,7 @@ impl HttpTool {
                 host = url.host_str().unwrap_or_default(),
                 status = response.status().as_u16(),
                 redirected,
-                "http tool request"
+                "http action request"
             );
             return Dispatched::Result(wire::response(
                 response.status(),
@@ -213,17 +213,17 @@ impl HttpTool {
     }
 }
 
-impl ToolDispatcher for HttpTool {
-    async fn dispatch(&self, call: ToolCall, _auth: CallAuth) -> Dispatched {
-        match &call.tool.route {
-            ToolRoute::Builtin(Builtin::Http { allowed_hosts }) => {
+impl ActionDispatcher for HttpAction {
+    async fn dispatch(&self, call: Call, _auth: CallAuth) -> Dispatched {
+        match &call.action.route {
+            ActionRoute::Builtin(Builtin::Http { allowed_hosts }) => {
                 let request = match wire::request(&call.args) {
                     Ok(request) => request,
                     Err(reason) => return refused(reason),
                 };
                 let allowed = AllowList::new(allowed_hosts);
                 let limit = call
-                    .tool
+                    .action
                     .policy
                     .execution_timeout
                     .map_or(self.config.timeout, |timeout| {
@@ -237,23 +237,23 @@ impl ToolDispatcher for HttpTool {
                         let message =
                             format!("{method} {url} did not answer within {}", human(limit));
                         if idempotent(&method) {
-                            Failure::transient(ToolFailureKind::Timeout, message)
+                            Failure::transient(ActionFailureKind::Timeout, message)
                         } else {
-                            Failure::permanent(ToolFailureKind::Timeout, message, None)
+                            Failure::permanent(ActionFailureKind::Timeout, message, None)
                         }
                         .into_dispatched()
                     }
                 }
             }
-            ToolRoute::Builtin(Builtin::Webhook) => Failure::permanent(
-                ToolFailureKind::Unavailable,
+            ActionRoute::Builtin(Builtin::Webhook) => Failure::permanent(
+                ActionFailureKind::Unavailable,
                 "webhook is answered by the engine, which holds the webhook tokens",
                 None,
             )
             .into_dispatched(),
             _ => Failure::permanent(
-                ToolFailureKind::Unavailable,
-                format!("{} is not a built-in tool", call.tool.name),
+                ActionFailureKind::Unavailable,
+                format!("{} is not a built-in action", call.action.name),
                 None,
             )
             .into_dispatched(),
@@ -263,7 +263,7 @@ impl ToolDispatcher for HttpTool {
 
 /// A request the egress rules refuse: it fails for good.
 fn refused(reason: String) -> Dispatched {
-    Failure::permanent(ToolFailureKind::Error, reason, None).into_dispatched()
+    Failure::permanent(ActionFailureKind::Error, reason, None).into_dispatched()
 }
 
 /// A request that failed without a response.
@@ -279,15 +279,15 @@ fn failed(method: &Method, url: &Url, error: &reqwest::Error) -> Dispatched {
     if error.is_connect() {
         // Nothing was sent.
         return Failure::transient(
-            ToolFailureKind::Unavailable,
+            ActionFailureKind::Unavailable,
             format!("{method} {url} failed: no connection: {detail}"),
         )
         .into_dispatched();
     }
     let kind = if error.is_timeout() {
-        ToolFailureKind::Timeout
+        ActionFailureKind::Timeout
     } else {
-        ToolFailureKind::Unavailable
+        ActionFailureKind::Unavailable
     };
     if idempotent(method) {
         Failure::transient(kind, format!("{method} {url} failed: {detail}")).into_dispatched()

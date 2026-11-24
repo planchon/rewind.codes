@@ -1,5 +1,5 @@
 import { sleep } from "rewind";
-import { audit } from "rewind:tools";
+import { audit } from "rewind:actions";
 
 function work(rounds: number): number {
   let sum = 0;

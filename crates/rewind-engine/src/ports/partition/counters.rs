@@ -3,16 +3,16 @@
 //!
 //! - **Counters** are exact, per tenant, namespace and UTC hour, written in the batch of what
 //!   they count: runs created, started and ended, durations, CPU time, failure groups, calls per
-//!   tool, runs per script. A window of hours sums them; a day and a month are windows.
+//!   action, runs per script. A window of hours sums them; a day and a month are windows.
 //! - **Gauges** count what holds now: the active runs, the runs waiting by what they wait for,
 //!   the quarantined runs, the runs kept per script. They follow from the records kept, so
 //!   erasing a run takes what it held out of them.
-//! - **Shapes** of the results observed per tool merge in any order.
+//! - **Shapes** of the results observed per action merge in any order.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
-use rewind_core::{Digest, RunId, RunStatus, Shape, Timestamp, ToolFailureKind};
+use rewind_core::{ActionFailureKind, Digest, RunId, RunStatus, Shape, Timestamp};
 
 use super::run::RunHead;
 use super::search::IndexedSummary;
@@ -285,22 +285,22 @@ impl FailureCounts {
     }
 }
 
-/// The calls of one tool.
+/// The calls of one action.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct ToolCounts {
+pub struct ActionCounts {
     /// Calls scheduled.
     pub calls: u64,
     pub completed: u64,
     pub failed: u64,
-    pub errors: BTreeMap<ToolFailureKind, u64>,
+    pub errors: BTreeMap<ActionFailureKind, u64>,
     /// Attempts beyond the first.
     pub retries: u64,
     /// From the call to its outcome, in logical time.
     pub latency: Sketch,
 }
 
-impl ToolCounts {
-    pub fn add(&mut self, other: &ToolCounts) {
+impl ActionCounts {
+    pub fn add(&mut self, other: &ActionCounts) {
         self.calls += other.calls;
         self.completed += other.completed;
         self.failed += other.failed;
@@ -314,8 +314,8 @@ impl ToolCounts {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ScriptCounts {
     pub runs: RunCounts,
-    /// The tools its runs called.
-    pub tools: BTreeSet<String>,
+    /// The actions its runs called.
+    pub actions: BTreeSet<String>,
     pub first_started_at: Option<Timestamp>,
     pub last_started_at: Option<Timestamp>,
 }
@@ -323,7 +323,7 @@ pub struct ScriptCounts {
 impl ScriptCounts {
     pub fn add(&mut self, other: &ScriptCounts) {
         self.runs.add(&other.runs);
-        self.tools.extend(other.tools.iter().cloned());
+        self.actions.extend(other.actions.iter().cloned());
         self.first_started_at = earliest(self.first_started_at, other.first_started_at);
         self.last_started_at = self.last_started_at.max(other.last_started_at);
     }
@@ -354,8 +354,8 @@ pub struct Counters {
     pub namespaces: BTreeMap<NamespaceName, RunCounts>,
     /// Failure groups, by fingerprint.
     pub failures: BTreeMap<String, FailureCounts>,
-    /// Calls, by tool.
-    pub tools: BTreeMap<String, ToolCounts>,
+    /// Calls, by action.
+    pub actions: BTreeMap<String, ActionCounts>,
     /// Runs, by script.
     pub scripts: BTreeMap<Digest, ScriptCounts>,
 }
@@ -384,7 +384,7 @@ impl Counters {
 
     /// What the counts of an erased namespace leave in its tenant's: what it consumed (runs
     /// created, started and ended, their durations, CPU time, the runs of each workflow), not
-    /// its failures, tools or scripts.
+    /// its failures, actions or scripts.
     pub fn consumed(&self) -> Counters {
         Counters {
             created: self.created,
@@ -413,8 +413,8 @@ impl Counters {
                 .or_default()
                 .add(failures);
         }
-        for (tool, calls) in &other.tools {
-            self.tools.entry(tool.clone()).or_default().add(calls);
+        for (action, calls) in &other.actions {
+            self.actions.entry(action.clone()).or_default().add(calls);
         }
         for (script, runs) in &other.scripts {
             self.scripts.entry(*script).or_default().add(runs);
@@ -442,11 +442,11 @@ pub enum CounterDelta {
         hour: Hour,
         counts: Counters,
     },
-    /// The shape of a tool's results, merged into the namespace's ([`Shape::merge`]).
+    /// The shape of an action's results, merged into the namespace's ([`Shape::merge`]).
     Shape {
         tenant: TenantId,
         namespace: NamespaceName,
-        tool: String,
+        action: String,
         shape: Shape,
     },
 }

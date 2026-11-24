@@ -1,4 +1,4 @@
-import { audit, github } from "rewind:tools";
+import { audit, github } from "rewind:actions";
 
 export default async function main(input: { repo: string }) {
   const issues = await Promise.all(

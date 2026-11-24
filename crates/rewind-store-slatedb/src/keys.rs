@@ -15,7 +15,7 @@
 //! | `e t r attempt:u32 index:u64` | history entry | `history` (a range from `index`) |
 //! | `i t r id:u64` | inbox item | `inbox` (a range); the recovery's runnable runs (the family) |
 //! | `k t r key` | signal key | `signal_key` |
-//! | `j t r seq:u32` | tool task | `tasks` (a range); the recovery's tasks (the family) |
+//! | `j t r seq:u32` | call task | `tasks` (a range); the recovery's tasks (the family) |
 //! | `p t r digest:32` | payload | `payload` |
 //! | `w t r watcher:16` | watcher | `watchers` (a range) |
 //! | `b t r hash:32` | empty | the run's webhook tokens, removed at its end |
@@ -32,7 +32,7 @@
 //! | `N t n` | empty | the namespaces with hourly counters: the recovery's counters |
 //! | `C t n hour:u32` | counters | `counters` of a namespace (a range of hours) |
 //! | `D t hour:u32 n` | counters | `counters` of a tenant (a range of hours) |
-//! | `X t n tool` | shape | `shapes` (the namespace's range, or the tenant's) |
+//! | `X t n action` | shape | `shapes` (the namespace's range, or the tenant's) |
 //! | `A t` | organization state | `organization`; the recovery's organizations (the family) |
 //! | `Q t 00 order position` | run summary | `search` over the tenant |
 //! | `Q t 01 n order position` | run summary | `search` over a namespace |
@@ -335,8 +335,8 @@ pub(crate) fn shapes_of(tenant: &TenantId, namespace: Option<&NamespaceName>) ->
     }
 }
 
-pub(crate) fn shape(tenant: &TenantId, namespace: &NamespaceName, tool: &str) -> Key {
-    shapes_of(tenant, Some(namespace)).str(tool)
+pub(crate) fn shape(tenant: &TenantId, namespace: &NamespaceName, action: &str) -> Key {
+    shapes_of(tenant, Some(namespace)).str(action)
 }
 
 pub(crate) fn organization(tenant: &TenantId) -> Key {

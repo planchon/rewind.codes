@@ -2,7 +2,7 @@
 //! "Inside a node", "Tests").
 //!
 //! One node holds the one partition of the deployment, over the memory adapters, with the V8
-//! executor and the scenario's tools, in virtual time from [`T0`]. A harness's
+//! executor and the scenario's actions, in virtual time from [`T0`]. A harness's
 //! worker is an SDK stream at the node's edge: it is handed the host tasks and answers them
 //! through their token; a worker that crashes closes its stream, and another worker opens one.
 //! The entropy draws the scenario's ids and seeds in order, whatever the partition, so a case's
@@ -24,15 +24,15 @@ use rewind_engine::edge::Edge;
 use rewind_engine::plane::{HostTools, NodeConfig, Wiring};
 use rewind_engine::ports::link::{HostFailure, StreamAttach, StreamEvent, StreamId};
 use rewind_engine::ports::{
-    CatalogStore, Clock, Entropy, NamespaceName, NewSecret, NodeId, ParkKind, Predicate, RunOrder,
-    RunQuery, RunRef, Scope, ScriptExecutor, Secret, SecretId, SecretStore, TaskRef, TaskState,
-    TenantId, Term, ToolDeclarations, VirtualTime,
+    ActionDeclarations, CatalogStore, Clock, Entropy, NamespaceName, NewSecret, NodeId, ParkKind,
+    Predicate, RunOrder, RunQuery, RunRef, Scope, ScriptExecutor, Secret, SecretId, SecretStore,
+    TaskRef, TaskState, TenantId, Term, VirtualTime,
 };
 use rewind_engine::{ForkRun, Limits, ReplayVerdict, StartRun};
 use tokio::sync::mpsc::UnboundedReceiver;
 
+use crate::actions::{Answer, ScenarioActions};
 use crate::scenario::Step;
-use crate::tools::{Answer, ScenarioTools};
 use crate::{Case, Live, Recorded, T0, attachments, executor, scenario_action_set};
 
 /// The ids and seeds of a scenario's entropy, drawn in order: a run of the one partition has
@@ -60,7 +60,7 @@ type CorpusPlane = Wiring<
     MemoryArchive,
     MemoryBlobs,
     rewind_runtime::V8Executor,
-    ScenarioTools,
+    ScenarioActions,
     MemorySecrets,
     MemorySpanExporter,
     MemoryWebhooks,
@@ -113,7 +113,7 @@ fn node_config(case: &Case) -> Result<NodeConfig, String> {
     } else {
         HostTools::Dispatched
     };
-    config.reversed_calls = case.scenario.tool_order == crate::scenario::ToolOrder::Reversed;
+    config.reversed_calls = case.scenario.action_order == crate::scenario::ActionOrder::Reversed;
     Ok(config)
 }
 
@@ -128,7 +128,7 @@ impl World {
             archive: MemoryArchive::with_blobs(blobs.clone()),
             blobs,
             executor: executor(&case.scenario),
-            dispatcher: ScenarioTools::new(&case.scenario.tools),
+            dispatcher: ScenarioActions::new(&case.scenario.actions),
             secrets: MemorySecrets::with_changes(changes),
             spans: MemorySpanExporter::new(),
             webhooks: MemoryWebhooks::new(),
@@ -170,7 +170,7 @@ impl World {
             namespace: None,
             labels: BTreeMap::new(),
             action_set: None,
-            tools: BTreeSet::new(),
+            actions: BTreeSet::new(),
             slots: 100,
         };
         if let Some(events) = self
@@ -210,7 +210,7 @@ impl World {
     }
 
     /// One turn of the harness's worker: answers each task it was handed, from the scenario's
-    /// tools, through its token. Returns how many it was handed.
+    /// actions, through its token. Returns how many it was handed.
     async fn work(&mut self) -> Result<usize, String> {
         let Some(worker) = &mut self.worker else {
             return Ok(0);
@@ -226,7 +226,7 @@ impl World {
         let tenant = TenantId::local();
         let mut crashed = false;
         for task in &tasks {
-            let failed = |failure: rewind_core::ToolFailure, retryable| HostFailure {
+            let failed = |failure: rewind_core::ActionFailure, retryable| HostFailure {
                 message: failure.message,
                 data: failure.data,
                 retryable,
@@ -234,7 +234,7 @@ impl World {
             let answer =
                 self.plane
                     .dispatcher
-                    .answer(&task.tool, &task.args, &task.idempotency_key);
+                    .answer(&task.action, &task.args, &task.idempotency_key);
             let mut gateway = self.driver.gateway(&self.at);
             let answered = match answer {
                 Answer::Result(result) => {
@@ -256,7 +256,7 @@ impl World {
                     return Err(format!(
                         "{}: a host tool's worker cannot answer $unauthorized; only a dispatched \
                          call is parked",
-                        task.tool
+                        task.action
                     ));
                 }
                 // The worker dies with the call: its stream closes, and another worker opens
@@ -446,7 +446,7 @@ async fn put_secrets(case: &Case, world: &World) -> Result<(), String> {
     Ok(())
 }
 
-/// Stores the scenario's workflows in the catalog, with the scenario's tools as their action set.
+/// Stores the scenario's workflows in the catalog, with the scenario's actions as their action set.
 /// Their suites are empty: nothing gates them.
 async fn register_workflows(case: &Case, world: &World) -> Result<(), String> {
     if case.scenario.workflows.is_empty() {
@@ -456,7 +456,7 @@ async fn register_workflows(case: &Case, world: &World) -> Result<(), String> {
     let action_set = scenario_action_set(&case.scenario)?;
     let catalog = &world.plane.catalog;
     catalog
-        .put_action_set(&tenant, &action_set, &ToolDeclarations::default())
+        .put_action_set(&tenant, &action_set, &ActionDeclarations::default())
         .await
         .map_err(fail)?;
     for workflow in case.workflows()? {
@@ -512,16 +512,16 @@ async fn apply_steps(world: &mut World, run: &RunRef, steps: &[Step]) -> Result<
                 let now = world.plane.clock.now();
                 world.plane.clock.advance_to(now.saturating_add(by));
             }
-            Step::Approve(tool) => {
-                let task = waiting_task(world, run, tool).await?;
+            Step::Approve(action) => {
+                let task = waiting_task(world, run, action).await?;
                 let World {
                     edge, driver, at, ..
                 } = &mut *world;
                 let mut gateway = driver.gateway(at);
                 edge.approve_task(&mut gateway, &task).await.map_err(fail)?;
             }
-            Step::Reject { tool, message } => {
-                let task = waiting_task(world, run, tool).await?;
+            Step::Reject { action, message } => {
+                let task = waiting_task(world, run, action).await?;
                 let World {
                     edge, driver, at, ..
                 } = &mut *world;
@@ -552,19 +552,19 @@ async fn apply_steps(world: &mut World, run: &RunRef, steps: &[Step]) -> Result<
                     return Err(format!("delete_secret: {id} does not exist"));
                 }
             }
-            Step::Parked { tool, reason } => {
+            Step::Parked { action, reason } => {
                 let tasks = tasks_of(world, run).await?;
                 let parked = tasks.iter().any(|task| {
-                    task.tool == *tool
+                    task.action == *action
                         && matches!(&task.state, TaskState::Parked(why) if why.kind.as_str() == reason)
                 });
                 if !parked {
                     let states: Vec<String> = tasks
                         .iter()
-                        .map(|task| format!("{} {:?}", task.tool, task.state))
+                        .map(|task| format!("{} {:?}", task.action, task.state))
                         .collect();
                     return Err(format!(
-                        "parked: no call of {tool} is parked by {reason}: {states:?}"
+                        "parked: no call of {action} is parked by {reason}: {states:?}"
                     ));
                 }
             }
@@ -591,12 +591,12 @@ async fn view_of(
 async fn tasks_of(
     world: &mut World,
     run: &RunRef,
-) -> Result<Vec<rewind_engine::ports::ToolTask>, String> {
+) -> Result<Vec<rewind_engine::ports::CallTask>, String> {
     let World {
         edge, driver, at, ..
     } = world;
     let mut gateway = driver.gateway(at);
-    edge.tool_tasks(&mut gateway, run).await.map_err(fail)
+    edge.call_tasks(&mut gateway, run).await.map_err(fail)
 }
 
 /// The harness makes `server` accept the run's calls again: it puts the secret the run
@@ -628,7 +628,7 @@ async fn accept_again(
     let refused: Vec<TaskRef> = tasks
         .into_iter()
         .filter(|task| {
-            task.tool.split_once('.').map(|(namespace, _)| namespace) == Some(server)
+            task.action.split_once('.').map(|(namespace, _)| namespace) == Some(server)
                 && matches!(&task.state, TaskState::Parked(reason) if reason.kind == ParkKind::CredentialsRefused)
         })
         .map(|task| task.task)
@@ -643,14 +643,15 @@ async fn accept_again(
     Ok(())
 }
 
-/// The call of `tool` that waits for the harness.
-async fn waiting_task(world: &mut World, run: &RunRef, tool: &str) -> Result<TaskRef, String> {
+/// The call of `action` that waits for the harness.
+async fn waiting_task(world: &mut World, run: &RunRef, action: &str) -> Result<TaskRef, String> {
     tasks_of(world, run)
         .await?
         .into_iter()
         .find(|task| {
-            task.tool == tool && matches!(task.state, TaskState::Approval | TaskState::Parked(_))
+            task.action == action
+                && matches!(task.state, TaskState::Approval | TaskState::Parked(_))
         })
         .map(|task| task.task)
-        .ok_or_else(|| format!("no call of {tool} waits for the harness"))
+        .ok_or_else(|| format!("no call of {action} waits for the harness"))
 }

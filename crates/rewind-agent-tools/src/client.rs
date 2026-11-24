@@ -3,7 +3,7 @@
 //! server through it, and `rewind-server` the workers.
 
 use rewind_api::action_sets::{
-    ActionSet, ActionSetList, CreateActionSet, SearchQuery, ToolSearchResults,
+    ActionSearchResults, ActionSet, ActionSetList, CreateActionSet, SearchQuery,
 };
 use rewind_api::common::Duration;
 use rewind_api::events::Entry;
@@ -104,12 +104,12 @@ impl Api for Client {
         Ok(Client::create_action_set(self, action_set).await?)
     }
 
-    async fn search_tools(
+    async fn search_actions(
         &self,
         action_set: &str,
         query: &SearchQuery,
-    ) -> Result<ToolSearchResults, ApiError> {
-        Ok(Client::search_tools(self, action_set, query).await?)
+    ) -> Result<ActionSearchResults, ApiError> {
+        Ok(Client::search_actions(self, action_set, query).await?)
     }
 
     async fn create_workflow(&self, workflow: &CreateWorkflow) -> Result<Workflow, ApiError> {

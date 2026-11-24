@@ -2,8 +2,8 @@
 //!
 //! ```json
 //! {"v":1,"matching":"sequential","calls":[
-//! {"tool":"github.get_issue","args":{"number":4},"outcome":{"result":{"title":"Crash"}}},
-//! {"tool":"slack.post","args":{"text":"…"},"outcome":{"error":{"kind":"error","message":"rate limited"}}}
+//! {"action":"github.get_issue","args":{"number":4},"outcome":{"result":{"title":"Crash"}}},
+//! {"action":"slack.post","args":{"text":"…"},"outcome":{"error":{"kind":"error","message":"rate limited"}}}
 //! ],"signals":[
 //! {"name":"approval","payload":{"close":true},"elapsed_ms":3600000}
 //! ]}
@@ -11,18 +11,18 @@
 //!
 //! A cassette is self-contained and meant to be read and edited by people: args, results and
 //! payloads are plain JSON values, written in their canonical form, one call or signal per
-//! line. A failure is written as in a `tool_call_failed` event.
+//! line. A failure is written as in a `call_failed` event.
 
-use rewind_core::{Cassette, Matching, RecordedCall, RecordedSignal, ToolOutcome};
+use rewind_core::{ActionOutcome, Cassette, Matching, RecordedCall, RecordedSignal};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use super::events::{CanonicalJson, ToolFailureV1};
+use super::events::{ActionFailureV1, CanonicalJson};
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct CallV1 {
-    tool: String,
+    action: String,
     args: CanonicalJson,
     outcome: OutcomeV1,
 }
@@ -32,7 +32,7 @@ struct CallV1 {
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 enum OutcomeV1 {
     Result(CanonicalJson),
-    Error(ToolFailureV1),
+    Error(ActionFailureV1),
 }
 
 #[derive(Serialize, Deserialize)]
@@ -112,11 +112,11 @@ fn from_dtos(matching: MatchingV1, calls: Vec<CallV1>, signals: Vec<SignalV1>) -
         calls: calls
             .into_iter()
             .map(|call| RecordedCall {
-                tool: call.tool,
+                action: call.action,
                 args: call.args.0,
                 outcome: match call.outcome {
-                    OutcomeV1::Result(CanonicalJson(result)) => ToolOutcome::Result(result),
-                    OutcomeV1::Error(failure) => ToolOutcome::Failure(failure.into()),
+                    OutcomeV1::Result(CanonicalJson(result)) => ActionOutcome::Result(result),
+                    OutcomeV1::Error(failure) => ActionOutcome::Failure(failure.into()),
                 },
             })
             .collect(),
@@ -137,11 +137,11 @@ fn from_dtos(matching: MatchingV1, calls: Vec<CallV1>, signals: Vec<SignalV1>) -
 
 fn call_dto(call: &RecordedCall) -> CallV1 {
     CallV1 {
-        tool: call.tool.clone(),
+        action: call.action.clone(),
         args: CanonicalJson(call.args.clone()),
         outcome: match &call.outcome {
-            ToolOutcome::Result(result) => OutcomeV1::Result(CanonicalJson(result.clone())),
-            ToolOutcome::Failure(failure) => OutcomeV1::Error(failure.into()),
+            ActionOutcome::Result(result) => OutcomeV1::Result(CanonicalJson(result.clone())),
+            ActionOutcome::Failure(failure) => OutcomeV1::Error(failure.into()),
         },
     }
 }

@@ -5,14 +5,14 @@ use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 
-use rewind_check::{CheckError, HTTP_TOOL_REFERENCE, TSGO_VERSION, TsgoChecker};
+use rewind_check::{CheckError, HTTP_ACTION_REFERENCE, TSGO_VERSION, TsgoChecker};
 use rewind_core::Script;
 use rewind_engine::ports::{
-    CheckerError, Diagnostic, DiagnosticSource, Severity, ToolDeclarations, TypeChecker,
+    ActionDeclarations, CheckerError, Diagnostic, DiagnosticSource, Severity, TypeChecker,
 };
 
-/// The `rewind-tools.d.ts` of an action set with two MCP servers and a host tool.
-const TOOLS: &str = r##"declare module "rewind:tools" {
+/// The `rewind-actions.d.ts` of an action set with two MCP servers and a host tool.
+const ACTIONS: &str = r##"declare module "rewind:actions" {
   export namespace github {
     export interface Issue {
       number: number;
@@ -38,7 +38,7 @@ const TOOLS: &str = r##"declare module "rewind:tools" {
 "##;
 
 /// The script of `archi/01-product.md`, "What the model writes".
-const GOOD: &str = r##"import { github, slack } from "rewind:tools";
+const GOOD: &str = r##"import { github, slack } from "rewind:actions";
 import { sleep, signal } from "rewind";
 
 export default async function main(input: { repo: string }) {
@@ -66,7 +66,7 @@ fn cache_dir() -> PathBuf {
 }
 
 async fn check(source: &str) -> Vec<Diagnostic> {
-    check_with(source, TOOLS).await
+    check_with(source, ACTIONS).await
 }
 
 async fn check_with(source: &str, declarations: &str) -> Vec<Diagnostic> {
@@ -104,7 +104,7 @@ fn sources(diagnostics: &[Diagnostic]) -> Vec<String> {
 
 fn main_with(body: &str) -> String {
     format!(
-        "import {{ github, slack, ask_user }} from \"rewind:tools\";\nimport {{ sleep, signal, webhook, run, ToolError, CancelledError }} from \"rewind\";\n\nexport default async function main(input: {{ repo: string }}) {{\n{body}\n}}\n"
+        "import {{ github, slack, ask_user }} from \"rewind:actions\";\nimport {{ sleep, signal, webhook, run, ActionError, CancelledError }} from \"rewind\";\n\nexport default async function main(input: {{ repo: string }}) {{\n{body}\n}}\n"
     )
 }
 
@@ -131,7 +131,7 @@ async fn the_sandbox_and_rewind_type_check() {
   try {
     await github.close_issue({ repo: input.repo, number: 1 });
   } catch (error) {
-    if (error instanceof ToolError && error.outcomeUnknown) return { tool: error.tool };
+    if (error instanceof ActionError && error.outcomeUnknown) return { action: error.action };
     if (error instanceof CancelledError) throw error;
   }
   return { instant: instant.toString(), evens, union: [...union] };"##,
@@ -174,14 +174,14 @@ async fn chained_messages_keep_their_lines() {
 }
 
 #[tokio::test]
-async fn misuses_of_the_tools_and_of_rewind_are_found() {
+async fn misuses_of_the_actions_and_of_rewind_are_found() {
     let script = main_with(
         r##"  const issues = await github.list_issues({ repo: input.repo, state: "all" });
   await github.close_issue({ repo: input.repo });
   await slack.post_message({ channel: "#x", text: "y", extra: true });
   const decision = await signal<{ close: boolean }>("approval", { timeout: "3d" });
   const close: boolean = decision.close;
-  throw new ToolError("no");"##,
+  throw new ActionError("no");"##,
     );
     let codes = sources(&check(&script).await);
     assert_eq!(codes, ["TS2322", "TS2741", "TS2353", "TS18048", "TS2673"]);
@@ -242,14 +242,14 @@ async fn absent_globals_get_a_hint_instead_of_tsgo_advice() {
 }
 
 #[tokio::test]
-async fn fetch_exists_only_with_the_http_tool() {
+async fn fetch_exists_only_with_the_http_action() {
     let script = main_with(
         r##"  const response = await fetch("https://api.example.com/x", { method: "POST", body: "{}" });
   const text: string = await response.text();
   fetch("https://api.example.com/y");
   return { ok: response.ok, status: response.status, text };"##,
     );
-    let http = format!("{HTTP_TOOL_REFERENCE}\n{TOOLS}");
+    let http = format!("{HTTP_ACTION_REFERENCE}\n{ACTIONS}");
     let diagnostics = check_with(&script, &http).await;
     assert_eq!(
         summary(&diagnostics),
@@ -257,7 +257,7 @@ async fn fetch_exists_only_with_the_http_tool() {
             7,
             3,
             "floating-promise".into(),
-            "`fetch(…)` calls a tool, and its promise is neither awaited, returned nor assigned: the script goes on without waiting for the call, and loses its result and its errors.".into()
+            "`fetch(…)` calls an action, and its promise is neither awaited, returned nor assigned: the script goes on without waiting for the call, and loses its result and its errors.".into()
         )]
     );
     let without = check(&script).await;
@@ -394,8 +394,8 @@ async fn no_spelling_of_a_directive_adds_the_dom() {
 }
 
 #[tokio::test]
-async fn without_tools_rewind_tools_exports_nothing() {
-    let script = "import { github } from \"rewind:tools\";\nexport default async function main() {\n  return github;\n}\n";
+async fn without_actions_rewind_actions_exports_nothing() {
+    let script = "import { github } from \"rewind:actions\";\nexport default async function main() {\n  return github;\n}\n";
     let diagnostics = check_with(script, "").await;
     assert_eq!(
         summary(&diagnostics),
@@ -403,12 +403,12 @@ async fn without_tools_rewind_tools_exports_nothing() {
             1,
             10,
             "TS2305".into(),
-            "Module '\"rewind:tools\"' has no exported member 'github'.".into()
+            "Module '\"rewind:actions\"' has no exported member 'github'.".into()
         )]
     );
     assert_eq!(
         check_with(
-            "import * as tools from \"rewind:tools\";\nexport default async () => tools;\n",
+            "import * as actions from \"rewind:actions\";\nexport default async () => actions;\n",
             ""
         )
         .await,
@@ -418,10 +418,10 @@ async fn without_tools_rewind_tools_exports_nothing() {
 
 #[tokio::test]
 async fn declarations_that_do_not_check_are_a_fault_of_the_platform() {
-    let broken = "declare module \"rewind:tools\" {\n  export function list(args: Missing): Promise<void>;\n}\n";
+    let broken = "declare module \"rewind:actions\" {\n  export function list(args: Missing): Promise<void>;\n}\n";
     let error = CHECKER.check_source(GOOD, broken).await.unwrap_err();
     assert!(
-        matches!(&error, CheckError::Declarations(message) if message.contains("rewind-tools.d.ts(2,30): TS2304: Cannot find name 'Missing'.")),
+        matches!(&error, CheckError::Declarations(message) if message.contains("rewind-actions.d.ts(2,30): TS2304: Cannot find name 'Missing'.")),
         "{error}"
     );
     let port: CheckerError = error.into();
@@ -500,7 +500,7 @@ async fn checks_are_deterministic_and_run_in_parallel() {
     let checks: Vec<_> = (0..8)
         .map(|_| {
             let script = script.clone();
-            tokio::spawn(async move { CHECKER.check_source(&script, TOOLS).await.unwrap() })
+            tokio::spawn(async move { CHECKER.check_source(&script, ACTIONS).await.unwrap() })
         })
         .collect();
     for check in checks {
@@ -510,8 +510,8 @@ async fn checks_are_deterministic_and_run_in_parallel() {
 
 #[tokio::test]
 async fn the_port_checks_a_script_against_an_action_sets_declarations() {
-    let declarations = ToolDeclarations {
-        typescript: TOOLS.to_owned(),
+    let declarations = ActionDeclarations {
+        typescript: ACTIONS.to_owned(),
         prompt: String::new(),
     };
     let checker: &TsgoChecker = &CHECKER;
@@ -532,7 +532,7 @@ async fn the_port_checks_a_script_against_an_action_sets_declarations() {
 #[tokio::test]
 async fn a_check_past_its_timeout_fails() {
     let checker = TsgoChecker::new(cache_dir()).with_timeout(Duration::ZERO);
-    let error = checker.check_source(GOOD, TOOLS).await.unwrap_err();
+    let error = checker.check_source(GOOD, ACTIONS).await.unwrap_err();
     assert!(matches!(error, CheckError::Timeout(_)), "{error}");
 }
 
@@ -572,7 +572,7 @@ async fn tsgo_is_extracted_once_into_the_cache_directory() {
     std::fs::remove_file(executable).unwrap();
     let checker = TsgoChecker::new(cache.path());
     assert_eq!(checker.install().await.unwrap(), executable);
-    assert_eq!(checker.check_source(GOOD, TOOLS).await.unwrap(), []);
+    assert_eq!(checker.check_source(GOOD, ACTIONS).await.unwrap(), []);
 }
 
 /// Check latency, measured on the good script: `cargo test -p rewind-check --release --test
@@ -586,13 +586,13 @@ async fn latency() {
     checker.install().await.unwrap();
     println!("extraction: {:?}", started.elapsed());
     let started = Instant::now();
-    assert_eq!(checker.check_source(GOOD, TOOLS).await.unwrap(), []);
+    assert_eq!(checker.check_source(GOOD, ACTIONS).await.unwrap(), []);
     println!("first check: {:?}", started.elapsed());
 
     let mut times = Vec::new();
     for _ in 0..50 {
         let started = Instant::now();
-        assert_eq!(checker.check_source(GOOD, TOOLS).await.unwrap(), []);
+        assert_eq!(checker.check_source(GOOD, ACTIONS).await.unwrap(), []);
         times.push(started.elapsed());
     }
     times.sort();
@@ -606,7 +606,7 @@ async fn latency() {
     let checks: Vec<_> = (0..64)
         .map(|_| {
             let checker = checker.clone();
-            tokio::spawn(async move { checker.check_source(GOOD, TOOLS).await.unwrap() })
+            tokio::spawn(async move { checker.check_source(GOOD, ACTIONS).await.unwrap() })
         })
         .collect();
     for check in checks {
@@ -682,7 +682,7 @@ export default async function main(input: { repos: string[] }) {
 
 #[tokio::test]
 async fn a_script_starts_and_signals_workflows_with_types() {
-    let declarations = format!("{TOOLS}{WORKFLOWS}");
+    let declarations = format!("{ACTIONS}{WORKFLOWS}");
     assert_eq!(check_with(PARENT, &declarations).await, []);
 
     let wrong = PARENT
@@ -745,7 +745,7 @@ const entry: (input: Input) => Output | Promise<Output> = main;
 export { entry };
 "##;
 
-const TRIAGE: &str = r##"import { github } from "rewind:tools";
+const TRIAGE: &str = r##"import { github } from "rewind:actions";
 import { signal, webhook } from "rewind";
 
 export default async function main(input: { repo: string }) {
@@ -760,7 +760,7 @@ export default async function main(input: { repo: string }) {
 
 async fn check_workflow(source: &str) -> Vec<(u32, u32, String, String)> {
     let diagnostics = CHECKER
-        .check_workflow_source(source, TOOLS, SIGNALS, ENTRY)
+        .check_workflow_source(source, ACTIONS, SIGNALS, ENTRY)
         .await
         .unwrap_or_else(|error| panic!("{error}\n{source}"));
     summary(&diagnostics)

@@ -46,7 +46,7 @@ pub struct SetupWorkflow {
     pub signals: BTreeMap<String, Value>,
     /// Its suite: tests written in full, as the API takes them.
     pub tests: Vec<Value>,
-    /// The action set it was saved with, made from the world's: the tools as they were then. The
+    /// The action set it was saved with, made from the world's: the actions as they were then. The
     /// world's own when `None`.
     pub action_set: Option<MakeActionSet>,
 }
@@ -122,11 +122,11 @@ impl Outcome {
         self.state.get(server).unwrap_or(&Value::Null)
     }
 
-    /// The calls a server received for one of its tools.
-    pub fn calls_to(&self, server: &str, tool: &str) -> Vec<&CallRecord> {
+    /// The calls a server received for one of its actions.
+    pub fn calls_to(&self, server: &str, action: &str) -> Vec<&CallRecord> {
         self.calls
             .get(server)
-            .map(|calls| calls.iter().filter(|call| call.tool == tool).collect())
+            .map(|calls| calls.iter().filter(|call| call.tool == action).collect())
             .unwrap_or_default()
     }
 
@@ -193,17 +193,17 @@ pub fn holds_number(value: &Value, expected: f64) -> bool {
     }
 }
 
-/// How many calls to `tool` a run scheduled before any call of the run got its outcome: the
+/// How many calls to `action` a run scheduled before any call of the run got its outcome: the
 /// calls it made concurrently from its start.
-pub fn concurrent_calls(run: &RunReport, tool: &str) -> usize {
+pub fn concurrent_calls(run: &RunReport, action: &str) -> usize {
     let mut scheduled = 0;
     for entry in &run.history {
         match &entry.event {
-            Event::Command(Command::ScheduleToolCall { tool: called, .. }) if called == tool => {
+            Event::Command(Command::ScheduleCall { action: called, .. }) if called == action => {
                 scheduled += 1;
             }
-            Event::Completion(Completion::ToolCallCompleted { .. })
-            | Event::Completion(Completion::ToolCallFailed { .. }) => break,
+            Event::Completion(Completion::CallCompleted { .. })
+            | Event::Completion(Completion::CallFailed { .. }) => break,
             _ => {}
         }
     }

@@ -1,15 +1,15 @@
 //! The test document, v1 (`archi/05-testing-and-observability.md`, "Testing and mocks").
 //!
 //! ```json
-//! {"expect":{"calls":[{"times":1,"tool":"github.close_issue"}],"output":{"closed":1},
+//! {"expect":{"calls":[{"times":1,"action":"github.close_issue"}],"output":{"closed":1},
 //! "status":"completed"},"input":{"repo":"acme/api"},"name":"closes once approved",
 //! "signals":[{"name":"approval","payload":{"close":true}}],"v":1,
-//! "world":{"tools":{"github.close_issue":[{"returns":{}}]}}}
+//! "world":{"actions":{"github.close_issue":[{"returns":{}}]}}}
 //! ```
 //!
 //! Written in its canonical form: its bytes hash to the test's digest, the key of its blob. A
 //! field that holds its default is left out (`input` `{}`, a signal sent `"blocked"`, the order
-//! `"any"`), so one test has one document. A tool's single rule may be written without its
+//! `"any"`), so one test has one document. An action's single rule may be written without its
 //! array, and is written back in one. Times are milliseconds, the seed lowercase hex. The
 //! world's cassette is a cassette document without its version.
 
@@ -17,14 +17,15 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use rewind_core::{
-    CallOrder, Expectations, ExpectedCall, ExpectedError, RunId, RunStatus, Seed, SignalWhen, Test,
-    TestOrigin, TestSignal, Timestamp, ToolFailure, ToolFailureKind, ToolOutcome, ToolRule, World,
+    ActionFailure, ActionFailureKind, ActionOutcome, ActionRule, CallOrder, Expectations,
+    ExpectedCall, ExpectedError, RunId, RunStatus, Seed, SignalWhen, Test, TestOrigin, TestSignal,
+    Timestamp, World,
 };
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Value, json};
 
 use super::cassette::CassetteBodyV1;
-use super::events::{CanonicalJson, ToolFailureKindV1, digest, hex, unhex};
+use super::events::{ActionFailureKindV1, CanonicalJson, digest, hex, unhex};
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -54,14 +55,14 @@ struct TestV1 {
 #[serde(deny_unknown_fields)]
 struct WorldV1 {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    tools: BTreeMap<String, RulesV1>,
+    actions: BTreeMap<String, RulesV1>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     mocks: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     cassette: Option<CassetteBodyV1>,
 }
 
-/// A tool's rules: an array, or one rule on its own when read.
+/// An action's rules: an array, or one rule on its own when read.
 #[derive(Serialize, Deserialize)]
 #[serde(untagged)]
 enum RulesV1 {
@@ -93,7 +94,7 @@ struct RuleV1 {
 struct RuleErrorV1 {
     message: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    kind: Option<ToolFailureKindV1>,
+    kind: Option<ActionFailureKindV1>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     data: Option<CanonicalJson>,
 }
@@ -157,7 +158,7 @@ struct ExpectedErrorV1 {
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ExpectedCallV1 {
-    tool: String,
+    action: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     args: Option<CanonicalJson>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -256,12 +257,12 @@ pub(crate) fn decode_test(document: Value) -> Result<Test, String> {
 
 fn world_dto(world: &World) -> WorldV1 {
     WorldV1 {
-        tools: world
-            .tools
+        actions: world
+            .actions
             .iter()
-            .map(|(tool, rules)| {
+            .map(|(action, rules)| {
                 (
-                    tool.clone(),
+                    action.clone(),
                     RulesV1::Many(rules.iter().map(rule_dto).collect()),
                 )
             })
@@ -272,8 +273,8 @@ fn world_dto(world: &World) -> WorldV1 {
 }
 
 fn world_from_dto(world: WorldV1) -> Result<World, String> {
-    let mut tools = BTreeMap::new();
-    for (tool, rules) in world.tools {
+    let mut actions = BTreeMap::new();
+    for (action, rules) in world.actions {
         let rules = match rules {
             RulesV1::Many(rules) => rules,
             RulesV1::One(rule) => vec![*rule],
@@ -282,26 +283,27 @@ fn world_from_dto(world: WorldV1) -> Result<World, String> {
             .into_iter()
             .enumerate()
             .map(|(position, rule)| {
-                rule_from_dto(rule).map_err(|err| format!("rule {} of {tool}: {err}", position + 1))
+                rule_from_dto(rule)
+                    .map_err(|err| format!("rule {} of {action}: {err}", position + 1))
             })
             .collect::<Result<_, _>>()?;
-        tools.insert(tool, rules);
+        actions.insert(action, rules);
     }
     Ok(World {
-        tools,
+        actions,
         mocks: world.mocks,
         cassette: world.cassette.map(Into::into),
     })
 }
 
-fn rule_dto(rule: &ToolRule) -> RuleV1 {
+fn rule_dto(rule: &ActionRule) -> RuleV1 {
     let (returns, error) = match &rule.answer {
-        ToolOutcome::Result(result) => (Some(CanonicalJson(result.clone())), None),
-        ToolOutcome::Failure(failure) => (
+        ActionOutcome::Result(result) => (Some(CanonicalJson(result.clone())), None),
+        ActionOutcome::Failure(failure) => (
             None,
             Some(RuleErrorV1 {
                 message: failure.message.clone(),
-                kind: (failure.kind != ToolFailureKind::Error).then(|| failure.kind.into()),
+                kind: (failure.kind != ActionFailureKind::Error).then(|| failure.kind.into()),
                 data: failure.data.clone().map(CanonicalJson),
             }),
         ),
@@ -314,18 +316,18 @@ fn rule_dto(rule: &ToolRule) -> RuleV1 {
     }
 }
 
-fn rule_from_dto(rule: RuleV1) -> Result<ToolRule, String> {
+fn rule_from_dto(rule: RuleV1) -> Result<ActionRule, String> {
     let answer = match (rule.returns, rule.error) {
-        (Some(CanonicalJson(result)), None) => ToolOutcome::Result(result),
-        (None, Some(error)) => ToolOutcome::Failure(ToolFailure {
-            kind: error.kind.map_or(ToolFailureKind::Error, Into::into),
+        (Some(CanonicalJson(result)), None) => ActionOutcome::Result(result),
+        (None, Some(error)) => ActionOutcome::Failure(ActionFailure {
+            kind: error.kind.map_or(ActionFailureKind::Error, Into::into),
             message: error.message,
             data: error.data.map(|CanonicalJson(data)| data),
         }),
         (Some(_), Some(_)) => return Err("give \"returns\" or \"error\", not both".into()),
         (None, None) => return Err("give \"returns\" or \"error\"".into()),
     };
-    Ok(ToolRule {
+    Ok(ActionRule {
         args: rule.args.map(|CanonicalJson(args)| args),
         answer,
         times: rule.times,
@@ -378,7 +380,7 @@ fn expect_dto(expect: &Expectations) -> ExpectV1 {
             .calls
             .iter()
             .map(|call| ExpectedCallV1 {
-                tool: call.tool.clone(),
+                action: call.action.clone(),
                 args: call.args.clone().map(CanonicalJson),
                 times: call.times,
             })
@@ -402,7 +404,7 @@ fn expect_from_dto(expect: ExpectV1) -> Expectations {
             .calls
             .into_iter()
             .map(|call| ExpectedCall {
-                tool: call.tool,
+                action: call.action,
                 args: call.args.map(|CanonicalJson(args)| args),
                 times: call.times,
             })

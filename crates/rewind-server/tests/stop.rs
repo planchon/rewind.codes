@@ -1,5 +1,5 @@
 //! Stopping a server: its node hands its partitions over at once, and the next owner rebuilds
-//! the tool calls in flight from the records, as after a crash: a call under `retry` is sent
+//! the calls in flight from the records, as after a crash: a call under `retry` is sent
 //! again with its idempotency key, so the handler recognizes it, and the run goes on.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use rewind_api::access::BuiltInRole;
-use rewind_api::action_sets::{CreateActionSet, McpServer, OnInterruption, ToolPolicy};
+use rewind_api::action_sets::{ActionPolicy, CreateActionSet, McpServer, OnInterruption};
 use rewind_api::common::RunStatus;
 use rewind_api::runs::StartRun;
 use rmcp::ServerHandler;
@@ -26,7 +26,7 @@ use rmcp::transport::streamable_http_server::{
 use serde_json::{Value, json};
 use support::{TestServer, eventually, wait};
 
-/// An MCP server with one tool, `slow`, which answers after `ms` milliseconds.
+/// An MCP server with one action, `slow`, which answers after `ms` milliseconds.
 #[derive(Debug, Clone, Default)]
 struct Slow {
     /// Calls received, and calls answered.
@@ -76,7 +76,7 @@ impl ServerHandler for Slow {
 }
 
 /// The MCP server listens on 127.0.0.1, which a deployed server reaches only when allowed.
-const INTERNAL_MCP: &[&str] = &["--allow-internal-tools", "127.0.0.1"];
+const INTERNAL_MCP: &[&str] = &["--allow-internal-addresses", "127.0.0.1"];
 
 /// Serves `slow` over streamable HTTP on 127.0.0.1; returns its URL.
 async fn serve(slow: Slow) -> String {
@@ -118,9 +118,9 @@ async fn a_call_in_flight_at_a_stop_is_sent_again_by_the_next_owner() {
                 TestServer::start_in(&path, &first_store, &first_blobs, INTERNAL_MCP).await;
             let harness = server.key(BuiltInRole::Harness, &[]).await;
             // Retried: a call interrupted by the stop is sent again by the next owner.
-            let policy = ToolPolicy {
+            let policy = ActionPolicy {
                 on_interruption: Some(OnInterruption::Retry),
-                ..ToolPolicy::default()
+                ..ActionPolicy::default()
             };
             let action_set = harness
                 .create_action_set(&CreateActionSet {
@@ -135,7 +135,7 @@ async fn a_call_in_flight_at_a_stop_is_sent_again_by_the_next_owner() {
                 .await
                 .unwrap();
             let mut start = StartRun::new(
-                r#"import { fixture } from "rewind:tools";
+                r#"import { fixture } from "rewind:actions";
 export default async function main() {
   const answer = await fixture.slow({ ms: 1500 });
   return answer.text();

@@ -1,4 +1,4 @@
-//! `ApiDispatcher` against a fake API on 127.0.0.1 (`archi/04-tools.md`, "API tools" and "Signed
+//! `ApiDispatcher` against a fake API on 127.0.0.1 (`archi/04-tools.md`, "API actions" and "Signed
 //! calls"): each answer of the table, the attached secret in its header, signed requests
 //! checked as a customer's server checks them (the JWKS built from the public key, `aud`,
 //! `exp`, `htm`, `htu`, `body`, the labels), redirects within the origin signed again, the
@@ -16,15 +16,16 @@ use axum::extract::{Request, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use rewind_core::{
-    Api, RunId, SecretPlacement, Seq, Timestamp, Tool, ToolAuth, ToolFailure, ToolFailureKind,
+    Action, ActionAuth, ActionFailure, ActionFailureKind, Api, RunId, SecretPlacement, Seq,
+    Timestamp,
 };
 use rewind_engine::adapters::MemorySecrets;
 use rewind_engine::ports::{
-    CallAuth, CallClaims, Dispatched, NamespaceName, ParkKind, RunRef, Secret, SecretStore,
-    SigningKey, TaskToken, TenantId, ToolCall, ToolDispatcher, TraceContext,
+    ActionDispatcher, Call, CallAuth, CallClaims, Dispatched, NamespaceName, ParkKind, RunRef,
+    Secret, SecretStore, SigningKey, TaskToken, TenantId, TraceContext,
 };
 use rewind_openapi::{ApiConfig, ApiDispatcher, RETRY_AFTER_DATA, ReadOptions, fetch, read};
-use rewind_outbound::{InternalAllowList, ToolEgress};
+use rewind_outbound::{ActionEgress, InternalAllowList};
 use serde_json::{Value, json};
 
 const ISSUER: &str = "https://rewind.example/organizations/acme";
@@ -239,29 +240,29 @@ fn document() -> Value {
 }
 
 /// The fake API at `base`, read from its document, with `auth`.
-fn api(base: &str, auth: ToolAuth) -> (Api, BTreeMap<String, Tool>) {
+fn api(base: &str, auth: ActionAuth) -> (Api, BTreeMap<String, Action>) {
     let mut options = ReadOptions::new("fake");
     options.base_url = Some(base.to_owned());
     options.allow_http = true;
     options.auth = Some(auth);
     let read = read(&document(), &options).unwrap();
-    let tools = read
-        .tools
+    let actions = read
+        .actions
         .into_iter()
-        .map(|tool| (tool.name.trim_start_matches("fake.").to_owned(), tool))
+        .map(|action| (action.name.trim_start_matches("fake.").to_owned(), action))
         .collect();
-    (read.api, tools)
+    (read.api, actions)
 }
 
-fn call(api: &Api, tool: &Tool, args: Value) -> ToolCall {
+fn call(api: &Api, action: &Action, args: Value) -> Call {
     let run = RunRef::new(TenantId::new("acme").unwrap(), RunId::from_u128(42));
-    ToolCall {
+    Call {
         idempotency_key: format!("{}/7", run.id),
         run,
         namespace: NamespaceName::new("alice").unwrap(),
         labels: BTreeMap::from([("env".into(), "prod".into())]),
         seq: Seq(7),
-        tool: tool.clone(),
+        action: action.clone(),
         server: None,
         api: Some(api.clone()),
         args,
@@ -275,7 +276,7 @@ fn call(api: &Api, tool: &Tool, args: Value) -> ToolCall {
     }
 }
 
-fn signed(key: &SigningKey, call: &ToolCall) -> CallAuth {
+fn signed(key: &SigningKey, call: &Call) -> CallAuth {
     CallAuth::Signed {
         key: key.clone(),
         claims: CallClaims {
@@ -283,7 +284,7 @@ fn signed(key: &SigningKey, call: &ToolCall) -> CallAuth {
             subject: call.namespace.clone(),
             labels: call.labels.clone(),
             run: call.run.id,
-            tool: call.tool.name.clone(),
+            action: call.action.name.clone(),
             idempotency_key: call.idempotency_key.clone(),
             seq: call.seq,
             attempt: call.attempt,
@@ -300,7 +301,7 @@ async fn signing_key(tenant: &str) -> SigningKey {
 
 fn open() -> ApiDispatcher {
     ApiDispatcher::new(ApiConfig {
-        egress: ToolEgress::open(),
+        egress: ActionEgress::open(),
         max_response_bytes: 1024,
         ..ApiConfig::default()
     })
@@ -313,14 +314,14 @@ fn result(dispatched: Dispatched) -> Value {
     }
 }
 
-fn failed(dispatched: Dispatched) -> ToolFailure {
+fn failed(dispatched: Dispatched) -> ActionFailure {
     match dispatched {
         Dispatched::Failed(failure) => failure,
         other => panic!("expected a failure, got {other:?}"),
     }
 }
 
-fn transient(dispatched: Dispatched) -> ToolFailure {
+fn transient(dispatched: Dispatched) -> ActionFailure {
     match dispatched {
         Dispatched::Transient(failure) => failure,
         other => panic!("expected a transient failure, got {other:?}"),
@@ -332,10 +333,10 @@ async fn signed_calls_check_against_the_jwks() {
     let key = signing_key("acme").await;
     let jwks = json!({ "keys": [rewind_outbound::jwk(&key.public.kid, &key.public.key)] });
     let (base, seen) = serve(Check::Signed { jwks }).await;
-    let (api, tools) = api(&base, ToolAuth::Rewind);
+    let (api, actions) = api(&base, ActionAuth::Rewind);
     let dispatcher = open();
 
-    let get = call(&api, &tools["getMeasure"], json!({ "id": "m 1" }));
+    let get = call(&api, &actions["getMeasure"], json!({ "id": "m 1" }));
     let run = get.run.id.to_string();
     assert_eq!(
         result(dispatcher.dispatch(get.clone(), signed(&key, &get)).await),
@@ -363,7 +364,7 @@ async fn signed_calls_check_against_the_jwks() {
     // A body: its digest is signed; the operation declares Idempotency-Key.
     let create = call(
         &api,
-        &tools["createMeasure"],
+        &actions["createMeasure"],
         json!({ "body": { "name": "w" } }),
     );
     assert_eq!(
@@ -385,7 +386,7 @@ async fn signed_calls_check_against_the_jwks() {
     );
 
     // A redirect within the origin: followed, its request signed for its own URL.
-    let moved = call(&api, &tools["moved"], json!({}));
+    let moved = call(&api, &actions["moved"], json!({}));
     assert_eq!(
         result(
             dispatcher
@@ -428,9 +429,9 @@ async fn signed_calls_check_against_the_jwks() {
 async fn a_secret_goes_in_its_header() {
     let (base, seen) = serve(Check::Key("k-1")).await;
     let placement = SecretPlacement::header("X-Api-Key");
-    let (api, tools) = api(&base, ToolAuth::Secret(placement.clone()));
+    let (api, actions) = api(&base, ActionAuth::Secret(placement.clone()));
     let dispatcher = open();
-    let get = call(&api, &tools["getMeasure"], json!({ "id": "m-2" }));
+    let get = call(&api, &actions["getMeasure"], json!({ "id": "m-2" }));
     let auth = |value: &str| CallAuth::Secret {
         value: Secret::new(value),
         placement: placement.clone(),
@@ -453,10 +454,10 @@ async fn a_secret_goes_in_its_header() {
 #[tokio::test]
 async fn each_answer_has_its_outcome() {
     let (base, seen) = serve(Check::Nothing).await;
-    let (api, tools) = api(&base, ToolAuth::None);
+    let (api, actions) = api(&base, ActionAuth::None);
     let dispatcher = open();
     let send = |name: &str, args: Value| {
-        dispatcher.dispatch(call(&api, &tools[name], args), CallAuth::None)
+        dispatcher.dispatch(call(&api, &actions[name], args), CallAuth::None)
     };
 
     // 2xx.
@@ -483,7 +484,7 @@ async fn each_answer_has_its_outcome() {
         "script"
     );
     let big = failed(send("big", json!({})).await);
-    assert_eq!(big.kind, ToolFailureKind::Error);
+    assert_eq!(big.kind, ActionFailureKind::Error);
     assert_eq!(
         big.message,
         "the answer of fake.big is larger than 1024 bytes"
@@ -514,7 +515,7 @@ async fn each_answer_has_its_outcome() {
 
     // Another status fails with the problem's title and detail, or the start of the body.
     let problem = failed(send("problem", json!({})).await);
-    assert_eq!(problem.kind, ToolFailureKind::Error);
+    assert_eq!(problem.kind, ActionFailureKind::Error);
     assert_eq!(
         problem.message,
         "fake answered HTTP 404 to fake.problem: Not found: no measure m-9"
@@ -531,7 +532,7 @@ async fn each_answer_has_its_outcome() {
 
     // A redirect to another origin is refused, for good.
     let elsewhere = failed(send("elsewhere", json!({})).await);
-    assert_eq!(elsewhere.kind, ToolFailureKind::Unavailable);
+    assert_eq!(elsewhere.kind, ActionFailureKind::Unavailable);
     assert!(
         elsewhere
             .message
@@ -541,10 +542,10 @@ async fn each_answer_has_its_outcome() {
     );
 
     // Past the execution timeout: transient.
-    let mut sleepy = call(&api, &tools["sleepy"], json!({}));
-    sleepy.tool.policy.execution_timeout = Some(Duration::from_millis(300));
+    let mut sleepy = call(&api, &actions["sleepy"], json!({}));
+    sleepy.action.policy.execution_timeout = Some(Duration::from_millis(300));
     let timed_out = transient(dispatcher.dispatch(sleepy, CallAuth::None).await);
-    assert_eq!(timed_out.kind, ToolFailureKind::Timeout);
+    assert_eq!(timed_out.kind, ActionFailureKind::Timeout);
     assert_eq!(timed_out.message, "fake.sleepy did not answer within 300ms");
 
     // Nothing listening: transient.
@@ -552,13 +553,16 @@ async fn each_answer_has_its_outcome() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         listener.local_addr().unwrap().port()
     };
-    let (gone, gone_tools) = self::api(&format!("http://127.0.0.1:{port}/v1"), ToolAuth::None);
+    let (gone, gone_actions) = self::api(&format!("http://127.0.0.1:{port}/v1"), ActionAuth::None);
     let unreachable = transient(
         dispatcher
-            .dispatch(call(&gone, &gone_tools["text"], json!({})), CallAuth::None)
+            .dispatch(
+                call(&gone, &gone_actions["text"], json!({})),
+                CallAuth::None,
+            )
             .await,
     );
-    assert_eq!(unreachable.kind, ToolFailureKind::Unavailable);
+    assert_eq!(unreachable.kind, ActionFailureKind::Unavailable);
     assert!(
         unreachable
             .message
@@ -571,14 +575,14 @@ async fn each_answer_has_its_outcome() {
 #[tokio::test]
 async fn a_deployed_server_refuses_internal_apis_and_quotes_nothing_of_allowed_ones() {
     let (base, seen) = serve(Check::Nothing).await;
-    let (api, tools) = api(&base, ToolAuth::None);
+    let (api, actions) = api(&base, ActionAuth::None);
     let deployed = ApiDispatcher::new(ApiConfig::default());
     let refused = failed(
         deployed
-            .dispatch(call(&api, &tools["text"], json!({})), CallAuth::None)
+            .dispatch(call(&api, &actions["text"], json!({})), CallAuth::None)
             .await,
     );
-    assert_eq!(refused.kind, ToolFailureKind::Unavailable);
+    assert_eq!(refused.kind, ActionFailureKind::Unavailable);
     assert_eq!(
         refused.message,
         "fake cannot be reached: 127.0.0.1 is a loopback address: MCP servers and APIs are not \
@@ -587,20 +591,20 @@ async fn a_deployed_server_refuses_internal_apis_and_quotes_nothing_of_allowed_o
     assert!(seen.lock().unwrap().is_empty(), "nothing was sent");
 
     let allowed = ApiDispatcher::new(ApiConfig {
-        egress: ToolEgress::checked(InternalAllowList::parse(&["127.0.0.1"]).unwrap()),
+        egress: ActionEgress::checked(InternalAllowList::parse(&["127.0.0.1"]).unwrap()),
         ..ApiConfig::default()
     });
     assert_eq!(
         result(
             allowed
-                .dispatch(call(&api, &tools["text"], json!({})), CallAuth::None)
+                .dispatch(call(&api, &actions["text"], json!({})), CallAuth::None)
                 .await
         ),
         json!({ "contentType": "text/plain", "text": "hello" })
     );
     let problem = failed(
         allowed
-            .dispatch(call(&api, &tools["problem"], json!({})), CallAuth::None)
+            .dispatch(call(&api, &actions["problem"], json!({})), CallAuth::None)
             .await,
     );
     assert_eq!(
@@ -613,7 +617,7 @@ async fn a_deployed_server_refuses_internal_apis_and_quotes_nothing_of_allowed_o
 #[tokio::test]
 async fn documents_are_read_from_their_url_through_the_egress_checks() {
     let (base, _) = serve(Check::Nothing).await;
-    let fetched = fetch(&format!("{base}/openapi.json"), &ToolEgress::open())
+    let fetched = fetch(&format!("{base}/openapi.json"), &ActionEgress::open())
         .await
         .unwrap();
     assert!(!fetched.internal);
@@ -627,7 +631,7 @@ async fn documents_are_read_from_their_url_through_the_egress_checks() {
         base
     );
 
-    let refused = fetch(&format!("{base}/openapi.json"), &ToolEgress::default())
+    let refused = fetch(&format!("{base}/openapi.json"), &ActionEgress::default())
         .await
         .unwrap_err();
     assert!(
@@ -637,11 +641,11 @@ async fn documents_are_read_from_their_url_through_the_egress_checks() {
         ),
         "{refused}"
     );
-    let huge = fetch(&format!("{base}/huge.json"), &ToolEgress::open())
+    let huge = fetch(&format!("{base}/huge.json"), &ActionEgress::open())
         .await
         .unwrap_err();
     assert!(huge.0.ends_with("is larger than 2 MiB"), "{huge}");
-    let internal = ToolEgress::checked(InternalAllowList::parse(&["127.0.0.1"]).unwrap());
+    let internal = ActionEgress::checked(InternalAllowList::parse(&["127.0.0.1"]).unwrap());
     let console = fetch(&format!("{base}/not-json"), &internal)
         .await
         .unwrap_err();
@@ -652,7 +656,7 @@ async fn documents_are_read_from_their_url_through_the_egress_checks() {
         "{console}"
     );
     assert!(!console.0.contains("admin"));
-    let missing = fetch(&format!("{base}/gone.json"), &ToolEgress::open())
+    let missing = fetch(&format!("{base}/gone.json"), &ActionEgress::open())
         .await
         .unwrap_err();
     assert!(missing.0.ends_with("answered HTTP 404"), "{missing}");

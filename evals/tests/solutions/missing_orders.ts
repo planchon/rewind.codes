@@ -1,5 +1,5 @@
-import { crm } from "rewind:tools";
-import { ToolError } from "rewind";
+import { crm } from "rewind:actions";
+import { ActionError } from "rewind";
 
 export default async function main() {
   const ids = Array.from({ length: 12 }, (_, i) => `O-${501 + i}`);
@@ -11,7 +11,7 @@ export default async function main() {
         const order = (await crm.get_order({ id })).json<{ total_cents: number }>();
         total_cents += order.total_cents;
       } catch (error) {
-        if (!(error instanceof ToolError)) throw error;
+        if (!(error instanceof ActionError)) throw error;
         missing.push(id);
       }
     }),

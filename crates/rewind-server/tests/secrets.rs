@@ -355,7 +355,7 @@ async fn an_attachment_for_a_server_taking_none_is_secret_required(server: &Test
         .await
         .unwrap();
     let mut start = StartRun::new(
-        "import { ask_user } from \"rewind:tools\";\nexport default async () => ask_user({});",
+        "import { ask_user } from \"rewind:actions\";\nexport default async () => ask_user({});",
     );
     start.action_set = Some(action_set.id.clone());
     start.secrets = [("ask_user".to_owned(), "ns/github".to_owned())]

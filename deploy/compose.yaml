@@ -65,7 +65,7 @@ x-node-env: &node-env
   REWIND_CACHE_MEMORY: ${REWIND_CACHE_MEMORY:-384MiB}
   # MCP servers at private addresses the nodes may reach (names, *.domain, CIDR networks):
   # `loadgen` is the load generator's fake MCP server (profile load).
-  REWIND_ALLOW_INTERNAL_TOOLS: ${REWIND_ALLOW_INTERNAL_TOOLS:-loadgen}
+  REWIND_ALLOW_INTERNAL_ADDRESSES: ${REWIND_ALLOW_INTERNAL_ADDRESSES:-loadgen}
 
 # What the nodes that serve the HTTP API are given besides: the first key, and what the tenants
 # they create get.

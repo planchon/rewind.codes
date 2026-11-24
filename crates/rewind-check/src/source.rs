@@ -375,7 +375,7 @@ mod tests {
 
     #[test]
     fn frames_show_the_line_with_its_neighbours_and_mark_the_span() {
-        let source = "import { github } from \"rewind:tools\";\n\nexport default async function main() {\n  await github.list_issues({ repo: 42 });\n}\n";
+        let source = "import { github } from \"rewind:actions\";\n\nexport default async function main() {\n  await github.list_issues({ repo: 42 });\n}\n";
         let text = SourceText::new(source);
         let start = source.find("42").unwrap();
         assert_eq!(
@@ -385,7 +385,7 @@ mod tests {
         // The first line has no line before; a blank line is not shown.
         assert_eq!(
             text.frame(0, 6),
-            "1 | import { github } from \"rewind:tools\";\n  | ^^^^^^"
+            "1 | import { github } from \"rewind:actions\";\n  | ^^^^^^"
         );
         // An empty span is marked by one character.
         assert_eq!(text.frame(source.len(), source.len()), "5 | }\n6 |\n  | ^");

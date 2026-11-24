@@ -18,7 +18,7 @@ use std::time::Duration as StdDuration;
 
 use rewind_agent_tools::{Api, ApiError};
 use rewind_api::action_sets::{
-    ActionSet, CreateActionSet, SearchQuery, ToolMatch, ToolSearchResults,
+    ActionMatch, ActionSearchResults, ActionSet, CreateActionSet, SearchQuery,
 };
 use rewind_api::common::{Duration, RunStatus as ApiRunStatus, timestamp};
 use rewind_api::events::Entry;
@@ -43,8 +43,8 @@ use rewind_core::{
 use rewind_engine::edge::{EdgeError, RecordingError};
 use rewind_engine::ports::link::Refusal;
 use rewind_engine::ports::{
-    CatalogError, CatalogStore, CheckerError, Enqueued, RunHead, RunRef, StoreError,
-    StoredActionSet, StoredWorkflow, TenantId, ToolDeclarations, TraceContext, TypeChecker,
+    ActionDeclarations, CatalogError, CatalogStore, CheckerError, Enqueued, RunHead, RunRef,
+    StoreError, StoredActionSet, StoredWorkflow, TenantId, TraceContext, TypeChecker,
     WorkflowDeclarations,
 };
 use rewind_engine::suites::{
@@ -366,10 +366,10 @@ fn label_filters(filters: &[String]) -> Result<BTreeMap<String, String>, ApiErro
         .collect()
 }
 
-/// The tools matching a query, best first, as `GET /v1/action-sets/{id}/search` ranks them: each
-/// word of the query found in a tool's name counts two, in its description one; the workflows
+/// The actions matching a query, best first, as `GET /v1/action-sets/{id}/search` ranks them: each
+/// word of the query found in an action's name counts two, in its description one; the workflows
 /// the action set pins as `workflows.<name>`. `None` when the query has no word.
-pub fn search(stored: &StoredActionSet, query: &str, limit: usize) -> Option<Vec<ToolMatch>> {
+pub fn search(stored: &StoredActionSet, query: &str, limit: usize) -> Option<Vec<ActionMatch>> {
     let words: Vec<String> = query
         .split(|c: char| !c.is_alphanumeric() && c != '_')
         .filter(|word| !word.is_empty())
@@ -381,17 +381,17 @@ pub fn search(stored: &StoredActionSet, query: &str, limit: usize) -> Option<Vec
     let generated = rewind_codegen::generate(&stored.action_set, &BTreeMap::new());
     let candidates: Vec<(String, String)> = stored
         .action_set
-        .tools()
+        .actions()
         .iter()
-        .map(|tool| {
+        .map(|action| {
             (
-                tool.name.clone(),
-                tool.description.clone().unwrap_or_default(),
+                action.name.clone(),
+                action.description.clone().unwrap_or_default(),
             )
         })
         .chain(stored.action_set.workflows().iter().map(|workflow| {
             (
-                format!("{}.{}", rewind_core::WORKFLOWS_NAMESPACE, workflow.name),
+                format!("{}.{}", rewind_core::WORKFLOWS_GROUP, workflow.name),
                 workflow.description.clone().unwrap_or_default(),
             )
         }))
@@ -412,14 +412,15 @@ pub fn search(stored: &StoredActionSet, query: &str, limit: usize) -> Option<Vec
         })
         .filter(|(score, _)| *score > 0)
         .collect();
-    scored.sort_by(|(a, tool_a), (b, tool_b)| b.cmp(a).then_with(|| tool_a.0.cmp(&tool_b.0)));
+    scored
+        .sort_by(|(a, action_a), (b, action_b)| b.cmp(a).then_with(|| action_a.0.cmp(&action_b.0)));
     Some(
         scored
             .into_iter()
             .take(limit)
             .map(|(_, (name, description))| {
-                let declared = generated.tools.iter().find(|tool| tool.name == *name);
-                ToolMatch {
+                let declared = generated.actions.iter().find(|action| action.name == *name);
+                ActionMatch {
                     name: name.clone(),
                     description: description.clone(),
                     prompt: declared.map(|d| d.prompt.clone()).unwrap_or_default(),
@@ -484,9 +485,9 @@ impl World {
         let Some(id) = id else {
             let action_set = rewind_core::ActionSet::new(
                 [],
-                [rewind_core::Tool::new(
+                [rewind_core::Action::new(
                     "webhook",
-                    rewind_core::ToolRoute::Builtin(rewind_core::Builtin::Webhook),
+                    rewind_core::ActionRoute::Builtin(rewind_core::Builtin::Webhook),
                     rewind_runtime::builtins::webhook_input_schema(),
                 )],
             )
@@ -494,7 +495,7 @@ impl World {
             let declarations = self.register_action_set(&action_set).await.map_err(fault)?;
             return Ok(StoredActionSet {
                 action_set,
-                declarations: ToolDeclarations {
+                declarations: ActionDeclarations {
                     typescript: declarations.typescript,
                     prompt: declarations.prompt,
                 },
@@ -713,7 +714,7 @@ impl Api for World {
     async fn list_runs(&self, filter: &RunFilter) -> Result<RunPage, ApiError> {
         let unsupported = filter.q.is_some()
             || filter.sort.is_some()
-            || filter.tool.is_some()
+            || filter.action.is_some()
             || filter.script.is_some()
             || filter.error.is_some()
             || filter.quarantined.is_some()
@@ -952,7 +953,7 @@ impl Api for World {
         // What the caller's runs of the script did.
         let summaries = self.summaries().await.map_err(edge_error)?;
         let mut runs = RunCounts::default();
-        let mut tools = BTreeSet::new();
+        let mut actions = BTreeSet::new();
         let mut first = None;
         let mut last = None;
         for summary in summaries
@@ -972,8 +973,8 @@ impl Api for World {
             first = first.min(Some(started_at)).or(Some(started_at));
             last = last.max(Some(started_at));
             for entry in self.history(&summary.run).await.map_err(edge_error)? {
-                if let Event::Command(Command::ScheduleToolCall { tool, .. }) = &entry.event {
-                    tools.insert(tool.clone());
+                if let Event::Command(Command::ScheduleCall { action, .. }) = &entry.event {
+                    actions.insert(action.clone());
                 }
             }
         }
@@ -993,7 +994,7 @@ impl Api for World {
             headline: rewind_api::scripts::headline(&source),
             source,
             runs,
-            tools: tools.into_iter().collect(),
+            actions: actions.into_iter().collect(),
             first_run_at: first.map(timestamp),
             last_run_at: last.map(timestamp),
         })
@@ -1036,7 +1037,7 @@ impl Api for World {
         if !action_set.mcp.is_empty() || !action_set.host.is_empty() || action_set.http.is_some() {
             return Err(problem(
                 ProblemType::InvalidActionSet,
-                "an action set derived from a base keeps its servers and tools: give only workflows \
+                "an action set derived from a base keeps its servers and actions: give only workflows \
                  with base",
             ));
         }
@@ -1062,23 +1063,23 @@ impl Api for World {
         let declarations = self.register_action_set(&derived).await.map_err(fault)?;
         Ok(view::action_set(&StoredActionSet {
             action_set: derived,
-            declarations: ToolDeclarations {
+            declarations: ActionDeclarations {
                 typescript: declarations.typescript,
                 prompt: declarations.prompt,
             },
         }))
     }
 
-    async fn search_tools(
+    async fn search_actions(
         &self,
         action_set: &str,
         query: &SearchQuery,
-    ) -> Result<ToolSearchResults, ApiError> {
+    ) -> Result<ActionSearchResults, ApiError> {
         let stored = self.stored_action_set(Some(action_set)).await?;
         let limit = usize::try_from(query.limit.unwrap_or(10).clamp(1, 100)).unwrap_or(10);
-        let tools = search(&stored, &query.query, limit)
+        let actions = search(&stored, &query.query, limit)
             .ok_or_else(|| invalid("query: give at least one word to look for"))?;
-        Ok(ToolSearchResults { tools })
+        Ok(ActionSearchResults { actions })
     }
 
     async fn create_workflow(&self, workflow: &CreateWorkflow) -> Result<Workflow, ApiError> {

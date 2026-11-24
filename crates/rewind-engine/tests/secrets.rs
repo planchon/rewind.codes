@@ -10,19 +10,19 @@ mod support;
 use std::collections::BTreeMap;
 
 use rewind_core::{
-    ActionSet, Attachments, Command, Event, JsonValue, McpServer, McpTransport, RunMode, RunStatus,
-    Script, SecretName, SecretPlacement, SecretRef, Seq, Tool, ToolAuth, ToolFailure,
-    ToolFailureKind, ToolRoute, WorkflowSchemas,
+    Action, ActionAuth, ActionFailure, ActionFailureKind, ActionRoute, ActionSet, Attachments,
+    Command, Event, JsonValue, McpServer, McpTransport, RunMode, RunStatus, Script, SecretName,
+    SecretPlacement, SecretRef, Seq, WorkflowSchemas,
 };
 use rewind_engine::StartWorkflow;
 use rewind_engine::adapters::StaticTypeChecker;
 use rewind_engine::attachments::{AttachRights, AttachmentProblem, RefusedAttachments};
 use rewind_engine::plane::NodeConfig;
 use rewind_engine::ports::{
-    CallAuth, CallClaims, CatalogStore, Created, CredentialsExpiredReason, Day, Delivery,
-    Dispatched, NamespaceName, NewSecret, Page, ParkKind, PutSecret, RunOrder, RunQuery, RunRef,
-    Scope, Secret, SecretId, SecretReader, SecretStore, StoredWorkflow, Subscription, TaskState,
-    TenantId, ToolDeclarations, WebhookEventKind, WorkflowDeclarations,
+    ActionDeclarations, CallAuth, CallClaims, CatalogStore, Created, CredentialsExpiredReason, Day,
+    Delivery, Dispatched, NamespaceName, NewSecret, Page, ParkKind, PutSecret, RunOrder, RunQuery,
+    RunRef, Scope, Secret, SecretId, SecretReader, SecretStore, StoredWorkflow, Subscription,
+    TaskState, TenantId, WebhookEventKind, WorkflowDeclarations,
 };
 use rewind_engine::suites::SuiteChanges;
 use rewind_engine::{ForkError, ForkRun, RegisterError, RegisterWorkflow, StartError, StartRun};
@@ -36,7 +36,7 @@ use support::{FakeExecutor, FakeRun, RecordingDispatcher, kit};
 /// `github` takes a secret as a bearer token, `linear` in `X-Api-Key`, `dax` checks Rewind's
 /// signature, and `ask_user` is a host tool.
 fn action_set() -> ActionSet {
-    let server = |name: &str, auth: ToolAuth| {
+    let server = |name: &str, auth: ActionAuth| {
         let mut server = McpServer::new(
             name,
             McpTransport::Http {
@@ -46,10 +46,10 @@ fn action_set() -> ActionSet {
         server.auth = auth;
         server
     };
-    let tool = |name: &str, server: &str| {
-        Tool::new(
+    let action = |name: &str, server: &str| {
+        Action::new(
             name,
-            ToolRoute::Mcp {
+            ActionRoute::Mcp {
                 server: server.into(),
             },
             json!({}),
@@ -57,35 +57,35 @@ fn action_set() -> ActionSet {
     };
     ActionSet::new(
         [
-            server("github", ToolAuth::Secret(SecretPlacement::bearer())),
+            server("github", ActionAuth::Secret(SecretPlacement::bearer())),
             server(
                 "linear",
-                ToolAuth::Secret(SecretPlacement::header("X-Api-Key")),
+                ActionAuth::Secret(SecretPlacement::header("X-Api-Key")),
             ),
-            server("dax", ToolAuth::Rewind),
+            server("dax", ActionAuth::Rewind),
         ],
         [
-            tool("github.get_issue", "github"),
-            tool("linear.search", "linear"),
-            tool("dax.ask", "dax"),
-            Tool::new("ask_user", ToolRoute::Host { group: None }, json!({})),
+            action("github.get_issue", "github"),
+            action("linear.search", "linear"),
+            action("dax.ask", "dax"),
+            Action::new("ask_user", ActionRoute::Host { group: None }, json!({})),
         ],
     )
     .unwrap()
 }
 
-/// Calls the tool its input names, and completes with the result or the failure.
+/// Calls the action its input names, and completes with the result or the failure.
 fn calling(run: &mut FakeRun) {
-    let tool = run.input["tool"].as_str().unwrap().to_owned();
-    run.call(&tool, json!({}));
+    let action = run.input["action"].as_str().unwrap().to_owned();
+    run.call(&action, json!({}));
 }
 
 fn answered(run: &mut FakeRun, delivery: &Delivery) {
     match delivery {
-        Delivery::ToolCallCompleted { result, .. } => {
+        Delivery::CallCompleted { result, .. } => {
             run.complete(json!({ "result": result }));
         }
-        Delivery::ToolCallFailed { error, .. } => run.complete(json!({
+        Delivery::CallFailed { error, .. } => run.complete(json!({
             "error": error.kind.as_str(),
             "message": error.message,
         })),
@@ -93,7 +93,7 @@ fn answered(run: &mut FakeRun, delivery: &Delivery) {
     }
 }
 
-/// `caller` and `signer` call the tool their input names and complete with what came back;
+/// `caller` and `signer` call the action their input names and complete with what came back;
 /// `quiet` calls nothing. `caller` imports `github` and `dax`, `signer` `dax`, `quiet` nothing.
 fn programs() -> FakeExecutor {
     FakeExecutor::new()
@@ -157,15 +157,19 @@ fn with_secrets() -> RightsTo {
     RightsTo::Organization(BTreeMap::new())
 }
 
-/// A live run of `program` in `namespace`, calling `tool`, attaching `secrets`.
+/// A live run of `program` in `namespace`, calling `action`, attaching `secrets`.
 fn start(
     program: &str,
-    tool: &str,
+    action: &str,
     namespace: &NamespaceName,
     secrets: &[(&str, &str)],
     rights: &RightsTo,
 ) -> StartRun {
-    let mut request = StartRun::new(Script::new(program), action_set(), json!({ "tool": tool }));
+    let mut request = StartRun::new(
+        Script::new(program),
+        action_set(),
+        json!({ "action": action }),
+    );
     request.namespace = namespace.clone();
     request.metadata.secrets = attaching(secrets);
     request.attach = rights.rights();
@@ -492,8 +496,8 @@ async fn a_secret_a_server_echoes_never_reaches_the_history_nor_the_script() {
         let value = value.expose();
         if call.attempt == 1 {
             // An error that quotes the key, retried.
-            return Dispatched::Transient(ToolFailure {
-                kind: ToolFailureKind::Unavailable,
+            return Dispatched::Transient(ActionFailure {
+                kind: ActionFailureKind::Unavailable,
                 message: format!("invalid key {value}"),
                 data: Some(json!({ "body": format!("token={value}") })),
             });
@@ -653,7 +657,7 @@ async fn a_signed_call_carries_the_tenant_s_key_and_the_claims_of_the_call() {
             subject: alice(),
             labels: BTreeMap::from([("env".to_owned(), "prod".to_owned())]),
             run: run.id,
-            tool: "dax.ask".into(),
+            action: "dax.ask".into(),
             idempotency_key: format!("{}/1", run.id),
             seq: Seq(1),
             attempt: 1,
@@ -676,7 +680,7 @@ async fn without_a_public_url_a_signed_call_fails_unsent() {
         .await;
     assert!(world.plane.dispatcher.calls().is_empty());
     let output = output(&mut world, &run).await;
-    assert_eq!(output["error"], ToolFailureKind::Unavailable.as_str());
+    assert_eq!(output["error"], ActionFailureKind::Unavailable.as_str());
     assert!(
         output["message"]
             .as_str()
@@ -778,7 +782,7 @@ async fn saving() -> World {
     world
         .plane
         .catalog
-        .put_action_set(&tenant(), &action_set(), &ToolDeclarations::default())
+        .put_action_set(&tenant(), &action_set(), &ActionDeclarations::default())
         .await
         .unwrap();
     world
@@ -871,7 +875,7 @@ async fn a_run_of_a_version_checks_only_that_its_namespace_s_secrets_exist() {
         tenant: tenant(),
         namespace,
         version,
-        input: json!({ "tool": "github.get_issue" }),
+        input: json!({ "action": "github.get_issue" }),
         ttl: None,
         metadata: Default::default(),
         idempotency_key: None,

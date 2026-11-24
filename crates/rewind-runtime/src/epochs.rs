@@ -9,7 +9,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
-use rewind_core::{ActionSet, Epoch, Tool, ToolRoute};
+use rewind_core::{Action, ActionRoute, ActionSet, Epoch};
 
 /// The glue of one epoch.
 #[derive(Debug)]
@@ -26,10 +26,13 @@ pub(crate) struct Glue {
     pub(crate) std: &'static str,
     /// The names `rewind` exports, checked when a script is compiled.
     pub(crate) std_exports: &'static [&'static str],
-    /// Generates `rewind:tools` from the run's action set.
-    pub(crate) tools: fn(&ActionSet) -> String,
-    /// The names `rewind:tools` exports for an action set, checked when a script is compiled.
-    pub(crate) tool_exports: fn(&ActionSet) -> BTreeSet<String>,
+    /// The old names `rewind` still exports for code already written, accepted when a script is
+    /// compiled but never declared nor listed (`archi/08-decisions.md`, R1).
+    pub(crate) std_aliases: &'static [&'static str],
+    /// Generates `rewind:actions` from the run's action set.
+    pub(crate) actions: fn(&ActionSet) -> String,
+    /// The names `rewind:actions` exports for an action set, checked when a script is compiled.
+    pub(crate) action_exports: fn(&ActionSet) -> BTreeSet<String>,
     /// Generates `rewind:workflows` from the run's action set.
     pub(crate) workflows: fn(&ActionSet) -> String,
     /// The names `rewind:workflows` exports for an action set, checked when a script is compiled.
@@ -43,16 +46,17 @@ const EPOCH_1: Glue = Glue {
     internal: include_str!("js/epoch1/internal.js"),
     std: include_str!("js/epoch1/std.js"),
     std_exports: &[
+        "ActionError",
         "CancelledError",
-        "ToolError",
         "WorkflowError",
         "run",
         "signal",
         "sleep",
         "webhook",
     ],
-    tools: tools_module_v1,
-    tool_exports: tool_exports_v1,
+    std_aliases: &["ToolError"],
+    actions: actions_module_v1,
+    action_exports: action_exports_v1,
     workflows: workflows_module_v1,
     workflow_exports: workflow_exports_v1,
 };
@@ -69,80 +73,80 @@ pub(crate) fn latest() -> &'static Glue {
     const { &EPOCHS[EPOCHS.len() - 1] }
 }
 
-/// The tools of an action set as `rewind:tools` exposes them in epoch 1, from their routes: one
-/// namespace per MCP server or host-tool group, and the host tools without a group by name.
+/// The actions of an action set as `rewind:actions` exposes them in epoch 1, from their routes: one
+/// object per group (an MCP server, an API or a host-tool group), and the host tools without a group by name.
 /// The built-ins are not exported: scripts reach them through `fetch` and `webhook`.
-struct ToolExportsV1<'a> {
-    namespaces: BTreeMap<&'a str, Vec<&'a Tool>>,
-    bare: Vec<&'a Tool>,
+struct ActionExportsV1<'a> {
+    groups: BTreeMap<&'a str, Vec<&'a Action>>,
+    bare: Vec<&'a Action>,
 }
 
-impl<'a> ToolExportsV1<'a> {
+impl<'a> ActionExportsV1<'a> {
     fn of(action_set: &'a ActionSet) -> Self {
-        let mut namespaces: BTreeMap<&str, Vec<&Tool>> = BTreeMap::new();
+        let mut groups: BTreeMap<&str, Vec<&Action>> = BTreeMap::new();
         let mut bare = Vec::new();
-        for tool in action_set.tools() {
-            if matches!(tool.route, ToolRoute::Builtin(_)) {
+        for action in action_set.actions() {
+            if matches!(action.route, ActionRoute::Builtin(_)) {
                 continue;
             }
-            match tool.namespace() {
-                Some(namespace) => namespaces.entry(namespace).or_default().push(tool),
-                None if is_identifier(&tool.name) => bare.push(tool),
+            match action.group() {
+                Some(group) => groups.entry(group).or_default().push(action),
+                None if is_identifier(&action.name) => bare.push(action),
                 // Unreachable from a script: there is no name to import it by.
                 None => {}
             }
         }
-        Self { namespaces, bare }
+        Self { groups, bare }
     }
 }
 
-fn tool_exports_v1(action_set: &ActionSet) -> BTreeSet<String> {
-    let exports = ToolExportsV1::of(action_set);
-    let namespaces = exports.namespaces.keys().copied();
-    let bare = exports.bare.iter().map(|tool| tool.name.as_str());
-    namespaces.chain(bare).map(str::to_owned).collect()
+fn action_exports_v1(action_set: &ActionSet) -> BTreeSet<String> {
+    let exports = ActionExportsV1::of(action_set);
+    let groups = exports.groups.keys().copied();
+    let bare = exports.bare.iter().map(|action| action.name.as_str());
+    groups.chain(bare).map(str::to_owned).collect()
 }
 
-/// The function of `rewind:internal` that calls a tool: an MCP tool pinned without an output
-/// schema returns its content, which gets the `text()` and `json()` helpers of `ToolContent`.
-fn caller(tool: &Tool) -> &'static str {
-    match tool.route {
-        ToolRoute::Mcp { .. } if tool.output_schema.is_none() => "content",
+/// The function of `rewind:internal` that calls an action: an MCP action pinned without an output
+/// schema returns its content, which gets the `text()` and `json()` helpers of `ActionContent`.
+fn caller(action: &Action) -> &'static str {
+    match action.route {
+        ActionRoute::Mcp { .. } if action.output_schema.is_none() => "content",
         _ => "call",
     }
 }
 
-/// `rewind:tools` for epoch 1: one frozen namespace object per MCP server or host-tool group, and
-/// one function per host tool without a group. Tool names are kept as the server defines them;
+/// `rewind:actions` for epoch 1: one frozen object per group (an MCP server, an API or a host-tool group), and
+/// one function per host tool without a group. Action names are kept as the server defines them;
 /// a name that is not an identifier is still reachable with brackets (`github["close-issue"]`).
-fn tools_module_v1(action_set: &ActionSet) -> String {
-    let ToolExportsV1 { namespaces, bare } = ToolExportsV1::of(action_set);
+fn actions_module_v1(action_set: &ActionSet) -> String {
+    let ActionExportsV1 { groups, bare } = ActionExportsV1::of(action_set);
     let mut module = String::from(
         "import hooks from \"rewind:internal\";\n\
-         const call = hooks.callTool;\n\
-         const content = hooks.callToolContent;\n",
+         const call = hooks.callAction;\n\
+         const content = hooks.callActionContent;\n",
     );
-    for (namespace, tools) in &namespaces {
-        let _ = writeln!(module, "export const {namespace} = Object.freeze({{");
-        for tool in tools {
-            let name = &tool.name[namespace.len() + 1..];
+    for (group, actions) in &groups {
+        let _ = writeln!(module, "export const {group} = Object.freeze({{");
+        for action in actions {
+            let name = &action.name[group.len() + 1..];
             let _ = writeln!(
                 module,
                 "  {}: (args) => {}({}, args),",
                 js_string(name),
-                caller(tool),
-                js_string(&tool.name)
+                caller(action),
+                js_string(&action.name)
             );
         }
         module.push_str("});\n");
     }
-    for tool in bare {
+    for action in bare {
         let _ = writeln!(
             module,
             "export const {} = (args) => {}({}, args);",
-            tool.name,
-            caller(tool),
-            js_string(&tool.name)
+            action.name,
+            caller(action),
+            js_string(&action.name)
         );
     }
     module
@@ -189,25 +193,25 @@ fn js_string(text: &str) -> String {
 mod tests {
     use super::*;
 
-    // A pinned action set only has namespaces that are identifiers (`rewind_core::ActionSet::new`).
+    // A pinned action set only has groups that are identifiers (`rewind_core::ActionSet::new`).
     #[test]
-    fn generates_namespaces_and_bare_tools() {
-        let module = tools_module_v1(
+    fn generates_groups_and_bare_actions() {
+        let module = actions_module_v1(
             &ActionSet::from_host_tools(["github.list_issues", "github.close-issue", "ask_user"])
                 .unwrap(),
         );
         assert_eq!(
             module,
             "import hooks from \"rewind:internal\";\n\
-             const call = hooks.callTool;\n\
-             const content = hooks.callToolContent;\n\
+             const call = hooks.callAction;\n\
+             const content = hooks.callActionContent;\n\
              export const github = Object.freeze({\n  \
                \"close-issue\": (args) => call(\"github.close-issue\", args),\n  \
                \"list_issues\": (args) => call(\"github.list_issues\", args),\n\
              });\n\
              export const ask_user = (args) => call(\"ask_user\", args);\n"
         );
-        let exports: Vec<String> = tool_exports_v1(
+        let exports: Vec<String> = action_exports_v1(
             &ActionSet::from_host_tools(["github.list_issues", "github.close-issue", "ask_user"])
                 .unwrap(),
         )
@@ -216,7 +220,7 @@ mod tests {
         assert_eq!(exports, ["ask_user", "github"]);
     }
 
-    /// The names the compiler accepts are exactly what `std.js` exports.
+    /// The names the compiler accepts, its aliases included, are exactly what `std.js` exports.
     #[test]
     fn std_exports_are_those_of_the_module() {
         for glue in EPOCHS {
@@ -228,7 +232,10 @@ mod tests {
             let inner = &line["export const {".len()..line.find('}').expect("closing brace")];
             let mut names: Vec<&str> = inner.split(',').map(str::trim).collect();
             names.sort_unstable();
-            assert_eq!(names, glue.std_exports, "{}", glue.epoch);
+            let mut accepted: Vec<&str> = glue.std_exports.to_vec();
+            accepted.extend(glue.std_aliases);
+            accepted.sort_unstable();
+            assert_eq!(names, accepted, "{}", glue.epoch);
         }
     }
 
@@ -241,9 +248,9 @@ mod tests {
                 url: "https://mcp.example.com/github".into(),
             },
         );
-        let mut get_issue = Tool::new(
+        let mut get_issue = Action::new(
             "github.get_issue",
-            ToolRoute::Mcp {
+            ActionRoute::Mcp {
                 server: "github".into(),
             },
             serde_json::json!({}),
@@ -253,33 +260,33 @@ mod tests {
             [github],
             [
                 get_issue,
-                Tool::new(
+                Action::new(
                     "github.list_issues",
-                    ToolRoute::Mcp {
+                    ActionRoute::Mcp {
                         server: "github".into(),
                     },
                     serde_json::json!({}),
                 ),
-                Tool::new(
+                Action::new(
                     "http",
-                    ToolRoute::Builtin(Builtin::Http {
+                    ActionRoute::Builtin(Builtin::Http {
                         allowed_hosts: vec!["api.example.com".into()],
                     }),
                     serde_json::json!({}),
                 ),
-                Tool::new(
+                Action::new(
                     "webhook",
-                    ToolRoute::Builtin(Builtin::Webhook),
+                    ActionRoute::Builtin(Builtin::Webhook),
                     serde_json::json!({}),
                 ),
             ],
         )
         .unwrap();
-        let exports: Vec<String> = tool_exports_v1(&action_set).into_iter().collect();
+        let exports: Vec<String> = action_exports_v1(&action_set).into_iter().collect();
         assert_eq!(exports, ["github"]);
-        let module = tools_module_v1(&action_set);
+        let module = actions_module_v1(&action_set);
         assert!(module.contains("export const github"), "{module}");
-        // An MCP tool without an output schema returns its content, with the helpers; with
+        // An MCP action without an output schema returns its content, with the helpers; with
         // one, its structured content.
         assert!(
             module.contains("\"get_issue\": (args) => call(\"github.get_issue\", args),"),

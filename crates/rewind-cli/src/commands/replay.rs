@@ -3,7 +3,7 @@
 //!
 //! The journal document is read from the file, or exported by the server
 //! (`GET /v1/runs/{id}/journal`); either way the replay runs here, on a fresh V8 executor,
-//! and calls no tool. Without `--script`, the run's own script must reproduce the journal
+//! and calls no action. Without `--script`, the run's own script must reproduce the journal
 //! exactly: a divergence is non-determinism. With `--script`, the corrected script is followed
 //! against the journal as a fork would follow it (`rewind_engine::fork::compatibility`): the
 //! report says where it stops following the run, and which calls a fork would reuse, call
@@ -61,7 +61,7 @@ pub(crate) struct ForkReport {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct CallRef {
     pub(crate) seq: u32,
-    pub(crate) tool: String,
+    pub(crate) action: String,
 }
 
 pub(super) async fn replay(
@@ -110,7 +110,7 @@ pub(super) async fn replay(
             let calls = |calls: &[CallRef]| {
                 calls
                     .iter()
-                    .map(|call| format!("#{} {}", call.seq, call.tool))
+                    .map(|call| format!("#{} {}", call.seq, call.action))
                     .collect::<Vec<_>>()
                     .join(", ")
             };
@@ -253,7 +253,7 @@ pub(crate) async fn compatibility(
             journal.run
         ),
     };
-    let tools = tools_by_seq(&journal.entries);
+    let actions = actions_by_seq(&journal.entries);
     // What a fork reuses: the calls it copies with their outcomes while it follows the run,
     // and the calls it inherits still pending, whose recorded outcomes it delivers.
     let mut reused = completed_before(&journal.entries, live_from(&found.point, entries));
@@ -264,10 +264,10 @@ pub(crate) async fn compatibility(
         seqs.iter()
             .map(|seq| CallRef {
                 seq: seq.0,
-                tool: tools
+                action: actions
                     .iter()
                     .find(|(called, _)| called == seq)
-                    .map(|(_, tool)| tool.clone())
+                    .map(|(_, action)| action.clone())
                     .unwrap_or_default(),
             })
             .collect()
@@ -303,27 +303,27 @@ fn completed_before(entries: &[HistoryEntry], end: u64) -> Vec<Seq> {
     let scheduled: Vec<Seq> = before
         .clone()
         .filter_map(|entry| match &entry.event {
-            Event::Command(Command::ScheduleToolCall { seq, .. }) => Some(*seq),
+            Event::Command(Command::ScheduleCall { seq, .. }) => Some(*seq),
             _ => None,
         })
         .collect();
     before
         .filter_map(|entry| match &entry.event {
             Event::Completion(
-                Completion::ToolCallCompleted { seq, .. } | Completion::ToolCallFailed { seq, .. },
+                Completion::CallCompleted { seq, .. } | Completion::CallFailed { seq, .. },
             ) if scheduled.contains(seq) => Some(*seq),
             _ => None,
         })
         .collect()
 }
 
-/// The tool of each call the journal schedules.
-fn tools_by_seq(entries: &[HistoryEntry]) -> Vec<(Seq, String)> {
+/// The action of each call the journal schedules.
+fn actions_by_seq(entries: &[HistoryEntry]) -> Vec<(Seq, String)> {
     entries
         .iter()
         .filter_map(|entry| match &entry.event {
-            Event::Command(Command::ScheduleToolCall { seq, tool, .. }) => {
-                Some((*seq, tool.clone()))
+            Event::Command(Command::ScheduleCall { seq, action, .. }) => {
+                Some((*seq, action.clone()))
             }
             _ => None,
         })

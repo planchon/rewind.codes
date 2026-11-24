@@ -3,7 +3,7 @@
   "servers": [
     "crm"
   ],
-  "tools": [
+  "actions": [
     {
       "name": "crm.lookup",
       "route": "mcp",

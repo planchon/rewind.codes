@@ -1,5 +1,5 @@
-//! The tool tasks of a partition's runs, at their owner (`archi/04-tools.md`, "Tool task
-//! lifecycle", "Policies", "Secrets"; `archi/07-code-architecture.md`, "Inside a node": tool
+//! The call tasks of a partition's runs, at their owner (`archi/04-tools.md`, "Call task
+//! lifecycle", "Policies", "Secrets"; `archi/07-code-architecture.md`, "Inside a node": action
 //! tasks).
 //!
 //! ```text
@@ -16,7 +16,8 @@
 use std::collections::BTreeMap;
 
 use rewind_core::{
-    Completion, Interruption, Payload, Seq, Timestamp, ToolFailure, ToolFailureKind, ToolRoute,
+    ActionFailure, ActionFailureKind, ActionRoute, Completion, Interruption, Payload, Seq,
+    Timestamp,
 };
 use serde_json::json;
 
@@ -76,7 +77,7 @@ impl<P: Plane> Owner<P> {
         let in_flight = slot
             .tasks
             .values()
-            .filter(|other| other.task.tool == record.task.tool && other.task.task != *task)
+            .filter(|other| other.task.action == record.task.action && other.task.task != *task)
             .filter(|other| {
                 self.flights
                     .get(&other.task.task)
@@ -87,11 +88,11 @@ impl<P: Plane> Owner<P> {
             self.flights.insert(task.clone(), Flight::Waiting);
             return;
         }
-        let host = matches!(record.task.route, ToolRoute::Host { .. })
+        let host = matches!(record.task.route, ActionRoute::Host { .. })
             && self.config.host_tools == HostTools::Streams;
         let server = match &record.task.route {
-            ToolRoute::Mcp { server } => Some(server.clone()),
-            ToolRoute::Api { api } => Some(api.clone()),
+            ActionRoute::Mcp { server } => Some(server.clone()),
+            ActionRoute::Api { api } => Some(api.clone()),
             _ => None,
         };
         match server {
@@ -117,8 +118,8 @@ impl<P: Plane> Owner<P> {
                 let record = slot.tasks.get(&task.seq)?;
                 let action_set = slot.action_set.as_ref()?;
                 match &record.task.route {
-                    ToolRoute::Mcp { server } => action_set.server(server).map(|s| s.concurrency),
-                    ToolRoute::Api { api } => action_set.api(api).map(|api| api.concurrency),
+                    ActionRoute::Mcp { server } => action_set.server(server).map(|s| s.concurrency),
+                    ActionRoute::Api { api } => action_set.api(api).map(|api| api.concurrency),
                     _ => None,
                 }
             })
@@ -308,7 +309,7 @@ impl<P: Plane> Owner<P> {
         let CallDone {
             task,
             attempt,
-            tool,
+            action,
             outcome,
         } = done;
         let record = self
@@ -319,7 +320,7 @@ impl<P: Plane> Owner<P> {
         let Some(record) = record else {
             // The task is done, its run ended or erased, or it was sent again since: the outcome
             // is dropped, and the slot it held goes back.
-            tracing::debug!(%task, "tool outcome dropped");
+            tracing::debug!(%task, "action outcome dropped");
             let mut unit = Unit::new();
             if matches!(
                 self.flights.get(&task),
@@ -330,11 +331,11 @@ impl<P: Plane> Owner<P> {
             self.push(unit);
             return;
         };
-        let _ = tool;
+        let _ = action;
         match outcome {
             CallOutcome::Dispatched(dispatched) => self.dispatched(&task, record, dispatched),
             CallOutcome::NotSent(error) => {
-                tracing::error!(%task, %error, "a tool call could not be prepared");
+                tracing::error!(%task, %error, "a call could not be prepared");
                 self.backoff(&task, record, std::time::Duration::ZERO, false);
             }
             CallOutcome::Webhook { name } => self.webhook_created(&task, record, &name),
@@ -456,7 +457,7 @@ impl<P: Plane> Owner<P> {
         unit: &mut Unit<P>,
         task: &TaskRef,
         record: &TaskRecord,
-        outcome: Result<serde_json::Value, ToolFailure>,
+        outcome: Result<serde_json::Value, ActionFailure>,
     ) {
         let max = self.config.limits.max_payload_bytes;
         let completion = match outcome {
@@ -464,22 +465,22 @@ impl<P: Plane> Owner<P> {
                 let payload = Payload::Value(result);
                 let size = crate::payloads::value_size(&payload).unwrap_or_default();
                 if size > max {
-                    Completion::ToolCallFailed {
+                    Completion::CallFailed {
                         seq: task.seq,
-                        error: ToolFailure {
-                            kind: ToolFailureKind::Error,
+                        error: ActionFailure {
+                            kind: ActionFailureKind::Error,
                             message: Refusal::ResultTooLarge { size, max }.to_string(),
                             data: None,
                         },
                     }
                 } else {
-                    Completion::ToolCallCompleted {
+                    Completion::CallCompleted {
                         seq: task.seq,
                         result: payload,
                     }
                 }
             }
-            Err(error) => Completion::ToolCallFailed {
+            Err(error) => Completion::CallFailed {
                 seq: task.seq,
                 error,
             },
@@ -501,7 +502,7 @@ impl<P: Plane> Owner<P> {
         if let Some(slot) = self.slot(task.run.id)
             && let Some(delta) = derive::retries_counters(
                 &slot.head,
-                &record.task.tool,
+                &record.task.action,
                 record.task.attempt,
                 self.now(),
             )
@@ -516,7 +517,7 @@ impl<P: Plane> Owner<P> {
 
     /// A transient failure: under `retry`, the task is ready again after a backoff, attempt + 1;
     /// otherwise the failure is its outcome.
-    fn transient(&mut self, task: &TaskRef, record: TaskRecord, failure: ToolFailure) {
+    fn transient(&mut self, task: &TaskRef, record: TaskRecord, failure: ActionFailure) {
         let retry = record.task.policy.on_interruption == Interruption::Retry
             && record.task.attempt < self.config.max_tool_attempts;
         if !retry {
@@ -525,7 +526,7 @@ impl<P: Plane> Owner<P> {
             self.push(unit);
             return;
         }
-        crate::metrics::tool_retry(&record.task.tool);
+        crate::metrics::tool_retry(&record.task.action);
         let asked = asked_wait(&failure);
         self.backoff(task, record, asked, true);
     }
@@ -687,7 +688,7 @@ impl<P: Plane> Owner<P> {
             );
             unit.project(entry);
         }
-        tracing::warn!(%task, kind = reason.kind.as_str(), "tool call parked");
+        tracing::warn!(%task, kind = reason.kind.as_str(), "call parked");
         self.put_task(&mut unit, record);
         self.drop_flight(&mut unit, task);
         self.push(unit);
@@ -700,10 +701,10 @@ impl<P: Plane> Owner<P> {
         reason: &ParkReason,
     ) -> Option<WebhookEvent> {
         let slot = self.slot(task.run.id)?;
-        let (seq, tool, message) = (task.seq, record.task.tool.clone(), reason.message.clone());
+        let (seq, action, message) = (task.seq, record.task.action.clone(), reason.message.clone());
         let credentials_expired = |reason| WebhookEventKind::CredentialsExpired {
             seq,
-            tool: tool.clone(),
+            action: action.clone(),
             message: message.clone(),
             reason,
             secret: record
@@ -714,9 +715,9 @@ impl<P: Plane> Owner<P> {
                 .cloned(),
         };
         let kind = match reason.kind {
-            ParkKind::SchemaChanged => WebhookEventKind::ToolSchemaChanged {
+            ParkKind::SchemaChanged => WebhookEventKind::ActionSchemaChanged {
                 seq,
-                tool: tool.clone(),
+                action: action.clone(),
                 message: message.clone(),
             },
             ParkKind::CredentialsRefused => credentials_expired(CredentialsExpiredReason::Refused),
@@ -817,8 +818,8 @@ impl<P: Plane> Owner<P> {
                     &mut unit,
                     task,
                     &record,
-                    Err(ToolFailure {
-                        kind: ToolFailureKind::Unavailable,
+                    Err(ActionFailure {
+                        kind: ActionFailureKind::Unavailable,
                         message,
                         data: None,
                     }),
@@ -917,11 +918,11 @@ impl<P: Plane> Owner<P> {
                 data,
                 retryable,
             }) => {
-                let failure = ToolFailure {
+                let failure = ActionFailure {
                     kind: if retryable {
-                        ToolFailureKind::Unavailable
+                        ActionFailureKind::Unavailable
                     } else {
-                        ToolFailureKind::Error
+                        ActionFailureKind::Error
                     },
                     message,
                     data,
@@ -986,8 +987,8 @@ impl<P: Plane> Owner<P> {
                 unit.then(After::Dispatch(task.clone()));
             }
             Decision::Reject(message) => {
-                let failure = ToolFailure {
-                    kind: ToolFailureKind::Error,
+                let failure = ActionFailure {
+                    kind: ActionFailureKind::Error,
                     message: message.unwrap_or_else(|| REJECTED.to_owned()),
                     data: None,
                 };
@@ -1029,7 +1030,7 @@ impl<P: Plane> Owner<P> {
         let next = record.task.attempt.saturating_add(1);
         let mut unit = Unit::new();
         match interrupted(
-            &record.task.tool,
+            &record.task.action,
             record.task.policy.on_interruption,
             next,
             self.config.max_tool_attempts,
@@ -1167,7 +1168,7 @@ impl<P: Plane> Owner<P> {
             .route
             .server()
             .map(str::to_owned)
-            .unwrap_or_else(|| record.task.tool.clone());
+            .unwrap_or_else(|| record.task.action.clone());
         let attaches = slot
             .head
             .metadata

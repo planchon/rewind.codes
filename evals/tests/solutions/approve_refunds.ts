@@ -1,4 +1,4 @@
-import { crm } from "rewind:tools";
+import { crm } from "rewind:actions";
 import { signal } from "rewind";
 
 export default async function main() {

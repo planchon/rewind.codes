@@ -10,8 +10,8 @@ use rewind_api::common::{Duration, RunStatus};
 #[command(
     name = "rewind",
     version,
-    about = "Rewind: durable TypeScript scripts that call tools, in a deterministic sandbox.",
-    long_about = "Rewind: durable TypeScript scripts that call tools, in a deterministic sandbox.\n\n\
+    about = "Rewind: durable TypeScript scripts that call actions, in a deterministic sandbox.",
+    long_about = "Rewind: durable TypeScript scripts that call actions, in a deterministic sandbox.\n\n\
         Commands about runs go to a server: the remote one of --url (REWIND_URL) with its API key \
         (REWIND_API_KEY), or else the embedded server of the state directory (.rewind/), started on \
         demand. `rewind check`, `rewind test` and the replay of an exported journal run in this \
@@ -216,13 +216,13 @@ pub(crate) struct TestArgs {
     #[arg(long, value_name = "NAME")]
     pub(crate) workflow: Option<String>,
     /// The action set: an action set file, or the id of an action set registered on the server, where the
-    /// tests then run. Default: the workflow's, or else the tools the tests answer.
+    /// tests then run. Default: the workflow's, or else the actions the tests answer.
     #[arg(long, value_name = "ID|FILE")]
     pub(crate) action_set: Option<String>,
-    /// Static responses per tool, tried last, in this process. Default: rewind.tools.json next
+    /// Static responses per action, tried last, in this process. Default: rewind.actions.json next
     /// to the tests.
     #[arg(long, value_name = "FILE")]
-    pub(crate) tools: Option<PathBuf>,
+    pub(crate) actions: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]
@@ -307,7 +307,7 @@ pub(crate) struct RunsArgs {
     pub(crate) query: Option<String>,
     /// The order: the most recently started first (the default), the first started first, the
     /// most recent activity first, the soonest to wake by itself first, the longest first (the
-    /// runs that have not ended last), or the most tool calls first.
+    /// runs that have not ended last), or the most calls first.
     #[arg(long, value_enum)]
     pub(crate) sort: Option<SortArg>,
     #[arg(long, value_enum)]
@@ -315,9 +315,9 @@ pub(crate) struct RunsArgs {
     /// Only runs carrying this label, key:value or key=value. Repeat to require several.
     #[arg(long = "label", value_name = "KEY:VALUE")]
     pub(crate) labels: Vec<String>,
-    /// Only runs that called this tool.
+    /// Only runs that called this action.
     #[arg(long)]
-    pub(crate) tool: Option<String>,
+    pub(crate) action: Option<String>,
     /// Only runs of this script (digest).
     #[arg(long)]
     pub(crate) script: Option<String>,
@@ -417,7 +417,7 @@ pub(crate) enum ExportFormat {
 pub(crate) enum ActionSetsCommand {
     /// Register and pin an action set file; print its id.
     Add {
-        /// MCP servers, host tools and the http tool, as `POST /v1/action-sets` takes them.
+        /// MCP servers, host tools and the http action, as `POST /v1/action-sets` takes them.
         file: PathBuf,
     },
     /// The declarations of a registered action set.
@@ -426,7 +426,7 @@ pub(crate) enum ActionSetsCommand {
         #[arg(long, value_enum, default_value = "dts")]
         format: DeclarationsFormat,
     },
-    /// Search a registered action set's tools.
+    /// Search a registered action set's actions.
     Search {
         id: String,
         query: String,
@@ -600,7 +600,7 @@ impl QuotasArgs {
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 pub(crate) enum DeclarationsFormat {
-    /// rewind-tools.d.ts, for the type-checker.
+    /// rewind-actions.d.ts, for the type-checker.
     Dts,
     /// The compact rendering for a model's prompt.
     Prompt,

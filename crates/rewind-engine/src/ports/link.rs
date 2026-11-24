@@ -1,6 +1,6 @@
 //! The `NodeLink` port: what the nodes of a deployment send each other
 //! (`archi/07-code-architecture.md`, "`Cluster` and `NodeLink`", "Inside a node";
-//! `archi/04-tools.md`, "Tool task lifecycle").
+//! `archi/04-tools.md`, "Call lifecycle").
 //!
 //! ```text
 //!  edge ── Partition(PartitionRequest) ──────────► owner of the partition    (start, signal, …, reads)
@@ -142,7 +142,7 @@ pub enum Refusal {
     /// The namespace is being erased: it takes no run (409).
     #[error("the namespace is being erased: it takes no run")]
     NamespaceDeleting,
-    /// No such tool task: it was answered, its run ended, or it was handed out again.
+    /// No such call task: it was answered, its run ended, or it was handed out again.
     #[error(
         "the task no longer exists: it was answered, its run ended, or it was handed out again"
     )]
@@ -213,7 +213,7 @@ pub enum PartitionRequest {
         from: u64,
         values: bool,
     },
-    /// The run's tool tasks, as recorded but for those in flight (sent by the owner's node and
+    /// The run's call tasks, as recorded but for those in flight (sent by the owner's node and
     /// not answered, or handed on an SDK stream), which read `claimed`: answered `Tasks`.
     Tasks { run: RunRef },
     /// A page of the partition's summaries: answered `Found`.
@@ -247,11 +247,11 @@ pub enum PartitionRequest {
         namespace: Option<NamespaceName>,
         month: Month,
     },
-    /// The shapes observed for some tools: answered `Shapes`.
+    /// The shapes observed for some actions: answered `Shapes`.
     Shapes {
         tenant: TenantId,
         namespace: Option<NamespaceName>,
-        tools: Vec<String>,
+        actions: Vec<String>,
     },
 }
 
@@ -323,14 +323,14 @@ pub enum TaskAnswer {
     /// `POST /v1/tasks/{token}/fail`.
     Fail(HostFailure),
     /// `POST /v1/tasks/{token}/defer`: answered later through the same token, within its
-    /// timeout (bounded by the tool's execution timeout and the run's deadline).
+    /// timeout (bounded by the action's execution timeout and the run's deadline).
     Defer { timeout: Option<Duration> },
 }
 
 /// A failure reported by a handler.
 #[derive(Clone, Debug, PartialEq)]
 pub struct HostFailure {
-    /// The message of the `ToolError`, written for the model.
+    /// The message of the `ActionError`, written for the model.
     pub message: String,
     pub data: Option<JsonValue>,
     /// A transient failure: under `retry`, the call is made again after a backoff, up to the
@@ -342,9 +342,9 @@ pub struct HostFailure {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Decision {
     /// A task under `approval` is sent; a task parked by a schema change is sent against the
-    /// tool's current schema; a task parked by a refusal is sent again.
+    /// action's current schema; a task parked by a refusal is sent again.
     Approve,
-    /// The call fails with a `ToolError` carrying the message.
+    /// The call fails with an `ActionError` carrying the message.
     Reject(Option<String>),
 }
 
@@ -448,13 +448,13 @@ pub struct HostTask {
     pub task: TaskRef,
     /// The end user the handler acts for.
     pub namespace: NamespaceName,
-    pub tool: String,
+    pub action: String,
     pub args: JsonValue,
     /// The same on every attempt: the handler recognizes a call it already made.
     pub idempotency_key: String,
     /// From 1. Above 1, an earlier attempt failed or was interrupted.
     pub attempt: u32,
-    /// The tool's execution timeout, if it has one.
+    /// The action's execution timeout, if it has one.
     pub execution_timeout: Option<Duration>,
     /// The run's labels.
     pub labels: BTreeMap<String, String>,
@@ -480,7 +480,7 @@ pub struct StreamAttach {
     pub labels: BTreeMap<String, String>,
     pub action_set: Option<Digest>,
     /// Empty: every host tool.
-    pub tools: BTreeSet<String>,
+    pub actions: BTreeSet<String>,
     /// Tasks it holds at once.
     pub slots: u32,
 }
@@ -582,7 +582,7 @@ pub struct ActivationRequest {
     pub script: StoredScript,
     pub action_set: StoredActionSet,
     pub purpose: Purpose,
-    /// The run's tool tasks: what its summary shows of its calls.
+    /// The run's call tasks: what its summary shows of its calls.
     pub tasks: Vec<TaskRecord>,
 }
 

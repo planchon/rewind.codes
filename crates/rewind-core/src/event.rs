@@ -5,8 +5,8 @@
 //! | Family | Events |
 //! | --- | --- |
 //! | [`Lifecycle`] | `run_started`, `run_aborted` |
-//! | [`Command`] (emitted by the script) | `schedule_tool_call`, `start_timer`, `cancel_timer`, `complete_run`, `fail_run` |
-//! | [`Completion`] (delivered to the script) | `tool_call_completed`, `tool_call_failed`, `timer_fired`, `signal_received`, `cancel_requested` |
+//! | [`Command`] (emitted by the script) | `schedule_call`, `start_timer`, `cancel_timer`, `complete_run`, `fail_run` |
+//! | [`Completion`] (delivered to the script) | `call_completed`, `call_failed`, `timer_fired`, `signal_received`, `cancel_requested` |
 //! | [`Annotation`] (observability only) | `log`, `signal_awaited` |
 //!
 //! **Triggers** are `run_started` and every completion: a trigger wakes the script up, and
@@ -67,7 +67,7 @@ impl Event {
         }
     }
 
-    /// The event's name in the journal, such as `schedule_tool_call`.
+    /// The event's name in the journal, such as `schedule_call`.
     pub fn name(&self) -> &'static str {
         match self {
             Event::Lifecycle(Lifecycle::RunStarted(_)) => "run_started",
@@ -129,9 +129,9 @@ pub struct RunStarted {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum RunMode {
-    /// Tools are really called and time is real.
+    /// Actions are really called and time is real.
     Live,
-    /// Tools are answered by cassettes and mocks, and time is virtual.
+    /// Actions are answered by cassettes and mocks, and time is virtual.
     Mock,
 }
 
@@ -191,9 +191,9 @@ impl AbortKind {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Command {
-    ScheduleToolCall {
+    ScheduleCall {
         seq: Seq,
-        tool: String,
+        action: String,
         args: Payload,
         callsite: Option<Callsite>,
     },
@@ -207,12 +207,12 @@ pub enum Command {
     CancelTimer {
         seq: Seq,
     },
-    /// The script succeeded. Emitted once `main` returned and no tool call is pending.
+    /// The script succeeded. Emitted once `main` returned and no call is pending.
     CompleteRun {
         output: Payload,
     },
     /// The script failed: `main` threw, a rejection was left unhandled, or nothing can wake
-    /// the script any more (`DeadlockError`). Emitted once no tool call is pending.
+    /// the script any more (`DeadlockError`). Emitted once no call is pending.
     FailRun {
         error: ScriptError,
     },
@@ -222,7 +222,7 @@ impl Command {
     /// The `seq` of a command that has one.
     pub fn seq(&self) -> Option<Seq> {
         match self {
-            Command::ScheduleToolCall { seq, .. }
+            Command::ScheduleCall { seq, .. }
             | Command::StartTimer { seq, .. }
             | Command::CancelTimer { seq } => Some(*seq),
             Command::CompleteRun { .. } | Command::FailRun { .. } => None,
@@ -235,7 +235,7 @@ impl Command {
 
     pub fn name(&self) -> &'static str {
         match self {
-            Command::ScheduleToolCall { .. } => "schedule_tool_call",
+            Command::ScheduleCall { .. } => "schedule_call",
             Command::StartTimer { .. } => "start_timer",
             Command::CancelTimer { .. } => "cancel_timer",
             Command::CompleteRun { .. } => "complete_run",
@@ -244,7 +244,7 @@ impl Command {
     }
 
     /// Whether `other` is the same command for replay purposes: same kind, same `seq`, same
-    /// tool, same payloads (compared by digest).
+    /// action, same payloads (compared by digest).
     ///
     /// Callsites and stack traces are ignored: they locate a command in the source but don't
     /// change what it does, so moving code around is allowed. A `fail_run` matches on the
@@ -253,19 +253,19 @@ impl Command {
         use Command::*;
         match (self, other) {
             (
-                ScheduleToolCall {
+                ScheduleCall {
                     seq: a_seq,
-                    tool: a_tool,
+                    action: an_action,
                     args: a_args,
                     ..
                 },
-                ScheduleToolCall {
+                ScheduleCall {
                     seq: b_seq,
-                    tool: b_tool,
+                    action: b_action,
                     args: b_args,
                     ..
                 },
-            ) => a_seq == b_seq && a_tool == b_tool && a_args.same_as(b_args),
+            ) => a_seq == b_seq && an_action == b_action && a_args.same_as(b_args),
             (
                 StartTimer {
                     seq: a_seq,
@@ -294,9 +294,9 @@ impl Command {
 impl fmt::Display for Command {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Command::ScheduleToolCall {
-                seq, tool, args, ..
-            } => write!(f, "tool call {seq} {tool}({})", args.preview(PREVIEW_CHARS)),
+            Command::ScheduleCall {
+                seq, action, args, ..
+            } => write!(f, "call {seq} {action}({})", args.preview(PREVIEW_CHARS)),
             Command::StartTimer {
                 seq, duration_ms, ..
             } => write!(f, "timer {seq} ({duration_ms}ms)"),
@@ -329,40 +329,40 @@ impl ScriptError {
     /// The name of the error that rejects every pending await on cancellation. A run that
     /// fails with it is `cancelled`.
     pub const CANCELLED: &'static str = "CancelledError";
-    /// The name of the error a failed tool call rejects with.
-    pub const TOOL_ERROR: &'static str = "ToolError";
+    /// The name of the error a failed call rejects with.
+    pub const ACTION_ERROR: &'static str = "ActionError";
 
-    /// The message of the `ToolError` the runtime builds from a failed call of `tool`:
-    /// `{tool} failed: {message}`, where `message` is the recorded failure's.
-    pub fn tool_error_message(tool: &str, failure: &ToolFailure) -> String {
-        format!("{tool} failed: {}", failure.message)
+    /// The message of the `ActionError` the runtime builds from a failed call of `action`:
+    /// `{action} failed: {message}`, where `message` is the recorded failure's.
+    pub fn action_error_message(action: &str, failure: &ActionFailure) -> String {
+        format!("{action} failed: {}", failure.message)
     }
 
-    /// The tool call whose uncaught `ToolError` this error is, read from the run's history.
+    /// The call whose uncaught `ActionError` this error is, read from the run's history.
     ///
     /// The error records no `seq`: the runtime builds it from the call's recorded
-    /// `tool_call_failed` completion and the tool its `schedule_tool_call` names. The call is
-    /// the last recorded failure that builds exactly this error. `None` when the error is not a
-    /// `ToolError`, or when no recorded failure builds it (the script threw one it made itself
+    /// `call_failed` completion and the action its `schedule_call` names. The call is
+    /// the last recorded failure that builds exactly this error. `None` when the error is not an
+    /// `ActionError`, or when no recorded failure builds it (the script threw one it made itself
     /// from another error's message, say).
     pub fn failed_call(&self, history: &[HistoryEntry]) -> Option<Seq> {
-        if self.name != Self::TOOL_ERROR {
+        if self.name != Self::ACTION_ERROR {
             return None;
         }
-        let tools: std::collections::BTreeMap<Seq, &str> = history
+        let actions: std::collections::BTreeMap<Seq, &str> = history
             .iter()
             .filter_map(|entry| match &entry.event {
-                Event::Command(Command::ScheduleToolCall { seq, tool, .. }) => {
-                    Some((*seq, tool.as_str()))
+                Event::Command(Command::ScheduleCall { seq, action, .. }) => {
+                    Some((*seq, action.as_str()))
                 }
                 _ => None,
             })
             .collect();
         history.iter().rev().find_map(|entry| match &entry.event {
-            Event::Completion(Completion::ToolCallFailed { seq, error })
-                if tools
-                    .get(seq)
-                    .is_some_and(|tool| Self::tool_error_message(tool, error) == self.message) =>
+            Event::Completion(Completion::CallFailed { seq, error })
+                if actions.get(seq).is_some_and(|action| {
+                    Self::action_error_message(action, error) == self.message
+                }) =>
             {
                 Some(*seq)
             }
@@ -389,13 +389,13 @@ impl fmt::Display for Callsite {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Completion {
-    ToolCallCompleted {
+    CallCompleted {
         seq: Seq,
         result: Payload,
     },
-    ToolCallFailed {
+    CallFailed {
         seq: Seq,
-        error: ToolFailure,
+        error: ActionFailure,
     },
     TimerFired {
         seq: Seq,
@@ -414,8 +414,8 @@ pub enum Completion {
 impl Completion {
     pub fn name(&self) -> &'static str {
         match self {
-            Completion::ToolCallCompleted { .. } => "tool_call_completed",
-            Completion::ToolCallFailed { .. } => "tool_call_failed",
+            Completion::CallCompleted { .. } => "call_completed",
+            Completion::CallFailed { .. } => "call_failed",
             Completion::TimerFired { .. } => "timer_fired",
             Completion::SignalReceived { .. } => "signal_received",
             Completion::CancelRequested { .. } => "cancel_requested",
@@ -426,16 +426,16 @@ impl Completion {
 impl fmt::Display for Completion {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Completion::ToolCallCompleted { seq, result } => {
+            Completion::CallCompleted { seq, result } => {
                 write!(
                     f,
-                    "result of tool call {seq} ({})",
+                    "result of call {seq} ({})",
                     result.preview(PREVIEW_CHARS)
                 )
             }
-            Completion::ToolCallFailed { seq, error } => write!(
+            Completion::CallFailed { seq, error } => write!(
                 f,
-                "failure of tool call {seq} ({}: {})",
+                "failure of call {seq} ({}: {})",
                 error.kind.as_str(),
                 truncate(&error.message, PREVIEW_CHARS)
             ),
@@ -453,52 +453,52 @@ impl fmt::Display for Completion {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct ToolFailure {
-    pub kind: ToolFailureKind,
+pub struct ActionFailure {
+    pub kind: ActionFailureKind,
     pub message: String,
     pub data: Option<Value>,
 }
 
-/// The outcome of a tool call: what the dispatcher or the harness's worker reports, and what a
+/// The outcome of a call: what the dispatcher or the harness's worker reports, and what a
 /// cassette replays. It reaches the script as a [`Completion`] of the call's `seq`.
 #[derive(Clone, Debug, PartialEq)]
-pub enum ToolOutcome {
+pub enum ActionOutcome {
     Result(Value),
-    Failure(ToolFailure),
+    Failure(ActionFailure),
 }
 
-impl ToolOutcome {
+impl ActionOutcome {
     /// The completion that delivers this outcome to the call `seq`.
     pub fn into_completion(self, seq: Seq) -> Completion {
         match self {
-            ToolOutcome::Result(result) => Completion::ToolCallCompleted {
+            ActionOutcome::Result(result) => Completion::CallCompleted {
                 seq,
                 result: Payload::Value(result),
             },
-            ToolOutcome::Failure(error) => Completion::ToolCallFailed { seq, error },
+            ActionOutcome::Failure(error) => Completion::CallFailed { seq, error },
         }
     }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum ToolFailureKind {
-    /// The tool ran and reported an error.
+pub enum ActionFailureKind {
+    /// The action ran and reported an error.
     Error,
-    /// The tool could not be reached, after retries.
+    /// The action could not be reached, after retries.
     Unavailable,
-    /// The tool did not answer in time.
+    /// The action did not answer in time.
     Timeout,
-    /// The call may or may not have taken effect, and the tool's policy forbids retrying it.
+    /// The call may or may not have taken effect, and the action's policy forbids retrying it.
     OutcomeUnknown,
 }
 
-impl ToolFailureKind {
+impl ActionFailureKind {
     pub fn as_str(self) -> &'static str {
         match self {
-            ToolFailureKind::Error => "error",
-            ToolFailureKind::Unavailable => "unavailable",
-            ToolFailureKind::Timeout => "timeout",
-            ToolFailureKind::OutcomeUnknown => "outcome_unknown",
+            ActionFailureKind::Error => "error",
+            ActionFailureKind::Unavailable => "unavailable",
+            ActionFailureKind::Timeout => "timeout",
+            ActionFailureKind::OutcomeUnknown => "outcome_unknown",
         }
     }
 }
@@ -596,9 +596,9 @@ mod tests {
     use super::*;
 
     fn call(line: u32, repo: &str) -> Command {
-        Command::ScheduleToolCall {
+        Command::ScheduleCall {
             seq: Seq(1),
-            tool: "github.list_issues".into(),
+            action: "github.list_issues".into(),
             args: json!({ "repo": repo, "state": "open" }).into(),
             callsite: Some(Callsite { line, column: 1 }),
         }
@@ -610,9 +610,9 @@ mod tests {
         assert!(!call(5, "acme/api").matches(&call(5, "acme/web")));
 
         let digest_only = match call(5, "acme/api") {
-            Command::ScheduleToolCall { args, .. } => Command::ScheduleToolCall {
+            Command::ScheduleCall { args, .. } => Command::ScheduleCall {
                 seq: Seq(1),
-                tool: "github.list_issues".into(),
+                action: "github.list_issues".into(),
                 args: Payload::Digest(args.digest()),
                 callsite: None,
             },
@@ -651,28 +651,28 @@ mod tests {
         assert!(!fail("x is undefined", "").matches(&fail("y is undefined", "")));
     }
 
-    /// The call an uncaught `ToolError` came from is found through its recorded completion, not
-    /// by comparing the error's message with the tool's: the runtime prefixes the tool's name.
+    /// The call an uncaught `ActionError` came from is found through its recorded completion, not
+    /// by comparing the error's message with the action's: the runtime prefixes the action's name.
     #[test]
-    fn an_uncaught_tool_error_names_its_call() {
+    fn an_uncaught_action_error_names_its_call() {
         let entry = |index: u64, event: Event| HistoryEntry {
             index,
             recorded_at: Timestamp(index),
             event,
         };
-        let schedule = |seq: u32, tool: &str| {
-            Event::Command(Command::ScheduleToolCall {
+        let schedule = |seq: u32, action: &str| {
+            Event::Command(Command::ScheduleCall {
                 seq: Seq(seq),
-                tool: tool.into(),
+                action: action.into(),
                 args: json!({}).into(),
                 callsite: None,
             })
         };
         let failed = |seq: u32, message: &str| {
-            Event::Completion(Completion::ToolCallFailed {
+            Event::Completion(Completion::CallFailed {
                 seq: Seq(seq),
-                error: ToolFailure {
-                    kind: ToolFailureKind::Error,
+                error: ActionFailure {
+                    kind: ActionFailureKind::Error,
                     message: message.into(),
                     data: None,
                 },
@@ -692,7 +692,7 @@ mod tests {
             message: message.into(),
             stack: None,
         };
-        let uncaught = |message| error(ScriptError::TOOL_ERROR, message).failed_call(&history);
+        let uncaught = |message| error(ScriptError::ACTION_ERROR, message).failed_call(&history);
         assert_eq!(
             uncaught("payments.charge failed: card expired"),
             Some(Seq(3))
@@ -702,18 +702,18 @@ mod tests {
             Some(Seq(1))
         );
         assert_eq!(uncaught("audit.record failed: card declined"), Some(Seq(2)));
-        // The tool's own message is not the error's.
+        // The action's own message is not the error's.
         assert_eq!(uncaught("card expired"), None);
         assert_eq!(
             error("Error", "payments.charge failed: card expired").failed_call(&history),
             None,
-            "not a ToolError"
+            "not an ActionError"
         );
         assert_eq!(
-            ScriptError::tool_error_message(
+            ScriptError::action_error_message(
                 "github.close_issue",
-                &ToolFailure {
-                    kind: ToolFailureKind::Timeout,
+                &ActionFailure {
+                    kind: ActionFailureKind::Timeout,
                     message: "no answer in 30s".into(),
                     data: None,
                 }
@@ -724,14 +724,14 @@ mod tests {
 
     #[test]
     fn display_truncates_long_args() {
-        let command = Command::ScheduleToolCall {
+        let command = Command::ScheduleCall {
             seq: Seq(2),
-            tool: "slack.post_message".into(),
+            action: "slack.post_message".into(),
             args: json!({ "text": "x".repeat(500) }).into(),
             callsite: None,
         };
         let text = command.to_string();
-        assert!(text.starts_with("tool call #2 slack.post_message({\"text\":\"xxx"));
+        assert!(text.starts_with("call #2 slack.post_message({\"text\":\"xxx"));
         assert!(text.ends_with("…)"));
         assert!(text.chars().count() < 160);
     }

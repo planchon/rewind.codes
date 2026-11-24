@@ -10,23 +10,24 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use rewind_core::{
-    AbortKind, AbortReason, Annotation, Completion, Digest, Epoch, Event, HistoryEntry, Lifecycle,
-    LogLevel, PartitionId, RunId, RunMode, RunStarted, RunStatus, Seed, Seq, Shape, Timestamp,
-    ToolFailureKind, ToolPolicy, ToolRoute,
+    AbortKind, AbortReason, ActionFailureKind, ActionPolicy, ActionRoute, Annotation, Completion,
+    Digest, Epoch, Event, HistoryEntry, Lifecycle, LogLevel, PartitionId, RunId, RunMode,
+    RunStarted, RunStatus, Seed, Seq, Shape, Timestamp,
 };
 use serde_json::json;
 
 use super::{T0, tenant};
 use crate::ports::partition::{Activation, CreateRun};
 use crate::ports::{
-    Admission, Attempt, Batch, Change, CounterDelta, Counters, DueTimer, FailureCounts, Gauges,
-    Hour, InboxItem, IndexedSummary, LatestRun, Month, NamespaceName, NodeId, OrganizationState,
-    OutboxChange, OutboxEntry, OutboxId, Page, ParkKind, ParkReason, PartitionError, PartitionLog,
-    PartitionStore, PayloadRecord, Predicate, Projection, QUARANTINE_AFTER_FAILURES, Quarantine,
-    QuarantineKind, QuarantineNote, QuotaAlert, QuotaAlertKey, QuotaKind, RunCounts, RunHead,
-    RunMetadata, RunOrder, RunQuery, RunRef, RunSummary, Scope, SearchCursor, TaskChange,
-    TaskPhase, TaskRecord, TaskRef, TaskState, TenantId, Threshold, TimerChange, TimerKind,
-    ToolCounts, ToolTask, Trigger, Wait, WaitKind, WaitingFor, Watcher, WebhookTarget, Window,
+    ActionCounts, Admission, Attempt, Batch, CallTask, Change, CounterDelta, Counters, DueTimer,
+    FailureCounts, Gauges, Hour, InboxItem, IndexedSummary, LatestRun, Month, NamespaceName,
+    NodeId, OrganizationState, OutboxChange, OutboxEntry, OutboxId, Page, ParkKind, ParkReason,
+    PartitionError, PartitionLog, PartitionStore, PayloadRecord, Predicate, Projection,
+    QUARANTINE_AFTER_FAILURES, Quarantine, QuarantineKind, QuarantineNote, QuotaAlert,
+    QuotaAlertKey, QuotaKind, RunCounts, RunHead, RunMetadata, RunOrder, RunQuery, RunRef,
+    RunSummary, Scope, SearchCursor, TaskChange, TaskPhase, TaskRecord, TaskRef, TaskState,
+    TenantId, Threshold, TimerChange, TimerKind, Trigger, Wait, WaitKind, WaitingFor, Watcher,
+    WebhookTarget, Window,
 };
 
 /// The partition every check opens.
@@ -65,7 +66,7 @@ pub async fn run_all<S: PartitionStore>(new_store: impl Fn() -> S) {
     partition_check!(erase_namespace_drops_its_counters_once_it_holds_no_run);
     partition_check!(counters_sum_whole_hours_of_the_scope);
     partition_check!(gauges_count_what_holds_now);
-    partition_check!(shapes_merge_per_tool);
+    partition_check!(shapes_merge_per_action);
     partition_check!(timers_are_ordered_and_read_by_range);
     partition_check!(organizations_are_kept);
     partition_check!(outbox_entries_are_added_and_removed);
@@ -266,7 +267,7 @@ fn summary_of(run: &RunRef, namespace: &NamespaceName, status: RunStatus) -> Ind
         started_at: Some(T0),
         ended_at: status.is_terminal().then_some(later(T0, 100)),
         last_activity_at: T0,
-        tool_calls: 0,
+        calls: 0,
         errors: 0,
         history_len: 1,
         waits: Vec::new(),
@@ -351,16 +352,16 @@ async fn end<L: PartitionLog>(log: &L, run: &RunRef) {
 }
 
 fn task(run: &RunRef, seq: u32, state: TaskState) -> TaskRecord {
-    let route = ToolRoute::Host { group: None };
+    let route = ActionRoute::Host { group: None };
     TaskRecord {
-        task: ToolTask {
+        task: CallTask {
             task: TaskRef {
                 run: run.clone(),
                 seq: Seq(seq),
             },
             action_set: action_set_digest(),
-            tool: "github.close_issue".into(),
-            policy: ToolPolicy::default_for(&route),
+            action: "github.close_issue".into(),
+            policy: ActionPolicy::default_for(&route),
             route,
             args: json!({ "seq": seq }).into(),
             state,
@@ -1084,7 +1085,7 @@ pub async fn a_terminal_activation_clears_the_attempt<S: PartitionStore>(store: 
     assert!(log.webhook(token).await.expect("webhook").is_some());
 
     end(&log, &r1).await;
-    assert_eq!(log.tasks(&r1).await.expect("tasks"), [], "its tool tasks");
+    assert_eq!(log.tasks(&r1).await.expect("tasks"), [], "its call tasks");
     assert_eq!(log.inbox(&r1).await.expect("inbox"), [], "its inbox");
     assert_eq!(
         log.webhook(token).await.expect("webhook"),
@@ -1165,7 +1166,7 @@ pub async fn an_activation_writes_its_records<S: PartitionStore>(store: &S) {
     first.payloads = vec![payload("large")];
     first.tasks = vec![task(&r1, 1, ready(T0))];
     first.timers = vec![set(later(T0, 1_000), script_timer(&r1, 2))];
-    first.summary.tools.insert("github.close_issue".into());
+    first.summary.actions.insert("github.close_issue".into());
     first.counters = vec![hour_delta(&acme(), &alice(), Hour::of(T0), created(1))];
     first.outbox = vec![outbox_entry(1, Some(&r1))];
     let summary = first.summary.clone();
@@ -2019,7 +2020,7 @@ pub async fn erase_deletes_everything_of_the_run<S: PartitionStore>(store: &S) {
 
 fn summary(run: &RunRef, namespace: &NamespaceName, status: RunStatus, calls: u64) -> RunSummary {
     let mut summary = summary_of(run, namespace, status).summary;
-    summary.tool_calls = calls;
+    summary.calls = calls;
     summary
 }
 
@@ -2223,7 +2224,7 @@ pub async fn a_pending_run_is_listed<S: PartitionStore>(store: &S) {
 
 /// A namespace's counters, shapes and start keys go once the partition holds none of its runs;
 /// what it consumed stays in its tenant's counts, under the partition's
-/// [`NamespaceName::erased`], without its failures, tools or scripts.
+/// [`NamespaceName::erased`], without its failures, actions or scripts.
 pub async fn erase_namespace_drops_its_counters_once_it_holds_no_run<S: PartitionStore>(store: &S) {
     let log = open(store, "n1").await;
     let kept = run(1);
@@ -2388,13 +2389,13 @@ pub async fn counters_sum_whole_hours_of_the_scope<S: PartitionStore>(store: &S)
     let mut first = created(1);
     first.cpu = Duration::from_millis(1_500);
     first.failures = BTreeMap::from([("f1".to_owned(), failure(1, 10))]);
-    first.tools = BTreeMap::from([(
+    first.actions = BTreeMap::from([(
         "github.close_issue".to_owned(),
-        ToolCounts {
+        ActionCounts {
             calls: 2,
             completed: 1,
             failed: 1,
-            errors: BTreeMap::from([(ToolFailureKind::Timeout, 1)]),
+            errors: BTreeMap::from([(ActionFailureKind::Timeout, 1)]),
             retries: 1,
             latency: crate::ports::Sketch::of([120]),
         },
@@ -2449,7 +2450,7 @@ pub async fn counters_sum_whole_hours_of_the_scope<S: PartitionStore>(store: &S)
     let group = &counters.failures["f1"];
     assert_eq!((group.runs, group.lines[&7]), (2, 2));
     assert_eq!(group.latest[0].run, run(2).id, "the latest run first");
-    assert_eq!(counters.tools["github.close_issue"].latency.count, 1);
+    assert_eq!(counters.actions["github.close_issue"].latency.count, 1);
     assert_eq!(
         counters.namespaces,
         BTreeMap::from([(
@@ -2615,14 +2616,14 @@ pub async fn gauges_count_what_holds_now<S: PartitionStore>(store: &S) {
     );
 }
 
-pub async fn shapes_merge_per_tool<S: PartitionStore>(store: &S) {
+pub async fn shapes_merge_per_action<S: PartitionStore>(store: &S) {
     let log = open(store, "n1").await;
     let shape = |value: serde_json::Value| Shape::of(&value);
     let observed =
-        |namespace: &NamespaceName, tool: &str, value: serde_json::Value| CounterDelta::Shape {
+        |namespace: &NamespaceName, action: &str, value: serde_json::Value| CounterDelta::Shape {
             tenant: acme(),
             namespace: namespace.clone(),
-            tool: tool.into(),
+            action: action.into(),
             shape: shape(value),
         };
     commit(
@@ -2635,19 +2636,19 @@ pub async fn shapes_merge_per_tool<S: PartitionStore>(store: &S) {
         ])],
     )
     .await;
-    let tools = ["t".to_owned(), "v".to_owned()];
+    let actions = ["t".to_owned(), "v".to_owned()];
     assert_eq!(
-        log.shapes(&acme(), Some(&alice()), &tools)
+        log.shapes(&acme(), Some(&alice()), &actions)
             .await
             .expect("shapes"),
         BTreeMap::from([(
             "t".to_owned(),
             shape(json!({ "a": 1 })).merge(shape(json!({ "b": "x" })))
         )]),
-        "a namespace's, for the tools observed"
+        "a namespace's, for the actions observed"
     );
     assert_eq!(
-        log.shapes(&acme(), None, &tools).await.expect("shapes"),
+        log.shapes(&acme(), None, &actions).await.expect("shapes"),
         BTreeMap::from([(
             "t".to_owned(),
             shape(json!({ "c": true }))
@@ -2657,7 +2658,7 @@ pub async fn shapes_merge_per_tool<S: PartitionStore>(store: &S) {
         "across the tenant's namespaces, in any order"
     );
     assert!(
-        log.shapes(&tenant("other"), None, &tools)
+        log.shapes(&tenant("other"), None, &actions)
             .await
             .expect("shapes")
             .is_empty()

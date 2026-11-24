@@ -8,8 +8,8 @@ mod support;
 use std::time::Duration;
 
 use rewind_core::{
-    ActionSet, CallOrder, Expectations, ExpectedCall, ExpectedError, Matching, RunStatus, Script,
-    SignalWhen, Test, TestOrigin, TestSignal, ToolOutcome, ToolRule,
+    ActionOutcome, ActionRule, ActionSet, CallOrder, Expectations, ExpectedCall, ExpectedError,
+    Matching, RunStatus, Script, SignalWhen, Test, TestOrigin, TestSignal,
 };
 use rewind_engine::ports::Delivery;
 use rewind_engine::testing::{
@@ -28,10 +28,10 @@ fn sleepy() -> FakeExecutor {
             run.call("a", json!({ "n": 1 }));
         },
         |run, delivery| match delivery {
-            Delivery::ToolCallCompleted { .. } => {
+            Delivery::CallCompleted { .. } => {
                 run.timer(10 * DAY);
             }
-            Delivery::ToolCallFailed { error, .. } => run.fail("ToolError", &error.message),
+            Delivery::CallFailed { error, .. } => run.fail("ActionError", &error.message),
             Delivery::TimerFired { .. } => run.await_signal("approval"),
             Delivery::SignalReceived { payload, .. } => {
                 run.complete(json!({ "approved": payload, "at": run.now.0 }));
@@ -52,9 +52,11 @@ fn action_set() -> ActionSet {
 /// `a` answers `{ ok: true }`; `approval` comes once the run is blocked.
 fn test() -> Test {
     let mut test = Test::new("approves after ten days");
-    test.world.tools.insert(
+    test.world.actions.insert(
         "a".into(),
-        vec![ToolRule::always(ToolOutcome::Result(json!({ "ok": true })))],
+        vec![ActionRule::always(ActionOutcome::Result(
+            json!({ "ok": true }),
+        ))],
     );
     test.signals.push(TestSignal {
         name: "approval".into(),
@@ -91,12 +93,12 @@ async fn a_test_runs_in_virtual_time_and_checks_its_expectations() {
         output: Some(json!({ "approved": true })),
         calls: vec![
             ExpectedCall {
-                tool: "a".into(),
+                action: "a".into(),
                 args: Some(json!({ "n": 1 })),
                 times: Some(1),
             },
             ExpectedCall {
-                tool: "b".into(),
+                action: "b".into(),
                 args: None,
                 times: Some(0),
             },
@@ -117,7 +119,7 @@ async fn a_test_runs_in_virtual_time_and_checks_its_expectations() {
 #[tokio::test]
 async fn failed_expectations_and_unanswered_calls_are_reported_for_a_model() {
     let mut test = test();
-    test.world.tools.clear();
+    test.world.actions.clear();
     test.expect = Expectations {
         status: Some(RunStatus::Completed),
         output: Some(json!({ "approved": true })),
@@ -126,7 +128,7 @@ async fn failed_expectations_and_unanswered_calls_are_reported_for_a_model() {
             message: None,
         }),
         calls: vec![ExpectedCall {
-            tool: "a".into(),
+            action: "a".into(),
             args: None,
             times: Some(2),
         }],
@@ -141,10 +143,10 @@ async fn failed_expectations_and_unanswered_calls_are_reported_for_a_model() {
         [
             "the signal \"approval\" was not delivered: the run had already ended",
             "the script called a({\"n\":1}), which the test's world does not answer",
-            "the run is failed (ToolError: no recorded response for `a({\"n\":1})`), expected \
+            "the run is failed (ActionError: no recorded response for `a({\"n\":1})`), expected \
              completed",
             "the run has no output (it is failed), expected one containing {\"approved\":true}",
-            "the run failed with ToolError: no recorded response for `a({\"n\":1})`, expected \
+            "the run failed with ActionError: no recorded response for `a({\"n\":1})`, expected \
              TypeError",
             "a was called once, expected 2 times",
         ]
@@ -156,7 +158,7 @@ async fn an_unanswered_call_fails_the_test_even_when_the_script_handles_it() {
     // The script fails with its own error when `a` fails: no expectation says anything about
     // it, yet the test fails, since the world does not answer `a`.
     let mut test = test();
-    test.world.tools.clear();
+    test.world.actions.clear();
     let report = run(&test).await;
     assert!(!report.passed);
     assert!(
@@ -194,7 +196,7 @@ async fn a_run_waiting_for_the_outside_world_ends_its_test_active() {
 
 #[tokio::test]
 async fn a_recorded_run_replays_as_a_test_with_its_seed_and_start() {
-    // A "real" run, answered by a tool that is not there in the test.
+    // A "real" run, answered by an action that is not there in the test.
     let mut world = World::new(
         sleepy(),
         RecordingDispatcher::new(|_| Ok(json!({ "live": 42 }))),
@@ -264,9 +266,9 @@ async fn a_suite_runs_in_order_and_stale_tests_do_not_run() {
     first.name = "first".into();
     let mut stale = test();
     stale.name = "stale".into();
-    stale.world.tools.insert(
+    stale.world.actions.insert(
         "c".into(),
-        vec![ToolRule::always(ToolOutcome::Result(json!(1)))],
+        vec![ActionRule::always(ActionOutcome::Result(json!(1)))],
     );
     let mut last = test();
     last.name = "last".into();
@@ -285,7 +287,7 @@ async fn a_suite_runs_in_order_and_stale_tests_do_not_run() {
     assert!(reports[0].passed && reports[2].passed);
     assert_eq!(reports[1].problem, Some(TestProblem::Stale));
     assert_eq!(reports[1].status, None);
-    assert_eq!(reports[1].failures, ["the action set has no tool c"]);
+    assert_eq!(reports[1].failures, ["the action set has no action c"]);
 
     // A test with mock handlers where none can run fails, alone.
     let mut mocked = test();
@@ -308,11 +310,11 @@ async fn a_suite_runs_in_order_and_stale_tests_do_not_run() {
 #[tokio::test]
 async fn rules_answer_by_args_and_static_responses_come_last() {
     let mut test = test();
-    test.world.tools.insert(
+    test.world.actions.insert(
         "a".into(),
-        vec![ToolRule {
+        vec![ActionRule {
             args: Some(json!({ "n": 2 })),
-            answer: ToolOutcome::Result(json!("not this one")),
+            answer: ActionOutcome::Result(json!("not this one")),
             times: None,
         }],
     );
@@ -335,7 +337,7 @@ async fn rules_answer_by_args_and_static_responses_come_last() {
     let completed = report
         .history
         .iter()
-        .find(|entry| entry.event.name() == "tool_call_completed")
+        .find(|entry| entry.event.name() == "call_completed")
         .unwrap();
     assert!(format!("{:?}", completed.event).contains("static"));
 }

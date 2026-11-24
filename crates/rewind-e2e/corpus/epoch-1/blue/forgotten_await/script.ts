@@ -1,4 +1,4 @@
-import { audit } from "rewind:tools";
+import { audit } from "rewind:actions";
 
 export default async function main() {
   audit.record({ event: "triaged" }); // no await

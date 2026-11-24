@@ -1,4 +1,4 @@
-import { payments, audit } from "rewind:tools";
+import { payments, audit } from "rewind:actions";
 
 export default async function main() {
   const charge = payments.charge({ amount: 100 }); // rejected before it is awaited

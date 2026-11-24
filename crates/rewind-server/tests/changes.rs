@@ -123,7 +123,7 @@ async fn a_member_follows_a_run_from_its_start_to_its_end() {
     // What moves while the run's last entries are projected aside, the same object.
     let stable = |run: &RunSummary| {
         let mut value = serde_json::to_value(run).unwrap();
-        for moving in ["historyLen", "lastActivityAt", "toolCalls", "errors"] {
+        for moving in ["historyLen", "lastActivityAt", "calls", "errors"] {
             value.as_object_mut().unwrap().remove(moving);
         }
         value

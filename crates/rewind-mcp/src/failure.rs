@@ -1,5 +1,5 @@
 //! What went wrong talking to an MCP server, sorted the way the engine needs it
-//! (`archi/04-tools.md`, "Tool task lifecycle"): a refused secret or signature parks the call,
+//! (`archi/04-tools.md`, "Call lifecycle"): a refused secret or signature parks the call,
 //! transient failures are retried under `retry`, the others fail the call for good.
 //!
 //! | What happened | Outcome |
@@ -17,7 +17,7 @@
 use std::error::Error;
 use std::time::Duration;
 
-use rewind_core::{ToolFailure, ToolFailureKind};
+use rewind_core::{ActionFailure, ActionFailureKind};
 use rewind_engine::ports::{Dispatched, ParkKind, ParkReason};
 use rmcp::ServiceError;
 use rmcp::model::ErrorCode;
@@ -53,18 +53,18 @@ pub(crate) enum Failure {
     /// The server refused the secret or the signature (HTTP 401).
     Unauthorized(String),
     /// Worth retrying: nothing says the server will refuse again.
-    Transient(ToolFailure),
+    Transient(ActionFailure),
     /// The same call would fail again.
-    Permanent(ToolFailure),
+    Permanent(ActionFailure),
 }
 
 impl Failure {
-    pub(crate) fn transient(kind: ToolFailureKind, message: impl Into<String>) -> Self {
+    pub(crate) fn transient(kind: ActionFailureKind, message: impl Into<String>) -> Self {
         Self::Transient(failure(kind, message, None))
     }
 
     pub(crate) fn permanent(
-        kind: ToolFailureKind,
+        kind: ActionFailureKind,
         message: impl Into<String>,
         data: Option<Value>,
     ) -> Self {
@@ -88,7 +88,7 @@ impl Failure {
         let server = server.to_owned();
         match self {
             Failure::Unauthorized(message) => McpError::Unauthorized { server, message },
-            Failure::Transient(failure) if failure.kind == ToolFailureKind::Timeout => {
+            Failure::Transient(failure) if failure.kind == ActionFailureKind::Timeout => {
                 McpError::Timeout {
                     server,
                     message: failure.message,
@@ -107,11 +107,11 @@ impl Failure {
 }
 
 pub(crate) fn failure(
-    kind: ToolFailureKind,
+    kind: ActionFailureKind,
     message: impl Into<String>,
     data: Option<Value>,
-) -> ToolFailure {
-    ToolFailure {
+) -> ActionFailure {
+    ActionFailure {
         kind,
         message: bounded(&message.into()),
         data,
@@ -136,16 +136,16 @@ pub(crate) fn of_service(server: &str, error: &ServiceError, answers: Answers) -
         ServiceError::McpError(data) => {
             let message = format!("{server} answered with an error: {}", data.message);
             let failure = if data.code == ErrorCode::INTERNAL_ERROR {
-                Failure::transient(ToolFailureKind::Unavailable, message)
+                Failure::transient(ActionFailureKind::Unavailable, message)
             } else {
-                Failure::permanent(ToolFailureKind::Error, message, data.data.clone())
+                Failure::permanent(ActionFailureKind::Error, message, data.data.clone())
             };
             (failure, false)
         }
         ServiceError::TransportSend(transport) => (of_transport(server, transport, answers), true),
         ServiceError::TransportClosed => (
             Failure::transient(
-                ToolFailureKind::Unavailable,
+                ActionFailureKind::Unavailable,
                 format!("the connection to {server} closed"),
             ),
             true,
@@ -153,15 +153,15 @@ pub(crate) fn of_service(server: &str, error: &ServiceError, answers: Answers) -
         ServiceError::Timeout { timeout } => (timed_out(server, *timeout), false),
         ServiceError::UnexpectedResponse => (
             Failure::permanent(
-                ToolFailureKind::Error,
-                format!("{server} did not answer with a tool result"),
+                ActionFailureKind::Error,
+                format!("{server} did not answer with an action result"),
                 None,
             ),
             false,
         ),
         ServiceError::InputRequiredRoundsExceeded { .. } => (
             Failure::permanent(
-                ToolFailureKind::Error,
+                ActionFailureKind::Error,
                 format!("{server} asked for input that Rewind cannot give"),
                 None,
             ),
@@ -169,7 +169,7 @@ pub(crate) fn of_service(server: &str, error: &ServiceError, answers: Answers) -
         ),
         other => (
             Failure::transient(
-                ToolFailureKind::Unavailable,
+                ActionFailureKind::Unavailable,
                 format!("{server} could not answer: {other}"),
             ),
             true,
@@ -190,7 +190,7 @@ pub(crate) fn of_initialize(
         ClientInitializeError::NoCompatibleProtocolVersion {
             server_supported, ..
         } => Failure::permanent(
-            ToolFailureKind::Unavailable,
+            ActionFailureKind::Unavailable,
             format!(
                 "{server} speaks no MCP version Rewind supports (it supports {})",
                 server_supported
@@ -202,7 +202,7 @@ pub(crate) fn of_initialize(
             None,
         ),
         other => Failure::transient(
-            ToolFailureKind::Unavailable,
+            ActionFailureKind::Unavailable,
             match answers {
                 Answers::Quoted => format!("{server} could not be reached: {}", chain(other)),
                 Answers::Withheld => {
@@ -232,14 +232,14 @@ fn transport_error(error: &ClientInitializeError) -> Option<&DynamicTransportErr
 fn of_transport(server: &str, error: &(dyn Error + 'static), answers: Answers) -> Failure {
     if let Some(reason) = refusal(error) {
         return Failure::permanent(
-            ToolFailureKind::Unavailable,
+            ActionFailureKind::Unavailable,
             format!("{server} cannot be reached: {reason}"),
             None,
         );
     }
     if let Some(unsigned) = signing_error(error) {
         return Failure::permanent(
-            ToolFailureKind::Unavailable,
+            ActionFailureKind::Unavailable,
             format!("{server}: {unsigned}"),
             None,
         );
@@ -262,17 +262,17 @@ fn of_transport(server: &str, error: &(dyn Error + 'static), answers: Answers) -
         }
         Some((status, _)) if (400..500).contains(&status) && !matches!(status, 408 | 429) => {
             Failure::permanent(
-                ToolFailureKind::Unavailable,
+                ActionFailureKind::Unavailable,
                 format!("{server} refused the request (HTTP {status}){detail}"),
                 None,
             )
         }
         Some((status, _)) if answers == Answers::Withheld => Failure::transient(
-            ToolFailureKind::Unavailable,
+            ActionFailureKind::Unavailable,
             format!("{server} could not be reached (HTTP {status}){detail}"),
         ),
         _ => Failure::transient(
-            ToolFailureKind::Unavailable,
+            ActionFailureKind::Unavailable,
             format!("{server} could not be reached{detail}"),
         ),
     }
@@ -329,15 +329,15 @@ pub(crate) fn of_spawn(server: &str, error: &std::io::Error) -> Failure {
     let message = format!("the MCP server {server} could not be started: {error}");
     match error.kind() {
         std::io::ErrorKind::NotFound | std::io::ErrorKind::PermissionDenied => {
-            Failure::permanent(ToolFailureKind::Unavailable, message, None)
+            Failure::permanent(ActionFailureKind::Unavailable, message, None)
         }
-        _ => Failure::transient(ToolFailureKind::Unavailable, message),
+        _ => Failure::transient(ActionFailureKind::Unavailable, message),
     }
 }
 
 pub(crate) fn timed_out(server: &str, timeout: Duration) -> Failure {
     Failure::transient(
-        ToolFailureKind::Timeout,
+        ActionFailureKind::Timeout,
         format!("{server} did not answer within {}", human(timeout)),
     )
 }
@@ -467,7 +467,7 @@ mod tests {
                 Answers::Quoted,
             );
             assert!(
-                matches!(failure, Failure::Permanent(ref f) if f.kind == ToolFailureKind::Unavailable),
+                matches!(failure, Failure::Permanent(ref f) if f.kind == ActionFailureKind::Unavailable),
                 "{failure:?}"
             );
         }
@@ -492,7 +492,7 @@ mod tests {
         );
         assert!(broken);
         assert!(
-            matches!(failure, Failure::Transient(ref f) if f.kind == ToolFailureKind::Unavailable)
+            matches!(failure, Failure::Transient(ref f) if f.kind == ActionFailureKind::Unavailable)
         );
 
         let (failure, broken) = of_service(
@@ -517,7 +517,7 @@ mod tests {
         assert_eq!(
             failure,
             Failure::permanent(
-                ToolFailureKind::Error,
+                ActionFailureKind::Error,
                 "github answered with an error: repo is required",
                 Some(serde_json::json!({ "field": "repo" }))
             )
@@ -542,7 +542,7 @@ mod tests {
         assert_eq!(
             withheld,
             Failure::permanent(
-                ToolFailureKind::Unavailable,
+                ActionFailureKind::Unavailable,
                 "crm refused the request (HTTP 404); the answer of an internal server is not \
                  quoted",
                 None
@@ -558,7 +558,7 @@ mod tests {
         assert_eq!(
             withheld,
             Failure::transient(
-                ToolFailureKind::Unavailable,
+                ActionFailureKind::Unavailable,
                 "crm could not be reached (HTTP 503); the answer of an internal server is not \
                  quoted"
             )

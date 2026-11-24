@@ -19,8 +19,8 @@
 //! | `rewind.instance_cache.lookups` | counter | `rewind.result`: `hit`, `miss` | activations of a started run, by whether its instance was kept (sticky execution) |
 //! | `rewind.instance_cache.evictions` | counter | | instances dropped to keep the cache within its bounds |
 //! | `rewind.runs.quarantined` | counter | `rewind.reason`: `non_determinism`, `failures` | runs quarantined |
-//! | `rewind.tool_attempt.duration` | histogram, s (span `tool_attempt`) | `rewind.tool`, `rewind.outcome`: `result`, `failed`, `transient`, `deferred`, `parked` | one dispatch of a tool call, to its answer |
-//! | `rewind.tool_attempt.retries` | counter | `rewind.tool` | transient failures dispatched again after a backoff |
+//! | `rewind.tool_attempt.duration` | histogram, s (span `tool_attempt`) | `rewind.action`, `rewind.outcome`: `result`, `failed`, `transient`, `deferred`, `parked` | one dispatch of a call, to its answer |
+//! | `rewind.tool_attempt.retries` | counter | `rewind.action` | transient failures dispatched again after a backoff |
 //!
 //! Run metrics, derived from an activation's new entries and recorded by the run's owner once
 //! the batch that commits them is durable, for every run (sampling is for traces), mock runs
@@ -30,10 +30,10 @@
 //! | --- | --- | --- | --- |
 //! | `rewind.runs.started` | counter | | runs started |
 //! | `rewind.runs.ended` | counter | `rewind.outcome`: `completed`, `failed`, `cancelled`, `aborted` | runs ended |
-//! | `rewind.tool_call.duration` | histogram, s | `rewind.tool`, `rewind.outcome`: `completed`, `failed`, `no_outcome`; `rewind.error.kind` | tool calls, from scheduled to completed in the run's logical time |
+//! | `rewind.call.duration` | histogram, s | `rewind.action`, `rewind.outcome`: `completed`, `failed`, `no_outcome`; `rewind.error.kind` | calls, from scheduled to completed in the run's logical time |
 //!
-//! Runs by status are the started runs less the ended ones, and the ended ones by outcome; a
-//! tool's error rate is the share of its calls whose outcome is not `completed`.
+//! Runs by status are the started runs less the ended ones, and the ended ones by outcome; an
+//! action's error rate is the share of its calls whose outcome is not `completed`.
 
 use crate::ports::{Dispatched, QuarantineKind};
 use crate::replay::{ReplayEnd, ReplayError};
@@ -48,7 +48,7 @@ pub const TOOL_ATTEMPT_DURATION: &str = "rewind.tool_attempt.duration";
 pub const TOOL_ATTEMPT_RETRIES: &str = "rewind.tool_attempt.retries";
 pub const RUNS_STARTED: &str = "rewind.runs.started";
 pub const RUNS_ENDED: &str = "rewind.runs.ended";
-pub const TOOL_CALL_DURATION: &str = "rewind.tool_call.duration";
+pub const CALL_DURATION: &str = "rewind.call.duration";
 
 /// The attribute of an activation's, a replay's or an attempt's outcome.
 pub const OUTCOME: &str = "rewind.outcome";
@@ -67,7 +67,7 @@ pub(crate) fn replay_outcome<I>(
     }
 }
 
-/// How one dispatch of a tool call ended.
+/// How one dispatch of a call ended.
 pub(crate) fn attempt_outcome(dispatched: &Dispatched) -> &'static str {
     match dispatched {
         Dispatched::Result(_) => "result",
@@ -111,11 +111,11 @@ pub(crate) fn quarantined(kind: QuarantineKind) {
     );
 }
 
-/// A transient failure of `tool` is dispatched again after a backoff.
-pub(crate) fn tool_retry(tool: &str) {
+/// A transient failure of `action` is dispatched again after a backoff.
+pub(crate) fn tool_retry(action: &str) {
     tracing::info!(
         monotonic_counter.rewind.tool_attempt.retries = 1_u64,
-        rewind.tool = tool
+        rewind.action = action
     );
 }
 
@@ -128,10 +128,10 @@ pub enum RunMeasurement {
     Started,
     /// `rewind.runs.ended`, by how the run ended: `completed`, `failed`, `cancelled`, `aborted`.
     Ended { outcome: String },
-    /// `rewind.tool_call.duration`: a call that ended (`completed`, `failed`, or `no_outcome`
+    /// `rewind.call.duration`: a call that ended (`completed`, `failed`, or `no_outcome`
     /// when the run ended first), from its schedule to its outcome in the run's logical time.
-    ToolCall {
-        tool: String,
+    Call {
+        action: String,
         outcome: String,
         error_kind: Option<String>,
         seconds: f64,
@@ -151,15 +151,15 @@ impl RunMeasurement {
                     rewind.outcome = outcome.as_str()
                 );
             }
-            RunMeasurement::ToolCall {
-                tool,
+            RunMeasurement::Call {
+                action,
                 outcome,
                 error_kind,
                 seconds,
             } => {
                 tracing::info!(
-                    histogram.rewind.tool_call.duration = *seconds,
-                    rewind.tool = tool.as_str(),
+                    histogram.rewind.call.duration = *seconds,
+                    rewind.action = action.as_str(),
                     rewind.outcome = outcome.as_str(),
                     rewind.error.kind = error_kind.as_deref(),
                 );
@@ -170,15 +170,15 @@ impl RunMeasurement {
 
 #[cfg(test)]
 mod tests {
-    use rewind_core::{ToolFailure, ToolFailureKind};
+    use rewind_core::{ActionFailure, ActionFailureKind};
 
     use super::*;
     use crate::ports::{ParkKind, ParkReason};
 
     #[test]
     fn every_answer_of_a_dispatcher_has_its_outcome() {
-        let failure = ToolFailure {
-            kind: ToolFailureKind::Error,
+        let failure = ActionFailure {
+            kind: ActionFailureKind::Error,
             message: "no".into(),
             data: None,
         };

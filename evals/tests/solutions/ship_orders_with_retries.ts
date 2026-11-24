@@ -1,5 +1,5 @@
-import { shop } from "rewind:tools";
-import { sleep, ToolError } from "rewind";
+import { shop } from "rewind:actions";
+import { sleep, ActionError } from "rewind";
 
 export default async function main() {
   const shipped: string[] = [];
@@ -12,7 +12,7 @@ export default async function main() {
         shipped.push(shipment.shipment_id);
         break;
       } catch (error) {
-        if (!(error instanceof ToolError)) throw error;
+        if (!(error instanceof ActionError)) throw error;
         const data = error.data as { retry_after_s?: number } | undefined;
         await sleep(`${data?.retry_after_s ?? 1}s`);
       }

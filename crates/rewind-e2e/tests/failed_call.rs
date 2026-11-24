@@ -1,5 +1,5 @@
-//! `ScriptError::failed_call` against the runtime's own `ToolError`s: in every journal of the
-//! corpus that ends on an uncaught `ToolError`, it finds the call that failed. The API's
+//! `ScriptError::failed_call` against the runtime's own `ActionError`s: in every journal of the
+//! corpus that ends on an uncaught `ActionError`, it finds the call that failed. The API's
 //! `failedCall` (`GET /v1/runs/{id}`) and the agent tools' failure text rest on it.
 
 #![allow(clippy::unwrap_used)]
@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use rewind_core::{Command, Completion, Event, ScriptError, Seq};
 
 #[test]
-fn every_uncaught_tool_error_of_the_corpus_names_its_call() {
+fn every_uncaught_action_error_of_the_corpus_names_its_call() {
     let mut found = BTreeMap::new();
     for color in ["blue", "red"] {
         let dir = rewind_e2e::corpus_dir().join("epoch-1").join(color);
@@ -24,7 +24,7 @@ fn every_uncaught_tool_error_of_the_corpus_names_its_call() {
             else {
                 continue;
             };
-            if error.name != ScriptError::TOOL_ERROR {
+            if error.name != ScriptError::ACTION_ERROR {
                 continue;
             }
             let name = format!("{color}/{}", case.file_name().unwrap().to_string_lossy());
@@ -33,7 +33,7 @@ fn every_uncaught_tool_error_of_the_corpus_names_its_call() {
                 .unwrap_or_else(|| panic!("{name}: no call for {error:?}"));
             let failed = document.entries.iter().any(|entry| {
                 matches!(&entry.event,
-                    Event::Completion(Completion::ToolCallFailed { seq: failed, .. }) if *failed == seq)
+                    Event::Completion(Completion::CallFailed { seq: failed, .. }) if *failed == seq)
             });
             assert!(failed, "{name}: call #{} did not fail", seq.0);
             found.insert(name, seq);

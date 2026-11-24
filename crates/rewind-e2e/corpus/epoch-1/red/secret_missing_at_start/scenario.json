@@ -26,7 +26,7 @@
   "put_secrets": {
     "ns/crm": "crm-token"
   },
-  "tools": {
+  "actions": {
     "crm.lookup": {
       "name": "Ada"
     }

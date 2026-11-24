@@ -108,7 +108,7 @@ fn port_type(kind: WebhookEventType) -> rewind_engine::ports::WebhookEventType {
         WebhookEventType::RunAborted => Port::RunAborted,
         WebhookEventType::RunSuspended => Port::RunSuspended,
         WebhookEventType::RunQuarantined => Port::RunQuarantined,
-        WebhookEventType::ToolSchemaChanged => Port::ToolSchemaChanged,
+        WebhookEventType::ActionSchemaChanged => Port::ActionSchemaChanged,
         WebhookEventType::CredentialsExpired => Port::CredentialsExpired,
         WebhookEventType::QuotaAlert => Port::QuotaAlert,
     }

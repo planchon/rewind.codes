@@ -333,7 +333,7 @@ impl TryFrom<Found> for engine::Found {
     }
 }
 
-/// A run's summary, as the summary record of the index holds it, without the tools and errors
+/// A run's summary, as the summary record of the index holds it, without the actions and errors
 /// only the index reads.
 pub(crate) fn summary_record(summary: &engine::RunSummary) -> record::Summary {
     codec::summary_record(&engine::IndexedSummary::new(summary.clone()))
@@ -554,7 +554,7 @@ pub enum Predicate {
     },
     Script(Vec<String>),
     ActionSet(Vec<String>),
-    Tool(Vec<TextMatch>),
+    Action(Vec<TextMatch>),
     Error {
         names: BTreeSet<String>,
         kinds: Vec<record::FailureKind>,
@@ -692,7 +692,7 @@ impl From<&engine::Predicate> for Predicate {
             },
             P::Script(prefixes) => Predicate::Script(prefixes.clone()),
             P::ActionSet(prefixes) => Predicate::ActionSet(prefixes.clone()),
-            P::Tool(tools) => Predicate::Tool(matchers(tools)),
+            P::Action(actions) => Predicate::Action(matchers(actions)),
             P::Error { names, kinds } => Predicate::Error {
                 names: names.clone(),
                 kinds: kinds.iter().map(|&kind| kind.into()).collect(),
@@ -740,7 +740,7 @@ impl TryFrom<Predicate> for engine::Predicate {
             },
             Predicate::Script(prefixes) => P::Script(prefixes),
             Predicate::ActionSet(prefixes) => P::ActionSet(prefixes),
-            Predicate::Tool(tools) => P::Tool(matchers_of(tools)),
+            Predicate::Action(actions) => P::Action(matchers_of(actions)),
             Predicate::Error { names, kinds } => P::Error {
                 names,
                 kinds: kinds.into_iter().map(Into::into).collect(),

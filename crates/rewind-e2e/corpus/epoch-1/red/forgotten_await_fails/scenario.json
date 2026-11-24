@@ -1,6 +1,6 @@
 {
   "description": "A forgotten await whose call fails: the rejection is unhandled, so the run fails instead of completing.",
-  "tools": {
+  "actions": {
     "payments.charge": {
       "$error": "card declined"
     }
@@ -8,13 +8,13 @@
   "expect": {
     "status": "failed",
     "error": {
-      "name": "ToolError",
+      "name": "ActionError",
       "message": "card declined"
     },
     "events": [
       "run_started",
-      "schedule_tool_call",
-      "tool_call_failed",
+      "schedule_call",
+      "call_failed",
       "fail_run"
     ]
   }

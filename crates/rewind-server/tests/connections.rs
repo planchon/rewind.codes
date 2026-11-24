@@ -1,7 +1,7 @@
 //! People's connections and the OAuth authorization server end to end
 //! (`archi/06-storage-and-scale.md`, "Connections"; `archi/07-code-architecture.md`, "MCP and
 //! OAuth"), with the engine's fake of WorkOS: a client's metadata document served by a fake on
-//! 127.0.0.1 (let through with `--allow-internal-tools`), a registered client, the consent, the
+//! 127.0.0.1 (let through with `--allow-internal-addresses`), a registered client, the consent, the
 //! tokens, `/v1` with `Rewind-Organization`, refresh, revocation, and the refusals.
 //!
 //! The full flow runs on Turso and on Postgres (Docker; skipped with a message without it,
@@ -71,7 +71,7 @@ async fn server_on(identity: &MemoryIdentity, store: Option<&str>) -> TestServer
     let extra = [
         "--public-url",
         PUBLIC_URL,
-        "--allow-internal-tools",
+        "--allow-internal-addresses",
         "127.0.0.1",
     ];
     match store {
@@ -1555,17 +1555,17 @@ async fn mcp(
 }
 
 /// `tools/call`: the text of its result, and whether it is an error.
-async fn call(world: &World, bearer: &str, tool: &str, arguments: Value) -> (String, bool) {
+async fn call(world: &World, bearer: &str, action: &str, arguments: Value) -> (String, bool) {
     let (status, _, body) = mcp(
         world,
         Some(bearer),
         "tools/call",
-        json!({ "name": tool, "arguments": arguments }),
+        json!({ "name": action, "arguments": arguments }),
     )
     .await;
     assert_eq!(status, 200, "{body}");
     let result = &body["result"];
-    assert!(result.is_object(), "{tool}: {body}");
+    assert!(result.is_object(), "{action}: {body}");
     let text = result["content"]
         .as_array()
         .unwrap()
@@ -1576,14 +1576,14 @@ async fn call(world: &World, bearer: &str, tool: &str, arguments: Value) -> (Str
     (text, result["isError"].as_bool().unwrap_or(false))
 }
 
-async fn tool_names(world: &World, bearer: &str) -> Vec<String> {
+async fn action_names(world: &World, bearer: &str) -> Vec<String> {
     let (status, _, body) = mcp(world, Some(bearer), "tools/list", json!({})).await;
     assert_eq!(status, 200, "{body}");
     body["result"]["tools"]
         .as_array()
         .unwrap()
         .iter()
-        .map(|tool| tool["name"].as_str().unwrap().to_owned())
+        .map(|action| action["name"].as_str().unwrap().to_owned())
         .collect()
 }
 
@@ -1614,7 +1614,7 @@ async fn mcp_answers_401_with_the_resource_metadata() {
     let tokens = world
         .connect(&world.ada, json!([{ "id": world.acme, "access": "read" }]))
         .await;
-    assert!(!tool_names(&world, &tokens.access).await.is_empty());
+    assert!(!action_names(&world, &tokens.access).await.is_empty());
     let (status, _) = world
         .status(world.form(
             "/oauth/revoke",
@@ -1656,7 +1656,7 @@ async fn claude_runs_a_script_over_mcp() {
             .contains("list_orgs")
     );
 
-    let names = tool_names(&world, &tokens.access).await;
+    let names = action_names(&world, &tokens.access).await;
     for name in [
         "list_orgs",
         "list_namespaces",
@@ -1664,10 +1664,13 @@ async fn claude_runs_a_script_over_mcp() {
         "run_script",
         "cancel_run",
     ] {
-        assert!(names.iter().any(|tool| tool == name), "{name} in {names:?}");
+        assert!(
+            names.iter().any(|action| action == name),
+            "{name} in {names:?}"
+        );
     }
     assert!(
-        !names.iter().any(|tool| tool == "save_workflow"),
+        !names.iter().any(|action| action == "save_workflow"),
         "{names:?}"
     );
 
@@ -1727,9 +1730,12 @@ async fn mcp_tools_follow_the_access_given() {
     let tokens = world
         .connect(&world.bob, json!([{ "id": world.acme, "access": "read" }]))
         .await;
-    let names = tool_names(&world, &tokens.access).await;
-    assert!(names.iter().any(|tool| tool == "get_run"), "{names:?}");
-    assert!(!names.iter().any(|tool| tool == "run_script"), "{names:?}");
+    let names = action_names(&world, &tokens.access).await;
+    assert!(names.iter().any(|action| action == "get_run"), "{names:?}");
+    assert!(
+        !names.iter().any(|action| action == "run_script"),
+        "{names:?}"
+    );
     let (text, error) = call(
         &world,
         &tokens.access,
@@ -1755,6 +1761,9 @@ async fn mcp_tools_follow_the_access_given() {
     let (text, error) = call(&world, &key, "list_orgs", json!({})).await;
     assert!(!error, "{text}");
     assert!(text.contains(&world.acme), "{text}");
-    let names = tool_names(&world, &key).await;
-    assert!(!names.iter().any(|tool| tool == "run_script"), "{names:?}");
+    let names = action_names(&world, &key).await;
+    assert!(
+        !names.iter().any(|action| action == "run_script"),
+        "{names:?}"
+    );
 }

@@ -1,4 +1,4 @@
-//! `ApiDispatcher`, the `ToolDispatcher` of the `api` route (`archi/04-tools.md`, "API tools").
+//! `ApiDispatcher`, the `ActionDispatcher` of the `api` route (`archi/04-tools.md`, "API actions").
 //!
 //! A call:
 //!
@@ -30,13 +30,13 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use reqwest::header::{self, HeaderMap, HeaderName, HeaderValue};
 use reqwest::{Method, StatusCode};
-use rewind_core::{Api, ApiOperation, HttpMethod, ToolFailure, ToolFailureKind, ToolRoute};
+use rewind_core::{ActionFailure, ActionFailureKind, ActionRoute, Api, ApiOperation, HttpMethod};
 use rewind_engine::ports::{
-    CallAuth, CallClaims, Dispatched, ParkKind, ParkReason, ToolCall, ToolDispatcher,
+    ActionDispatcher, Call, CallAuth, CallClaims, Dispatched, ParkKind, ParkReason,
 };
 use rewind_outbound::{
-    CallIdentity, Egress, MAX_REDIRECTS, Placed, Reached, Redirects, SignedRequest, Signer,
-    ToolEgress, place,
+    ActionEgress, CallIdentity, Egress, MAX_REDIRECTS, Placed, Reached, Redirects, SignedRequest,
+    Signer, place,
 };
 use serde_json::{Value, json};
 use url::Url;
@@ -56,7 +56,7 @@ const QUOTED_BODY: usize = 2048;
 pub struct ApiConfig {
     /// Where APIs may be: with the egress checks of a deployment by default, anywhere for the
     /// embedded server.
-    pub egress: ToolEgress,
+    pub egress: ActionEgress,
     /// Bytes of a successful answer at most: 5 MB.
     pub max_response_bytes: usize,
     /// How long a connection may take to open.
@@ -71,7 +71,7 @@ pub struct ApiConfig {
 impl Default for ApiConfig {
     fn default() -> Self {
         Self {
-            egress: ToolEgress::default(),
+            egress: ActionEgress::default(),
             max_response_bytes: 5 * 1024 * 1024,
             connect_timeout: Duration::from_secs(30),
             max_retry_wait: Duration::from_secs(60),
@@ -128,28 +128,23 @@ impl ApiDispatcher {
         Ok(client)
     }
 
-    async fn attempt(
-        &self,
-        call: &ToolCall,
-        auth: CallAuth,
-        deadline: Option<Instant>,
-    ) -> Dispatched {
-        let tool = call.tool.name.as_str();
-        let (api, operation) = match (&call.api, &call.tool.operation, &call.tool.route) {
-            (Some(api), Some(operation), ToolRoute::Api { api: name }) if api.name == *name => {
+    async fn attempt(&self, call: &Call, auth: CallAuth, deadline: Option<Instant>) -> Dispatched {
+        let action = call.action.name.as_str();
+        let (api, operation) = match (&call.api, &call.action.operation, &call.action.route) {
+            (Some(api), Some(operation), ActionRoute::Api { api: name }) if api.name == *name => {
                 (api, operation)
             }
-            (_, _, ToolRoute::Api { api: name }) => {
+            (_, _, ActionRoute::Api { api: name }) => {
                 return failed(
-                    ToolFailureKind::Unavailable,
-                    format!("the action set does not say how to call the API {name} for {tool}"),
+                    ActionFailureKind::Unavailable,
+                    format!("the action set does not say how to call the API {name} for {action}"),
                     None,
                 );
             }
             _ => {
                 return failed(
-                    ToolFailureKind::Unavailable,
-                    format!("{tool} is not an API tool"),
+                    ActionFailureKind::Unavailable,
+                    format!("{action} is not an API action"),
                     None,
                 );
             }
@@ -158,8 +153,8 @@ impl ApiDispatcher {
             Ok(built) => built,
             Err(reason) => {
                 return failed(
-                    ToolFailureKind::Error,
-                    format!("the arguments of {tool}: {reason}"),
+                    ActionFailureKind::Error,
+                    format!("the arguments of {action}: {reason}"),
                     None,
                 );
             }
@@ -190,14 +185,14 @@ impl ApiDispatcher {
                 }
                 Ok(Placed::Env { .. }) => {
                     return failed(
-                        ToolFailureKind::Unavailable,
+                        ActionFailureKind::Unavailable,
                         format!("{}: an API takes its secret in a header", api.name),
                         None,
                     );
                 }
                 Err(error) => {
                     return failed(
-                        ToolFailureKind::Unavailable,
+                        ActionFailureKind::Unavailable,
                         format!("{}: {error}", api.name),
                         None,
                     );
@@ -208,7 +203,7 @@ impl ApiDispatcher {
                     Ok(signer) => Some((signer, claims)),
                     Err(error) => {
                         return failed(
-                            ToolFailureKind::Unavailable,
+                            ActionFailureKind::Unavailable,
                             format!("{}: {error}", api.name),
                             None,
                         );
@@ -220,7 +215,7 @@ impl ApiDispatcher {
             Ok(client) => client,
             Err(reason) => {
                 return failed(
-                    ToolFailureKind::Unavailable,
+                    ActionFailureKind::Unavailable,
                     format!("{} cannot be reached: {reason}", api.name),
                     None,
                 );
@@ -229,7 +224,7 @@ impl ApiDispatcher {
         let sent = Sending {
             api,
             operation,
-            tool,
+            action,
             client: &client,
             signing: signing.as_ref(),
         };
@@ -239,7 +234,7 @@ impl ApiDispatcher {
         };
         let answered = Answered {
             api: &api.name,
-            tool,
+            action,
             internal: reached.internal(),
             max_bytes: self.inner.config.max_response_bytes,
         };
@@ -278,19 +273,19 @@ impl ApiDispatcher {
     }
 }
 
-impl ToolDispatcher for ApiDispatcher {
-    async fn dispatch(&self, call: ToolCall, auth: CallAuth) -> Dispatched {
-        let timeout = call.tool.policy.execution_timeout;
+impl ActionDispatcher for ApiDispatcher {
+    async fn dispatch(&self, call: Call, auth: CallAuth) -> Dispatched {
+        let timeout = call.action.policy.execution_timeout;
         let deadline = timeout.map(|timeout| Instant::now() + timeout);
         let attempt = self.attempt(&call, auth, deadline);
         let dispatched = match timeout {
             Some(timeout) => match tokio::time::timeout(timeout, attempt).await {
                 Ok(dispatched) => dispatched,
                 Err(_) => Dispatched::Transient(failure(
-                    ToolFailureKind::Timeout,
+                    ActionFailureKind::Timeout,
                     format!(
                         "{} did not answer within {}",
-                        call.tool.name,
+                        call.action.name,
                         human(timeout)
                     ),
                     None,
@@ -301,7 +296,7 @@ impl ToolDispatcher for ApiDispatcher {
         tracing::debug!(
             run = %call.run,
             seq = call.seq.0,
-            tool = %call.tool.name,
+            action = %call.action.name,
             attempt = call.attempt,
             outcome = match &dispatched {
                 Dispatched::Result(_) => "result",
@@ -320,7 +315,7 @@ impl ToolDispatcher for ApiDispatcher {
 struct Sending<'a> {
     api: &'a Api,
     operation: &'a ApiOperation,
-    tool: &'a str,
+    action: &'a str,
     client: &'a reqwest::Client,
     signing: Option<&'a (Signer, CallClaims)>,
 }
@@ -352,7 +347,7 @@ impl Sending<'_> {
                     )
                     .map_err(|error| {
                         failed(
-                            ToolFailureKind::Unavailable,
+                            ActionFailureKind::Unavailable,
                             format!("{}: {error}", self.api.name),
                             None,
                         )
@@ -360,7 +355,7 @@ impl Sending<'_> {
                 let mut value =
                     HeaderValue::from_str(&format!("Bearer {token}")).map_err(|_| {
                         failed(
-                            ToolFailureKind::Unavailable,
+                            ActionFailureKind::Unavailable,
                             format!("{}: the signature is not a header value", self.api.name),
                             None,
                         )
@@ -388,11 +383,11 @@ impl Sending<'_> {
                 Some(next) if next.origin() == origin => url = next,
                 _ => {
                     return Err(failed(
-                        ToolFailureKind::Unavailable,
+                        ActionFailureKind::Unavailable,
                         format!(
                             "{} cannot be called: it redirects {} to another origin, and its \
                              calls go to its own URL only",
-                            self.api.name, self.tool
+                            self.api.name, self.action
                         ),
                         Some(json!({ "status": status.as_u16() })),
                     ));
@@ -400,10 +395,10 @@ impl Sending<'_> {
             }
         }
         Err(failed(
-            ToolFailureKind::Unavailable,
+            ActionFailureKind::Unavailable,
             format!(
                 "{} cannot be called: it redirects {} more than {MAX_REDIRECTS} times",
-                self.api.name, self.tool
+                self.api.name, self.action
             ),
             None,
         ))
@@ -414,15 +409,15 @@ impl Sending<'_> {
     fn unsent(&self, error: &reqwest::Error) -> Dispatched {
         if let Some(reason) = Egress::refusal_of(error) {
             return failed(
-                ToolFailureKind::Unavailable,
+                ActionFailureKind::Unavailable,
                 format!("{} cannot be reached: {reason}", self.api.name),
                 None,
             );
         }
         let kind = if error.is_timeout() {
-            ToolFailureKind::Timeout
+            ActionFailureKind::Timeout
         } else {
-            ToolFailureKind::Unavailable
+            ActionFailureKind::Unavailable
         };
         let what = if error.is_connect() {
             "could not be reached"
@@ -434,7 +429,7 @@ impl Sending<'_> {
             format!(
                 "{} {what} for {}: {}",
                 self.api.name,
-                self.tool,
+                self.action,
                 chain(error)
             ),
             None,
@@ -448,7 +443,7 @@ fn identity(claims: &CallClaims) -> CallIdentity {
         subject: claims.subject.as_str().to_owned(),
         labels: claims.labels.clone(),
         run: claims.run.to_string(),
-        tool: claims.tool.clone(),
+        action: claims.action.clone(),
         idempotency_key: claims.idempotency_key.clone(),
         jti: claims.jti(),
     }
@@ -457,7 +452,7 @@ fn identity(claims: &CallClaims) -> CallIdentity {
 /// How an answer becomes an outcome.
 struct Answered<'a> {
     api: &'a str,
-    tool: &'a str,
+    action: &'a str,
     /// The API was reached at an internal address: its answers are not quoted.
     internal: bool,
     max_bytes: usize,
@@ -475,10 +470,10 @@ impl Answered<'_> {
             return match self.read(response, self.max_bytes, false).await {
                 Ok(Some(body)) => Dispatched::Result(result(&body, content_type.as_deref())),
                 Ok(None) => failed(
-                    ToolFailureKind::Error,
+                    ActionFailureKind::Error,
                     format!(
                         "the answer of {} is larger than {} bytes",
-                        self.tool, self.max_bytes
+                        self.action, self.max_bytes
                     ),
                     Some(json!({ "status": status.as_u16() })),
                 ),
@@ -506,7 +501,7 @@ impl Answered<'_> {
                 kind: ParkKind::CredentialsRefused,
                 message: format!(
                     "{} refused the credentials (HTTP 401) of {}{challenge}",
-                    self.api, self.tool
+                    self.api, self.action
                 ),
             });
         }
@@ -518,14 +513,20 @@ impl Answered<'_> {
                 fields.insert(RETRY_AFTER_DATA.into(), json!(seconds));
             }
             return Dispatched::Transient(failure(
-                ToolFailureKind::Unavailable,
-                format!("{} answered HTTP {code} to {}{detail}", self.api, self.tool),
+                ActionFailureKind::Unavailable,
+                format!(
+                    "{} answered HTTP {code} to {}{detail}",
+                    self.api, self.action
+                ),
                 Some(data),
             ));
         }
         failed(
-            ToolFailureKind::Error,
-            format!("{} answered HTTP {code} to {}{detail}", self.api, self.tool),
+            ActionFailureKind::Error,
+            format!(
+                "{} answered HTTP {code} to {}{detail}",
+                self.api, self.action
+            ),
             Some(data),
         )
     }
@@ -562,11 +563,11 @@ impl Answered<'_> {
                 Ok(None) => return Ok(Some(body)),
                 Err(error) => {
                     return Err(Dispatched::Transient(failure(
-                        ToolFailureKind::Unavailable,
+                        ActionFailureKind::Unavailable,
                         format!(
                             "the answer of {} to {} was cut: {}",
                             self.api,
-                            self.tool,
+                            self.action,
                             chain(&error)
                         ),
                         None,
@@ -661,15 +662,15 @@ fn add(headers: &mut Vec<(HeaderName, HeaderValue)>, name: &'static str, value: 
     }
 }
 
-fn failure(kind: ToolFailureKind, message: String, data: Option<Value>) -> ToolFailure {
-    ToolFailure {
+fn failure(kind: ActionFailureKind, message: String, data: Option<Value>) -> ActionFailure {
+    ActionFailure {
         kind,
         message,
         data,
     }
 }
 
-fn failed(kind: ToolFailureKind, message: String, data: Option<Value>) -> Dispatched {
+fn failed(kind: ActionFailureKind, message: String, data: Option<Value>) -> Dispatched {
     Dispatched::Failed(failure(kind, message, data))
 }
 

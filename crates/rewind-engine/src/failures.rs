@@ -185,13 +185,13 @@ mod tests {
     fn numbers_are_replaced() {
         let at = |n: u32| {
             signature(
-                "ToolError",
+                "ActionError",
                 &format!("github.close_issue failed: rate limit exceeded on {n} requests"),
             )
         };
         assert_eq!(
             at(42),
-            "ToolError: github.close_issue failed: rate limit exceeded on <n> requests"
+            "ActionError: github.close_issue failed: rate limit exceeded on <n> requests"
         );
         assert_eq!(fingerprint(&at(42)), fingerprint(&at(7)));
         assert_eq!(
@@ -274,9 +274,9 @@ mod tests {
         );
         assert_eq!(
             fingerprint(
-                "ToolError: github.close_issue failed: rate limit exceeded on <n> requests"
+                "ActionError: github.close_issue failed: rate limit exceeded on <n> requests"
             ),
-            "ccc64b2adcd7c61d"
+            "71f57fe282c64346"
         );
         let fingerprint = fingerprint("x");
         assert_eq!(fingerprint.len(), FINGERPRINT_DIGITS);

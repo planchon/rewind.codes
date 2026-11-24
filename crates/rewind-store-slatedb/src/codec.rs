@@ -14,13 +14,13 @@ use std::time::Duration;
 
 use rewind_core::{Event, Lifecycle, Seq, Timestamp};
 use rewind_engine::ports::{
-    Admission, Attempt, AttributeValue, Counters, CredentialsExpiredReason, DueTimer, Ending,
-    FailureCounts, ForkParent, Gauges, InboxItem, IndexedSummary, LatestRun, LogRecord, Month,
-    NamespaceName, OrganizationState, OutboxEntry, OutboxId, ParkKind, ParkReason, PartitionError,
-    PayloadRecord, Projection, Quarantine, QuarantineKind, QuarantineNote, QuotaAlert,
-    QuotaAlertKey, QuotaKind, RunCounts, RunHead, RunMetadata, RunRef, RunSummary, RunWorkflow,
-    ScriptCounts, Sketch, Span, SpanId, SpanKind, SpanStatus, StartedBy, TaskPhase, TaskRecord,
-    TaskRef, TaskState, TenantId, Threshold, TimerKind, ToolCounts, ToolTask, TraceContext,
+    ActionCounts, Admission, Attempt, AttributeValue, CallTask, Counters, CredentialsExpiredReason,
+    DueTimer, Ending, FailureCounts, ForkParent, Gauges, InboxItem, IndexedSummary, LatestRun,
+    LogRecord, Month, NamespaceName, OrganizationState, OutboxEntry, OutboxId, ParkKind,
+    ParkReason, PartitionError, PayloadRecord, Projection, Quarantine, QuarantineKind,
+    QuarantineNote, QuotaAlert, QuotaAlertKey, QuotaKind, RunCounts, RunHead, RunMetadata, RunRef,
+    RunSummary, RunWorkflow, ScriptCounts, Sketch, Span, SpanId, SpanKind, SpanStatus, StartedBy,
+    TaskPhase, TaskRecord, TaskRef, TaskState, TenantId, Threshold, TimerKind, TraceContext,
     TraceId, Trigger, Wait, WaitKind, WaitingFor, Watcher, WebhookEvent, WebhookEventKind,
     WebhookTarget,
 };
@@ -295,17 +295,17 @@ pub fn inbox_of(record: record::InboxItem) -> Result<InboxItem, PartitionError> 
 }
 
 pub fn task_record(task: &TaskRecord) -> record::Task {
-    let tool = &task.task;
+    let action = &task.task;
     record::Task {
-        tenant: tool.task.run.tenant.to_string(),
-        run: tool.task.run.id,
-        seq: tool.task.seq.0,
-        action_set: tool.action_set,
-        tool: tool.tool.clone(),
-        route: tool.route.clone(),
-        args: tool.args.clone(),
-        policy: tool.policy,
-        state: match &tool.state {
+        tenant: action.task.run.tenant.to_string(),
+        run: action.task.run.id,
+        seq: action.task.seq.0,
+        action_set: action.action_set,
+        action: action.action.clone(),
+        route: action.route.clone(),
+        args: action.args.clone(),
+        policy: action.policy,
+        state: match &action.state {
             TaskState::Approval => record::TaskState::Approval {},
             TaskState::Ready { next_attempt_at } => record::TaskState::Ready {
                 next_attempt_at: next_attempt_at.0,
@@ -324,22 +324,22 @@ pub fn task_record(task: &TaskRecord) -> record::Task {
                 message: reason.message.clone(),
             },
         },
-        attempt: tool.attempt,
-        schema_change_approved: tool.schema_change_approved,
-        created_at: tool.created_at.0,
+        attempt: action.attempt,
+        schema_change_approved: action.schema_change_approved,
+        created_at: action.created_at.0,
         token_hash: task.token_hash,
     }
 }
 
 pub fn task_of(record: record::Task) -> Result<TaskRecord, PartitionError> {
     Ok(TaskRecord {
-        task: ToolTask {
+        task: CallTask {
             task: TaskRef {
                 run: RunRef::new(tenant(record.tenant)?, record.run),
                 seq: Seq(record.seq),
             },
             action_set: record.action_set,
-            tool: record.tool,
+            action: record.action,
             route: record.route,
             args: record.args,
             policy: record.policy,
@@ -517,7 +517,7 @@ pub fn summary_record(indexed: &IndexedSummary) -> record::Summary {
         started_at: summary.started_at.map(|at| at.0),
         ended_at: summary.ended_at.map(|at| at.0),
         last_activity_at: summary.last_activity_at.0,
-        tool_calls: summary.tool_calls,
+        calls: summary.calls,
         errors: summary.errors,
         history_len: summary.history_len,
         waits: summary.waits.iter().map(wait_record).collect(),
@@ -537,7 +537,7 @@ pub fn summary_record(indexed: &IndexedSummary) -> record::Summary {
                 reason: note.reason.clone(),
                 since: note.since.0,
             }),
-        tools: indexed.tools.clone(),
+        actions: indexed.actions.clone(),
         call_errors: indexed
             .call_errors
             .iter()
@@ -565,7 +565,7 @@ pub fn summary_of(record: record::Summary) -> Result<IndexedSummary, PartitionEr
             started_at: record.started_at.map(Timestamp),
             ended_at: record.ended_at.map(Timestamp),
             last_activity_at: Timestamp(record.last_activity_at),
-            tool_calls: record.tool_calls,
+            calls: record.calls,
             errors: record.errors,
             history_len: record.history_len,
             waits: record.waits.into_iter().map(wait_of).collect(),
@@ -583,7 +583,7 @@ pub fn summary_of(record: record::Summary) -> Result<IndexedSummary, PartitionEr
                 since: Timestamp(note.since),
             }),
         },
-        tools: record.tools,
+        actions: record.actions,
         call_errors: record.call_errors.into_iter().map(Into::into).collect(),
     })
 }
@@ -668,11 +668,11 @@ pub fn counters_record(counters: &Counters) -> record::Counters {
                 (fingerprint.clone(), failures)
             })
             .collect(),
-        tools: counters
-            .tools
+        actions: counters
+            .actions
             .iter()
-            .map(|(tool, calls)| {
-                let calls = record::ToolCounts {
+            .map(|(action, calls)| {
+                let calls = record::ActionCounts {
                     calls: calls.calls,
                     completed: calls.completed,
                     failed: calls.failed,
@@ -684,7 +684,7 @@ pub fn counters_record(counters: &Counters) -> record::Counters {
                     retries: calls.retries,
                     latency: sketch_record(&calls.latency),
                 };
-                (tool.clone(), calls)
+                (action.clone(), calls)
             })
             .collect(),
         scripts: counters
@@ -693,7 +693,7 @@ pub fn counters_record(counters: &Counters) -> record::Counters {
             .map(|(&script, runs)| {
                 let runs = record::ScriptCounts {
                     runs: runs_record(&runs.runs),
-                    tools: runs.tools.clone(),
+                    actions: runs.actions.clone(),
                     first_started_at: runs.first_started_at.map(|at| at.0),
                     last_started_at: runs.last_started_at.map(|at| at.0),
                 };
@@ -739,11 +739,11 @@ pub fn counters_of(record: record::Counters) -> Counters {
                 (fingerprint, failures)
             })
             .collect(),
-        tools: record
-            .tools
+        actions: record
+            .actions
             .into_iter()
-            .map(|(tool, calls)| {
-                let calls = ToolCounts {
+            .map(|(action, calls)| {
+                let calls = ActionCounts {
                     calls: calls.calls,
                     completed: calls.completed,
                     failed: calls.failed,
@@ -755,7 +755,7 @@ pub fn counters_of(record: record::Counters) -> Counters {
                     retries: calls.retries,
                     latency: sketch_of(calls.latency),
                 };
-                (tool, calls)
+                (action, calls)
             })
             .collect(),
         scripts: record
@@ -764,7 +764,7 @@ pub fn counters_of(record: record::Counters) -> Counters {
             .map(|(script, runs)| {
                 let runs = ScriptCounts {
                     runs: runs_of(runs.runs),
-                    tools: runs.tools,
+                    actions: runs.actions,
                     first_started_at: runs.first_started_at.map(Timestamp),
                     last_started_at: runs.last_started_at.map(Timestamp),
                 };
@@ -1008,22 +1008,24 @@ fn webhook_event_record(event: &WebhookEvent) -> record::WebhookEvent {
             WebhookEventKind::RunQuarantined { reason } => record::WebhookKind::RunQuarantined {
                 reason: reason.clone(),
             },
-            WebhookEventKind::ToolSchemaChanged { seq, tool, message } => {
-                record::WebhookKind::ToolSchemaChanged {
-                    seq: seq.0,
-                    tool: tool.clone(),
-                    message: message.clone(),
-                }
-            }
+            WebhookEventKind::ActionSchemaChanged {
+                seq,
+                action,
+                message,
+            } => record::WebhookKind::ActionSchemaChanged {
+                seq: seq.0,
+                action: action.clone(),
+                message: message.clone(),
+            },
             WebhookEventKind::CredentialsExpired {
                 seq,
-                tool,
+                action,
                 message,
                 reason,
                 secret,
             } => record::WebhookKind::CredentialsExpired {
                 seq: seq.0,
-                tool: tool.clone(),
+                action: action.clone(),
                 message: message.clone(),
                 reason: match reason {
                     CredentialsExpiredReason::Refused => record::CredentialsReason::Refused,
@@ -1060,22 +1062,24 @@ fn webhook_event_of(record: record::WebhookEvent) -> Result<WebhookEvent, Partit
             record::WebhookKind::RunQuarantined { reason } => {
                 WebhookEventKind::RunQuarantined { reason }
             }
-            record::WebhookKind::ToolSchemaChanged { seq, tool, message } => {
-                WebhookEventKind::ToolSchemaChanged {
-                    seq: Seq(seq),
-                    tool,
-                    message,
-                }
-            }
+            record::WebhookKind::ActionSchemaChanged {
+                seq,
+                action,
+                message,
+            } => WebhookEventKind::ActionSchemaChanged {
+                seq: Seq(seq),
+                action,
+                message,
+            },
             record::WebhookKind::CredentialsExpired {
                 seq,
-                tool,
+                action,
                 message,
                 reason,
                 secret,
             } => WebhookEventKind::CredentialsExpired {
                 seq: Seq(seq),
-                tool,
+                action,
                 message,
                 reason: match reason {
                     record::CredentialsReason::Refused => CredentialsExpiredReason::Refused,

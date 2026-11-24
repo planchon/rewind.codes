@@ -17,7 +17,7 @@ use rewind_api::action_sets::{CreateActionSet, HostTool, McpServer};
 use rewind_api::common::{Labels, RunStatus};
 use rewind_api::headers::IdempotencyKey;
 use rewind_api::namespaces::NamespaceName;
-use rewind_api::reading::ToolStatsFilter;
+use rewind_api::reading::ActionStatsFilter;
 use rewind_api::runs::{Run, StartRun};
 use rewind_api::tasks::{CompleteTask, TaskStreamEvent, TaskStreamQuery};
 use serde_json::{Value, json};
@@ -26,11 +26,11 @@ use tokio_util::sync::CancellationToken;
 
 use crate::error::Error;
 use crate::mcp::FakeServer;
-use crate::report::{Latencies, Percentiles, Report, ToolStatsLine};
+use crate::report::{ActionStatsLine, Latencies, Percentiles, Report};
 
 /// The script of every run; `SLEEP` is replaced by the load's sleep.
 const SCRIPT: &str = r#"import { signal, sleep } from "rewind";
-import { fake, host } from "rewind:tools";
+import { fake, host } from "rewind:actions";
 
 export default async function main(input: { n: number; pad: string }) {
   const echoed = await fake.echo({ n: input.n, pad: input.pad });
@@ -232,23 +232,23 @@ pub(crate) async fn run(
     check(&mut report, &outcomes, mcp, &host);
     thresholds(&mut report, &settings.thresholds);
     if let Ok(stats) = harness
-        .tool_stats(&ToolStatsFilter {
+        .action_stats(&ActionStatsFilter {
             action_set: Some(action_set.id.clone()),
             since: Some(began),
-            ..ToolStatsFilter::default()
+            ..ActionStatsFilter::default()
         })
         .await
     {
-        report.server_tool_stats = stats
-            .tools
+        report.server_action_stats = stats
+            .actions
             .into_iter()
-            .map(|tool| ToolStatsLine {
-                tool: tool.tool,
-                calls: tool.calls,
-                errors: tool.errors,
-                retries: tool.retries,
-                p50_ms: tool.latency_ms.p50,
-                p99_ms: tool.latency_ms.p99,
+            .map(|action| ActionStatsLine {
+                action: action.action,
+                calls: action.calls,
+                errors: action.errors,
+                retries: action.retries,
+                p50_ms: action.latency_ms.p50,
+                p99_ms: action.latency_ms.p99,
             })
             .collect();
     }
@@ -597,10 +597,10 @@ fn status_name(status: RunStatus) -> &'static str {
 /// Fills the report from the outcomes, and checks the invariants:
 ///
 /// - every run completed, with its expected output;
-/// - each tool call reached its tool as many times as its failures call for, never more: `echo`
+/// - each call reached its action as many times as its failures call for, never more: `echo`
 ///   and the host call once, `flaky` twice (its transient failure, then the retry). A run's
-///   attempts live in its tool tasks, which its end clears (`archi/04-tools.md`): the load
-///   knows them from its tools;
+///   attempts live in its call tasks, which its end clears (`archi/04-tools.md`): the load
+///   knows them from its actions;
 /// - every call belongs to a run of this load and carries an idempotency key.
 fn check(report: &mut Report, outcomes: &[Outcome], mcp: &FakeServer, host: &HostRecord) {
     let mut start = Vec::new();
@@ -611,7 +611,7 @@ fn check(report: &mut Report, outcomes: &[Outcome], mcp: &FakeServer, host: &Hos
     let mut last_end: Option<Instant> = None;
     let record = mcp.record();
 
-    // The MCP calls of each run, by tool.
+    // The MCP calls of each run, by action.
     let mut calls: HashMap<&str, Vec<(u32, &crate::mcp::Calls)>> = HashMap::new();
     for (key, call) in &record.calls {
         let Some((run, seq)) = key
@@ -671,17 +671,17 @@ fn check(report: &mut Report, outcomes: &[Outcome], mcp: &FakeServer, host: &Hos
             end_to_end.push(ended - outcome.sent);
         }
         let run_calls = calls.get(run).map(Vec::as_slice).unwrap_or_default();
-        let mut tools: BTreeMap<&str, u32> = BTreeMap::new();
+        let mut actions: BTreeMap<&str, u32> = BTreeMap::new();
         for (seq, call) in run_calls {
-            *tools.entry(call.tool.as_str()).or_default() += 1;
-            let expected = if call.tool == "flaky" { 2 } else { 1 };
+            *actions.entry(call.action.as_str()).or_default() += 1;
+            let expected = if call.action == "flaky" { 2 } else { 1 };
             if call.count != expected {
                 report.violation(format!(
                     "run {run} (n={}): {} #{seq} reached the server {} times, expected {expected}",
-                    outcome.n, call.tool, call.count
+                    outcome.n, call.action, call.count
                 ));
             }
-            match call.tool.as_str() {
+            match call.action.as_str() {
                 "echo" => first_call.push(call.first.saturating_duration_since(started)),
                 "flaky" => {
                     if let Some(answered) = host.answered.get(run) {
@@ -691,9 +691,9 @@ fn check(report: &mut Report, outcomes: &[Outcome], mcp: &FakeServer, host: &Hos
                 _ => {}
             }
         }
-        if tools.get("echo") != Some(&1) || tools.get("flaky") != Some(&1) {
+        if actions.get("echo") != Some(&1) || actions.get("flaky") != Some(&1) {
             report.violation(format!(
-                "run {run} (n={}): MCP calls by tool {tools:?}, expected one echo and one flaky",
+                "run {run} (n={}): MCP calls by action {actions:?}, expected one echo and one flaky",
                 outcome.n
             ));
         }
@@ -721,7 +721,7 @@ fn check(report: &mut Report, outcomes: &[Outcome], mcp: &FakeServer, host: &Hos
         }
     }
 
-    let tool_calls: u64 = record
+    let calls: u64 = record
         .calls
         .values()
         .map(|call| u64::from(call.count))
@@ -745,7 +745,7 @@ fn check(report: &mut Report, outcomes: &[Outcome], mcp: &FakeServer, host: &Hos
         report.elapsed_s = (elapsed * 10.0).round() / 10.0;
         if elapsed > 0.0 {
             report.runs_per_s = (ended as f64 / elapsed * 10.0).round() / 10.0;
-            report.tool_calls_per_s = (tool_calls as f64 / elapsed * 10.0).round() / 10.0;
+            report.calls_per_s = (calls as f64 / elapsed * 10.0).round() / 10.0;
         }
     }
     report.latency_ms = Latencies {
@@ -791,9 +791,9 @@ mod tests {
         }
     }
 
-    fn calls(server: &FakeServer, key: &str, tool: &str, times: u32) {
+    fn calls(server: &FakeServer, key: &str, action: &str, times: u32) {
         for _ in 0..times {
-            server.called(Some(key), tool);
+            server.called(Some(key), action);
         }
     }
 
