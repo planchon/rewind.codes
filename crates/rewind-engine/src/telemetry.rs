@@ -374,7 +374,7 @@ fn run_outcome(event: &Event) -> &'static str {
     match event {
         Event::Command(Command::CompleteRun { .. }) => "completed",
         Event::Command(Command::FailRun { error })
-            if error.name == rewind_core::ScriptError::CANCELLED =>
+            if error.name == rewind_core::ErrorInfo::CANCELLED =>
         {
             "cancelled"
         }
@@ -971,8 +971,8 @@ mod tests {
                 (
                     5_000,
                     Event::Command(Command::FailRun {
-                        error: rewind_core::ScriptError {
-                            name: rewind_core::ScriptError::CANCELLED.into(),
+                        error: rewind_core::ErrorInfo {
+                            name: rewind_core::ErrorInfo::CANCELLED.into(),
                             message: "stop".into(),
                             stack: None,
                         },

@@ -4,5 +4,5 @@
 {"index":2,"recorded_at":1767225600000,"event":{"type":"call_completed","seq":1,"result":{"value":{"runId":"e7464efc-70ad-7902-9a3e-aa3c25c3a340"}}}},
 {"index":3,"recorded_at":1767225600000,"event":{"type":"signal_awaited","name":"rewind:ended:e7464efc-70ad-7902-9a3e-aa3c25c3a340","callsite":{"line":5,"column":14}}},
 {"index":4,"recorded_at":1767225600000,"event":{"type":"signal_received","name":"rewind:ended:e7464efc-70ad-7902-9a3e-aa3c25c3a340","payload":{"value":{"error":{"message":"cannot triage acme/api","name":"TypeError","stack":"TypeError: cannot triage acme/api\n    at main (file:///workflow.ts:2:9)"},"status":"failed"}}}},
-{"index":5,"recorded_at":1767225600000,"event":{"type":"fail_run","error":{"name":"WorkflowError","message":"workflow triage (run e7464efc-70ad-7902-9a3e-aa3c25c3a340) failed: TypeError: cannot triage acme/api","stack":"WorkflowError: workflow triage (run e7464efc-70ad-7902-9a3e-aa3c25c3a340) failed: TypeError: cannot triage acme/api"}}}
+{"index":5,"recorded_at":1767225600000,"event":{"type":"fail_run","error":{"name":"RunError","message":"workflow triage (run e7464efc-70ad-7902-9a3e-aa3c25c3a340) failed: TypeError: cannot triage acme/api","stack":"RunError: workflow triage (run e7464efc-70ad-7902-9a3e-aa3c25c3a340) failed: TypeError: cannot triage acme/api"}}}
 ]}

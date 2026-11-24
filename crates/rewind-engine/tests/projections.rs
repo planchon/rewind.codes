@@ -11,8 +11,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use rewind_core::{
     AbortKind, AbortReason, Action, ActionRoute, ActionSet, Annotation, Callsite, CancelReason,
-    Command, Completion, Digest, Epoch, Event, HistoryEvent, Lifecycle, McpServer, McpTransport,
-    RunMode, RunStarted, RunStatus, ScriptError, Seed, Seq, Timestamp,
+    Command, Completion, Digest, Epoch, ErrorInfo, Event, HistoryEvent, Lifecycle, McpServer,
+    McpTransport, RunMode, RunStarted, RunStatus, Seed, Seq, Timestamp,
 };
 use rewind_engine::failures;
 use rewind_engine::plane::NodeConfig;
@@ -328,7 +328,7 @@ fn a_snapshot_tells_how_the_run_ended() {
         (
             10,
             Event::Command(Command::FailRun {
-                error: ScriptError {
+                error: ErrorInfo {
                     name: "TypeError".into(),
                     message: message.into(),
                     stack: Some(format!(
@@ -393,8 +393,8 @@ fn a_snapshot_tells_how_the_run_ended() {
         (
             10,
             Event::Command(Command::FailRun {
-                error: ScriptError {
-                    name: ScriptError::CANCELLED.into(),
+                error: ErrorInfo {
+                    name: ErrorInfo::CANCELLED.into(),
                     message: "the run was cancelled".into(),
                     stack: None,
                 },
@@ -405,7 +405,7 @@ fn a_snapshot_tells_how_the_run_ended() {
     assert_eq!(snapshot.status, RunStatus::Cancelled);
     assert_eq!(
         snapshot.ending.map(|ending| ending.error),
-        Some(ScriptError::CANCELLED.to_owned())
+        Some(ErrorInfo::CANCELLED.to_owned())
     );
 
     let completed = history(vec![

@@ -2,8 +2,8 @@
 
 use rewind_core::{
     AbortKind, AbortReason, ActionFailure, ActionFailureKind, Annotation, Callsite, CancelReason,
-    Command, Completion, Digest, Epoch, Event, HistoryEvent, Lifecycle, LogLevel, Payload, RunMode,
-    RunStarted, ScriptError, Seed, Seq, Timestamp, canonical_json,
+    Command, Completion, Digest, Epoch, ErrorInfo, Event, HistoryEvent, Lifecycle, LogLevel,
+    Payload, RunMode, RunStarted, Seed, Seq, Timestamp, canonical_json,
 };
 use serde::de::Deserializer;
 use serde::ser::{Error as _, Serializer};
@@ -60,7 +60,7 @@ pub(crate) enum EventV1 {
         output: PayloadV1,
     },
     FailRun {
-        error: ScriptErrorV1,
+        error: ErrorInfoV1,
     },
     // Completions
     CallCompleted {
@@ -157,7 +157,7 @@ pub(crate) struct CallsiteV1 {
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct ScriptErrorV1 {
+pub(crate) struct ErrorInfoV1 {
     name: String,
     message: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -289,7 +289,7 @@ impl From<&Command> for EventV1 {
                 output: output.into(),
             },
             Command::FailRun { error } => EventV1::FailRun {
-                error: ScriptErrorV1 {
+                error: ErrorInfoV1 {
                     name: error.name.clone(),
                     message: error.message.clone(),
                     stack: error.stack.clone(),
@@ -483,7 +483,7 @@ impl TryFrom<EventV1> for Event {
                 output: output.try_into()?,
             }),
             EventV1::FailRun { error } => Event::Command(Command::FailRun {
-                error: ScriptError {
+                error: ErrorInfo {
                     name: error.name,
                     message: error.message,
                     stack: error.stack,

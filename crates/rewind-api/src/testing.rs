@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use utoipa::ToSchema;
 
-use crate::common::{AbortReason, ActionFailureKind, RunStatus, ScriptError, Timestamp, timestamp};
+use crate::common::{AbortReason, ActionFailureKind, ErrorInfo, RunStatus, Timestamp, timestamp};
 
 /// A test: what the run is given (its input, the actions' answers, signals), and what must hold
 /// at the end. It never names its code.
@@ -271,7 +271,7 @@ pub struct TestResult {
     )]
     pub output: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub error: Option<ScriptError>,
+    pub error: Option<ErrorInfo>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub abort: Option<AbortReason>,
     /// How many times each action was called.

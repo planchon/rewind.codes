@@ -1,5 +1,5 @@
 {
-  "description": "The run of a workflow fails: result() rejects with a WorkflowError that names the run's failure, and the code that does not catch it fails with it.",
+  "description": "The run of a workflow fails: result() rejects with a RunError that names the run's failure, and the code that does not catch it fails with it.",
   "live": true,
   "workflows": {
     "triage": {
@@ -11,7 +11,7 @@
   },
   "expect": {
     "status": "failed",
-    "error": { "name": "WorkflowError", "message": "failed: TypeError: cannot triage acme/api" },
+    "error": { "name": "RunError", "message": "failed: TypeError: cannot triage acme/api" },
     "children": ["failed"]
   }
 }

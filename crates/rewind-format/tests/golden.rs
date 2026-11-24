@@ -5,8 +5,8 @@
 
 use rewind_core::{
     AbortKind, AbortReason, ActionFailure, ActionFailureKind, Annotation, Callsite, CancelReason,
-    Command, Completion, Digest, Epoch, Event, Lifecycle, LogLevel, Payload, RunId, RunMode,
-    RunStarted, RunState, RunStatus, ScriptError, Seed, Seq, Timestamp,
+    Command, Completion, Digest, Epoch, ErrorInfo, Event, Lifecycle, LogLevel, Payload, RunId,
+    RunMode, RunStarted, RunState, RunStatus, Seed, Seq, Timestamp,
 };
 use rewind_format::{
     FormatError, decode_event, decode_run_export, encode_event, encode_run_export,
@@ -244,7 +244,7 @@ fn pins_the_spelling_of_every_variant() {
         ),
         (
             Event::Command(Command::FailRun {
-                error: ScriptError {
+                error: ErrorInfo {
                     name: "DeadlockError".into(),
                     message: "m".into(),
                     stack: None,

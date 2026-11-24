@@ -135,10 +135,10 @@ async fn a_good_script_checks_and_starts() {
 }
 
 /// Code written before actions were named (`archi/08-decisions.md`, R1): it imports
-/// `rewind:tools`, catches a `ToolError` and reads its `tool`.
+/// `rewind:tools`, catches a `ToolError` and reads its `tool`, and catches a `WorkflowError`.
 const OLD_NAMES: &str = r#"import { crm, ask_user } from "rewind:tools";
 import type { ToolContent } from "rewind:tools";
-import { ToolError, sleep } from "rewind";
+import { ToolError, WorkflowError, sleep } from "rewind";
 
 export default async function main() {
   try {
@@ -147,6 +147,7 @@ export default async function main() {
     return customer.json<{ name: string }>().name;
   } catch (error) {
     if (error instanceof ToolError) return `${error.tool} failed: ${error.message}`;
+    if (error instanceof WorkflowError) return `${error.workflow} ${error.status}`;
     return await ask_user({ question: "what now?" });
   }
 }
@@ -179,6 +180,7 @@ async fn the_old_names_are_declared_nowhere() {
         assert!(!text.contains("rewind:tools"), "{text}");
         assert!(!text.contains("ToolError"), "{text}");
         assert!(!text.contains("ToolContent"), "{text}");
+        assert!(!text.contains("WorkflowError"), "{text}");
     }
 }
 
@@ -423,7 +425,7 @@ export default async function main(input: { repo: string }) {
 "#;
 
 const PARENT: &str = r#"import { triage } from "rewind:workflows";
-import { WorkflowError } from "rewind";
+import { RunError } from "rewind";
 
 export default async function main(input: { repos: string[] }) {
   const runs = await Promise.all(input.repos.map((repo) => triage.start({ repo }, { detached: false })));
@@ -432,7 +434,7 @@ export default async function main(input: { repos: string[] }) {
     const results = await Promise.all(runs.map((run) => run.result({ timeout: "1d" })));
     return results.map((result) => result?.closed ?? 0);
   } catch (error) {
-    if (error instanceof WorkflowError) return [error.status];
+    if (error instanceof RunError) return [error.status];
     throw error;
   }
 }

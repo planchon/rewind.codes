@@ -57,8 +57,8 @@ pub use digest::{Digest, InvalidDigest};
 pub use doc::{CodeDoc, MAX_DESCRIPTION_CHARS, MAX_TITLE_CHARS, code_doc};
 pub use event::{
     AbortKind, AbortReason, ActionFailure, ActionFailureKind, ActionOutcome, Annotation, Callsite,
-    CancelReason, Command, Completion, Event, HistoryEvent, Lifecycle, LogLevel, RunMode,
-    RunStarted, ScriptError,
+    CancelReason, Command, Completion, ErrorInfo, Event, HistoryEvent, Lifecycle, LogLevel,
+    RunMode, RunStarted,
 };
 pub use handle::{
     InvalidRunHandle, MAX_ORIGIN_LEN, MAX_SUFFIX_LEN, RunHandle, SCRIPT_ORIGIN, SUFFIX_LEN,

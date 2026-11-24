@@ -12,8 +12,8 @@ use chacha20::cipher::{KeyIvInit, StreamCipher};
 use deno_core::{OpState, extension, op2, v8};
 use deno_error::JsErrorBox;
 use rewind_core::{
-    ActionRoute, ActionSet, Annotation, Builtin, Callsite, Command, LogLevel, Payload, RunId,
-    ScriptError, Seed, Seq, Timestamp, WorkflowOp, parse_duration,
+    ActionRoute, ActionSet, Annotation, Builtin, Callsite, Command, ErrorInfo, LogLevel, Payload,
+    RunId, Seed, Seq, Timestamp, WorkflowOp, parse_duration,
 };
 use rewind_engine::ports::Emitted;
 use rewind_engine::schema::{Refused, Validator};
@@ -618,7 +618,7 @@ fn op_rewind_fail(
     let state = state.borrow_mut::<ExecState>();
     if let Some([name, message, stack]) = state.admit_strings(scope, [name, message, stack]) {
         state.command(Command::FailRun {
-            error: ScriptError {
+            error: ErrorInfo {
                 name,
                 message,
                 stack: (!stack.is_empty()).then_some(stack),

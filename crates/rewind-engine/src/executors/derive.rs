@@ -631,7 +631,7 @@ pub(crate) fn with_phases(
 mod tests {
     use rewind_core::{
         Action, ActionFailure, ActionFailureKind, ActionRoute, Annotation, Callsite, CancelReason,
-        Digest, Epoch, LogLevel, McpServer, McpTransport, RunId, RunMode, RunStarted, ScriptError,
+        Digest, Epoch, ErrorInfo, LogLevel, McpServer, McpTransport, RunId, RunMode, RunStarted,
         Seed,
     };
     use serde_json::json;
@@ -794,8 +794,8 @@ mod tests {
             reason: CancelReason::Requested(None),
         }));
         events.push(Event::Command(Command::FailRun {
-            error: ScriptError {
-                name: ScriptError::CANCELLED.into(),
+            error: ErrorInfo {
+                name: ErrorInfo::CANCELLED.into(),
                 message: "cancelled".into(),
                 stack: None,
             },

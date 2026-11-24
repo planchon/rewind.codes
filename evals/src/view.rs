@@ -15,9 +15,9 @@ use rewind_api::common::{
     AbortReason, ActionFailure, Callsite, Labels, LogLevel, PAYLOAD_VALUE_LIMIT, Payload,
     RunStatus, timestamp,
 };
+use rewind_api::common::{ErrorInfo, FailedCall};
 use rewind_api::runs::{
-    FailedCall, ForkSource, LogLine, Quarantine, QuarantineCause, Run, RunError, RunSummary,
-    RunWait, WaitKind, Waiting,
+    ForkSource, LogLine, Quarantine, QuarantineCause, Run, RunSummary, RunWait, WaitKind, Waiting,
 };
 use rewind_api::scripts::{CheckResult, Diagnostic, Location, Severity, TitleSource};
 use rewind_core::{
@@ -376,13 +376,13 @@ fn wait_kind(waiting: rewind_engine::ports::WaitingFor) -> WaitKind {
 
 /// How the code failed, with where: the first position in `workflow.ts` of its stack, else of
 /// its message, and the call whose `ActionError` it did not catch.
-fn run_error(error: &rewind_core::ScriptError, history: &[HistoryEvent], source: &str) -> RunError {
+fn run_error(error: &rewind_core::ErrorInfo, history: &[HistoryEvent], source: &str) -> ErrorInfo {
     let location = error
         .stack
         .as_deref()
         .and_then(code_location)
         .or_else(|| code_location(&error.message));
-    RunError {
+    ErrorInfo {
         name: error.name.clone(),
         message: error.message.clone(),
         stack: error.stack.clone(),
@@ -394,7 +394,7 @@ fn run_error(error: &rewind_core::ScriptError, history: &[HistoryEvent], source:
     }
 }
 
-/// The call whose `ActionError` the code did not catch, as `ScriptError::failed_call` finds it.
+/// The call whose `ActionError` the code did not catch, as `ErrorInfo::failed_call` finds it.
 fn failed_call(history: &[HistoryEvent], seq: Seq) -> Option<FailedCall> {
     let failure = history.iter().find_map(|entry| match &entry.event {
         Event::Completion(Completion::CallFailed { seq: failed, error }) if *failed == seq => {

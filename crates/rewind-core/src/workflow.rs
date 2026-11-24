@@ -28,7 +28,7 @@ use crate::canonical::canonical_json;
 use crate::digest::Digest;
 use crate::event::{
     AbortKind, AbortReason, ActionFailure, ActionFailureKind, ActionOutcome, CancelReason,
-    ScriptError,
+    ErrorInfo,
 };
 use crate::ids::RunId;
 use crate::payload::Payload;
@@ -501,11 +501,11 @@ pub enum RunEnd {
         output: Value,
     },
     Failed {
-        error: ScriptError,
+        error: ErrorInfo,
     },
     /// A failure with `CancelledError`.
     Cancelled {
-        error: ScriptError,
+        error: ErrorInfo,
     },
     Aborted {
         reason: AbortReason,
@@ -523,7 +523,7 @@ impl RunEnd {
                 },
                 Payload::Digest(_) => return None,
             },
-            RunOutcome::Failed { error } if error.name == ScriptError::CANCELLED => {
+            RunOutcome::Failed { error } if error.name == ErrorInfo::CANCELLED => {
                 RunEnd::Cancelled {
                     error: error.clone(),
                 }
@@ -548,7 +548,7 @@ impl RunEnd {
 
     /// The signal's payload.
     pub fn to_json(&self) -> Value {
-        let error_json = |error: &ScriptError| {
+        let error_json = |error: &ErrorInfo| {
             let mut object = Map::new();
             object.insert("name".into(), json!(error.name));
             object.insert("message".into(), json!(error.message));
@@ -596,7 +596,7 @@ impl RunEnd {
         match outcome {
             ActionOutcome::Result(output) => RunEnd::Completed { output },
             ActionOutcome::Failure(failure) => RunEnd::Failed {
-                error: ScriptError {
+                error: ErrorInfo {
                     name: "Error".into(),
                     message: failure.message,
                     stack: None,
@@ -608,7 +608,7 @@ impl RunEnd {
     /// Reads a signal's payload written by [`to_json`](Self::to_json).
     pub fn from_json(value: &Value) -> Option<Self> {
         let error = |value: &Value| {
-            Some(ScriptError {
+            Some(ErrorInfo {
                 name: value.get("name")?.as_str()?.to_owned(),
                 message: value.get("message")?.as_str()?.to_owned(),
                 stack: value
@@ -840,7 +840,7 @@ mod tests {
         );
         assert_eq!(end.to_test(), ActionOutcome::Result(json!({ "closed": 1 })));
         let failed = RunEnd::Failed {
-            error: ScriptError {
+            error: ErrorInfo {
                 name: "TypeError".into(),
                 message: "x".into(),
                 stack: None,
@@ -870,13 +870,13 @@ mod tests {
 
     #[test]
     fn ends_round_trip_through_their_payload() {
-        let error = ScriptError {
+        let error = ErrorInfo {
             name: "TypeError".into(),
             message: "x is undefined".into(),
             stack: Some("at main (workflow.ts:3:7)".into()),
         };
-        let cancelled = ScriptError {
-            name: ScriptError::CANCELLED.into(),
+        let cancelled = ErrorInfo {
+            name: ErrorInfo::CANCELLED.into(),
             message: "the run was cancelled".into(),
             stack: None,
         };

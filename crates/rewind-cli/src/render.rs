@@ -299,8 +299,9 @@ fn snake_case(name: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use rewind_api::common::ErrorInfo;
     use rewind_api::common::{Callsite, Labels, RunMode};
-    use rewind_api::runs::{Quarantine, QuarantineCause, RunError};
+    use rewind_api::runs::{Quarantine, QuarantineCause};
     use rewind_api::scripts::Location;
     use serde_json::json;
 
@@ -357,7 +358,7 @@ mod tests {
         let mut failed = active_run();
         failed.status = RunStatus::Failed;
         failed.waiting_for.clear();
-        failed.error = Some(RunError {
+        failed.error = Some(ErrorInfo {
             name: "TypeError".into(),
             message: "x is undefined".into(),
             stack: None,

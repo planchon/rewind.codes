@@ -1,4 +1,4 @@
-//! `ScriptError::failed_call` against the runtime's own `ActionError`s: in every history of the
+//! `ErrorInfo::failed_call` against the runtime's own `ActionError`s: in every history of the
 //! corpus that ends on an uncaught `ActionError`, it finds the call that failed. The API's
 //! `failedCall` (`GET /v1/runs/{id}`) and the agent tools' failure text rest on it.
 
@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 
-use rewind_core::{Command, Completion, Event, ScriptError, Seq};
+use rewind_core::{Command, Completion, ErrorInfo, Event, Seq};
 
 #[test]
 fn every_uncaught_action_error_of_the_corpus_names_its_call() {
@@ -24,7 +24,7 @@ fn every_uncaught_action_error_of_the_corpus_names_its_call() {
             else {
                 continue;
             };
-            if error.name != ScriptError::ACTION_ERROR {
+            if error.name != ErrorInfo::ACTION_ERROR {
                 continue;
             }
             let name = format!("{color}/{}", case.file_name().unwrap().to_string_lossy());

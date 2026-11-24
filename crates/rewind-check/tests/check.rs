@@ -659,7 +659,7 @@ declare module "rewind:workflows" {
 "##;
 
 const PARENT: &str = r##"import { triage } from "rewind:workflows";
-import { WorkflowError } from "rewind";
+import { RunError } from "rewind";
 
 export default async function main(input: { repos: string[] }) {
   const runs = await Promise.all(input.repos.map((repo) => triage.start({ repo }, { ttl: "2d" })));
@@ -670,7 +670,7 @@ export default async function main(input: { repos: string[] }) {
       const result = await run.result();
       closed += result.closed;
     } catch (error) {
-      if (error instanceof WorkflowError && error.status === "failed") continue;
+      if (error instanceof RunError && error.status === "failed") continue;
       throw error;
     }
   }

@@ -195,7 +195,7 @@ fn headline(
         Some(Some(rewind_core::RunOutcome::Completed { .. })) => "completed".to_owned(),
         Some(Some(rewind_core::RunOutcome::Failed { error }))
             if record.status == RunStatus::Cancelled
-                || error.name == rewind_core::ScriptError::CANCELLED =>
+                || error.name == rewind_core::ErrorInfo::CANCELLED =>
         {
             format!("cancelled · {}", truncate(&error.message, MESSAGE_CHARS))
         }

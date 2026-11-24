@@ -87,7 +87,7 @@
   "rewind": [
     "ActionError",
     "CancelledError",
-    "WorkflowError",
+    "RunError",
     "run",
     "signal",
     "sleep",

@@ -25,7 +25,7 @@ use crate::canonical::canonical_json;
 use crate::cassette::{Cassette, CassetteError, Matching};
 use crate::digest::Digest;
 use crate::event::{
-    AbortReason, ActionOutcome, Annotation, Command, Event, HistoryEvent, ScriptError,
+    AbortReason, ActionOutcome, Annotation, Command, ErrorInfo, Event, HistoryEvent,
 };
 use crate::history::{HistoryError, validate_history};
 use crate::ids::{RunId, Seed};
@@ -403,7 +403,7 @@ pub struct ObservedCall {
 pub struct Observed<'a> {
     pub status: RunStatus,
     pub output: Option<&'a Value>,
-    pub error: Option<&'a ScriptError>,
+    pub error: Option<&'a ErrorInfo>,
     pub abort: Option<&'a AbortReason>,
     pub calls: &'a [ObservedCall],
 }
@@ -816,7 +816,7 @@ mod tests {
         history.push(entry(
             9,
             Event::Command(Command::FailRun {
-                error: ScriptError {
+                error: ErrorInfo {
                     name: "TypeError".into(),
                     message: "Cannot read properties of undefined".into(),
                     stack: None,
@@ -994,7 +994,7 @@ mod tests {
                 "the run did not fail (it is completed), expected TypeError",
             ]
         );
-        let error = ScriptError {
+        let error = ErrorInfo {
             name: "ActionError".into(),
             message: "rate limited".into(),
             stack: None,

@@ -4,8 +4,8 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use crate::event::{
-    AbortReason, Annotation, Command, Completion, Event, HistoryEvent, Lifecycle, RunMode,
-    ScriptError,
+    AbortReason, Annotation, Command, Completion, ErrorInfo, Event, HistoryEvent, Lifecycle,
+    RunMode,
 };
 use crate::history::{HistoryError, Validator};
 use crate::ids::{Epoch, Seq};
@@ -56,7 +56,7 @@ pub enum RunOutcome {
     },
     /// Includes cancellations: a failure with `CancelledError`.
     Failed {
-        error: ScriptError,
+        error: ErrorInfo,
     },
     Aborted {
         reason: AbortReason,
@@ -186,7 +186,7 @@ impl RunState {
                 },
             ),
             Command::FailRun { error } => {
-                let status = if error.name == ScriptError::CANCELLED {
+                let status = if error.name == ErrorInfo::CANCELLED {
                     RunStatus::Cancelled
                 } else {
                     RunStatus::Failed
@@ -362,7 +362,7 @@ mod tests {
 
     fn fail(name: &str) -> Event {
         Event::Command(Command::FailRun {
-            error: ScriptError {
+            error: ErrorInfo {
                 name: name.into(),
                 message: "x".into(),
                 stack: None,
@@ -463,7 +463,7 @@ mod tests {
             Event::Completion(Completion::CancelRequested {
                 reason: CancelReason::Ttl,
             }),
-            fail(ScriptError::CANCELLED),
+            fail(ErrorInfo::CANCELLED),
         ]);
         assert_eq!(
             RunState::from_history(&cancelled).unwrap().status(),

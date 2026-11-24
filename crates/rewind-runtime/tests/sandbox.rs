@@ -9,9 +9,8 @@ use std::time::Duration;
 
 use rewind_core::{
     AbortKind, Action, ActionFailure, ActionFailureKind, ActionRoute, ActionSet, Annotation,
-    Builtin, Callsite, Code, Command, Completion, Epoch, Event, HistoryEvent, McpServer,
-    McpTransport, RunId, RunOutcome, RunState, RunStatus, ScriptError, Seed, Seq, Timestamp,
-    canonical_json,
+    Builtin, Callsite, Code, Command, Completion, Epoch, ErrorInfo, Event, HistoryEvent, McpServer,
+    McpTransport, RunId, RunOutcome, RunState, RunStatus, Seed, Seq, Timestamp, canonical_json,
 };
 use rewind_engine::ports::{
     ActionDispatcher, Call, CallAuth, CodeExecutor, CompiledCode, Dispatched, ExecutorError,
@@ -124,7 +123,7 @@ impl Run {
         }
     }
 
-    fn error(&self) -> &ScriptError {
+    fn error(&self) -> &ErrorInfo {
         match self.state.outcome() {
             Some(RunOutcome::Failed { error }) => error,
             other => panic!("expected a failed run, got {other:?}\n{:#?}", self.history),

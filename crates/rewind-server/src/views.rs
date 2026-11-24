@@ -6,14 +6,14 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use rewind_api::calls::{CallState, ParkedReason};
 use rewind_api::common::{AbortReason, Callsite, Labels, Payload, RunMode, timestamp};
+use rewind_api::common::{ErrorInfo, FailedCall};
 use rewind_api::events::HistoryEvent as EventView;
 use rewind_api::runs::{
-    Deliveries, FailedCall, ForkSource, LogLine, Quarantine, QuarantineCause, Run, RunError,
-    Waiting,
+    Deliveries, ForkSource, LogLine, Quarantine, QuarantineCause, Run, Waiting,
 };
 use rewind_core::{
     Annotation, Command, Completion, Digest, Event, HistoryEvent, Lifecycle, RunOutcome, RunState,
-    ScriptError, Seq,
+    Seq,
 };
 use rewind_engine::failures::code_location;
 use rewind_engine::ports::link::RunView;
@@ -343,9 +343,9 @@ impl Views<'_> {
         &self,
         head: &rewind_engine::ports::RunHead,
         history: &[HistoryEvent],
-        failure: &ScriptError,
+        failure: &rewind_core::ErrorInfo,
         payload: &impl Fn(&rewind_core::Payload) -> Payload,
-    ) -> Result<RunError, ApiError> {
+    ) -> Result<ErrorInfo, ApiError> {
         let location = failure
             .stack
             .as_deref()
@@ -363,7 +363,7 @@ impl Views<'_> {
         let failed_call = failure
             .failed_call(history)
             .and_then(|seq| failed_call(history, seq, payload));
-        Ok(RunError {
+        Ok(ErrorInfo {
             name: failure.name.clone(),
             message: failure.message.clone(),
             stack: failure.stack.clone(),
@@ -540,7 +540,7 @@ fn logs(history: &[HistoryEvent]) -> Vec<LogLine> {
     lines
 }
 
-/// The call whose failure the code did not catch: its `seq`, as `ScriptError::failed_call`
+/// The call whose failure the code did not catch: its `seq`, as `ErrorInfo::failed_call`
 /// finds it, with its arguments and recorded failure.
 fn failed_call(
     history: &[HistoryEvent],

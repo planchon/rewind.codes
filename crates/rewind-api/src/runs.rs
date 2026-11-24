@@ -12,7 +12,7 @@ use utoipa::{IntoParams, ToSchema};
 
 use crate::calls::{CallState, ParkedReason};
 use crate::common::{
-    AbortReason, ActionFailure, Callsite, Duration, Labels, LogLevel, Payload, RunMode, RunStatus,
+    AbortReason, Callsite, Duration, ErrorInfo, Labels, LogLevel, Payload, RunMode, RunStatus,
     Timestamp,
 };
 use crate::namespaces::NamespaceName;
@@ -161,7 +161,7 @@ pub struct Run {
     pub output: Option<Payload>,
     /// With `failed` or `cancelled`: how the code failed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub error: Option<RunError>,
+    pub error: Option<ErrorInfo>,
     /// With `aborted`: why the host ended the run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub abort: Option<AbortReason>,
@@ -215,38 +215,6 @@ pub struct ForkSource {
     /// The event from which the fork was forced live, if the request gave one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub at: Option<u64>,
-}
-
-/// How a code failed, with where, for a model to fix it.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct RunError {
-    /// `ActionError`, `TypeError`, `DeadlockError`, `CancelledError`…
-    pub name: String,
-    pub message: String,
-    /// Source-mapped to `workflow.ts`, without the runtime's frames.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub stack: Option<String>,
-    /// The innermost frame of the stack in `workflow.ts`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub location: Option<Callsite>,
-    /// A few lines of the source around `location`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub frame: Option<String>,
-    /// The call whose failure the code did not catch, if that is how it failed.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub failed_call: Option<FailedCall>,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct FailedCall {
-    pub seq: u32,
-    pub action: String,
-    pub args: Payload,
-    pub error: ActionFailure,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub callsite: Option<Callsite>,
 }
 
 /// How many times a call was sent.

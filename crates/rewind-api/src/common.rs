@@ -416,26 +416,52 @@ impl fmt::Display for Callsite {
     }
 }
 
-/// How a code failed: what `main` threw, the rejection it left unhandled, `DeadlockError`,
-/// or `CancelledError`.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+/// How a run failed: what `main` threw, the rejection it left unhandled, `DeadlockError`, or
+/// `CancelledError`. The error of `fail_run` in the history, and a run's `error`, which adds
+/// where it failed, for a model to fix it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct ScriptError {
+pub struct ErrorInfo {
+    /// `ActionError`, `TypeError`, `DeadlockError`, `CancelledError`…
     pub name: String,
     pub message: String,
     /// The stack, source-mapped to `workflow.ts`, without the runtime's own frames.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stack: Option<String>,
+    /// A run's error: the innermost frame of the stack in `workflow.ts`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub location: Option<Callsite>,
+    /// A run's error: a few lines of the source around `location`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame: Option<String>,
+    /// A run's error: the call whose failure the code did not catch, if that is how it failed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failed_call: Option<FailedCall>,
 }
 
-impl From<&rewind_core::ScriptError> for ScriptError {
-    fn from(error: &rewind_core::ScriptError) -> Self {
+impl From<&rewind_core::ErrorInfo> for ErrorInfo {
+    fn from(error: &rewind_core::ErrorInfo) -> Self {
         Self {
             name: error.name.clone(),
             message: error.message.clone(),
             stack: error.stack.clone(),
+            location: None,
+            frame: None,
+            failed_call: None,
         }
     }
+}
+
+/// The call a run's error names: the one whose failure the code did not catch.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FailedCall {
+    pub seq: u32,
+    pub action: String,
+    pub args: Payload,
+    pub error: ActionFailure,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub callsite: Option<Callsite>,
 }
 
 /// How a call failed, as the code sees it (a thrown `ActionError`).

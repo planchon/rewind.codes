@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 
 use crate::common::{
-    AbortReason, ActionFailure, Callsite, LogLevel, Payload, RunMode, RunStatus, ScriptError,
+    AbortReason, ActionFailure, Callsite, ErrorInfo, LogLevel, Payload, RunMode, RunStatus,
     Timestamp, timestamp,
 };
 use crate::namespaces::NamespaceName;
@@ -85,7 +85,7 @@ pub enum Event {
         output: Payload,
     },
     FailRun {
-        error: ScriptError,
+        error: ErrorInfo,
     },
     CallCompleted {
         seq: u32,

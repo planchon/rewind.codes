@@ -263,13 +263,13 @@ export default async function main(input: { repos: string[] }) {
 }
 
 #[tokio::test]
-async fn a_run_that_ends_badly_rejects_result_with_a_workflow_error() {
+async fn a_run_that_ends_badly_rejects_result_with_a_run_error() {
     let harness = harness().await;
     let run = harness
         .run(
             r#"
 import { triage } from "rewind:workflows";
-import { WorkflowError } from "rewind";
+import { RunError, WorkflowError } from "rewind";
 
 export default async function main() {
   const failed = await triage.start({ repo: "acme/api", fail: true });
@@ -284,7 +284,9 @@ export default async function main() {
         name: error.name,
         workflow: error.workflow,
         status: error.status,
-        own: error instanceof WorkflowError,
+        own: error instanceof RunError,
+        // Code written before the error was named RunError catches the same class (R1).
+        old: error instanceof WorkflowError,
         same: error.runId === run.id,
         message: error.message.replace(run.id, "<id>"),
       });
@@ -300,18 +302,20 @@ export default async function main() {
         run.output(),
         &json!([
             {
-                "name": "WorkflowError",
+                "name": "RunError",
                 "workflow": "triage",
                 "status": "failed",
                 "own": true,
+                "old": true,
                 "same": true,
                 "message": "workflow triage (run <id>) failed: TypeError: cannot triage acme/api",
             },
             {
-                "name": "WorkflowError",
+                "name": "RunError",
                 "workflow": "triage",
                 "status": "invalid_output",
                 "own": true,
+                "old": true,
                 "same": true,
                 "message": "workflow triage (run <id>) returned an output its schema refuses: output.closed: \"three\" is not of type \"integer\"",
             },

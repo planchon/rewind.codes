@@ -15,11 +15,12 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use rewind_api::action_sets::{ActionSet, CreateActionSet, Declarations};
 use rewind_api::admin::ServerInfo;
+use rewind_api::common::ErrorInfo;
 use rewind_api::common::{Callsite, Labels, Payload, RunMode, RunStatus, Timestamp};
 use rewind_api::problem::{self, Problem, ProblemType};
 use rewind_api::runs::{
-    CancelRun, ForkRun, ForkSource, Run, RunError, RunPage, RunSummary, SignalAccepted, StartRun,
-    Transcript, Waiting,
+    CancelRun, ForkRun, ForkSource, Run, RunPage, RunSummary, SignalAccepted, StartRun, Transcript,
+    Waiting,
 };
 use rewind_api::scripts::{CheckRequest, CheckResult, Diagnostic, Location, Severity};
 use rewind_cli::{Console, Exit};
@@ -166,7 +167,7 @@ async fn start(
     run.input = Some(Payload::of(start.input.clone(), 262_144));
     if start.code.contains("fails") {
         run.status = RunStatus::Failed;
-        run.error = Some(RunError {
+        run.error = Some(ErrorInfo {
             name: "TypeError".into(),
             message: "issue is undefined".into(),
             stack: None,
@@ -312,7 +313,7 @@ async fn cancel(
 fn cancelled(mut run: Run, reason: String) -> Run {
     run.status = RunStatus::Cancelled;
     run.waiting_for.clear();
-    run.error = Some(RunError {
+    run.error = Some(ErrorInfo {
         name: "CancelledError".into(),
         message: reason,
         stack: None,

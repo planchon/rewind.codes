@@ -26,9 +26,9 @@ use std::time::Duration;
 use futures_util::StreamExt;
 use futures_util::stream;
 use rewind_core::{
-    AbortReason, ActionOutcome, ActionSet, Code, Command, Event, HistoryEvent, JsonValue, Observed,
-    ObservedCall, PartitionId, RunId, RunMode, RunOutcome, RunState, RunStatus, ScriptError, Seed,
-    SignalWhen, Test, Timestamp, WorkflowOp, WorkflowSchemas,
+    AbortReason, ActionOutcome, ActionSet, Code, Command, ErrorInfo, Event, HistoryEvent,
+    JsonValue, Observed, ObservedCall, PartitionId, RunId, RunMode, RunOutcome, RunState,
+    RunStatus, Seed, SignalWhen, Test, Timestamp, WorkflowOp, WorkflowSchemas,
 };
 
 use crate::adapters::{
@@ -102,7 +102,7 @@ pub struct TestReport {
     /// The run's status; `None` for a test that was not run.
     pub status: Option<RunStatus>,
     pub output: Option<JsonValue>,
-    pub error: Option<ScriptError>,
+    pub error: Option<ErrorInfo>,
     pub abort: Option<AbortReason>,
     /// How many times each action was called.
     pub calls: BTreeMap<String, u64>,

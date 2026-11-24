@@ -23,8 +23,8 @@
 use std::collections::BTreeSet;
 
 use rewind_core::{
-    ActionRoute, ActionSet, Annotation, Callsite, Command, Event, HistoryEvent, Lifecycle,
-    RunState, RunStatus, ScriptError, Seq, Timestamp,
+    ActionRoute, ActionSet, Annotation, Callsite, Command, ErrorInfo, Event, HistoryEvent,
+    Lifecycle, RunState, RunStatus, Seq, Timestamp,
 };
 
 use crate::failures;
@@ -62,7 +62,7 @@ pub(crate) fn lifecycle_events(
                 output: output.clone(),
             },
             Event::Command(Command::FailRun { error }) => WebhookEventKind::RunFailed {
-                status: if error.name == ScriptError::CANCELLED {
+                status: if error.name == ErrorInfo::CANCELLED {
                     RunStatus::Cancelled
                 } else {
                     RunStatus::Failed

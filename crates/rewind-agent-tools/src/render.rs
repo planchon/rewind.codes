@@ -10,7 +10,8 @@ use rewind_api::access::Permission;
 use rewind_api::action_sets::ActionMatch;
 use rewind_api::calls::{CallState, ParkedReason};
 use rewind_api::common::{Callsite, Payload, RunStatus};
-use rewind_api::runs::{FailedCall, Run, RunError, RunSummary, Waiting};
+use rewind_api::common::{ErrorInfo, FailedCall};
+use rewind_api::runs::{Run, RunSummary, Waiting};
 use rewind_api::scripts::{CheckResult, Diagnostic, Severity};
 use rewind_api::testing::{Test, TestProblem, TestResult};
 use rewind_api::workflows::{RecordedTests, Workflow};
@@ -381,7 +382,7 @@ fn output_section(run_id: &str, output: &str, limit: usize) -> Vec<String> {
     ]
 }
 
-fn error_section(error: &RunError, limits: &Limits) -> Vec<String> {
+fn error_section(error: &ErrorInfo, limits: &Limits) -> Vec<String> {
     let mut lines = vec![format!(
         "{}: {}{}",
         truncate_end(&error.name, limits.line),

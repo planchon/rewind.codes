@@ -2278,6 +2278,59 @@
         ],
         "type": "object"
       },
+      "ErrorInfo": {
+        "description": "How a run failed: what `main` threw, the rejection it left unhandled, `DeadlockError`, or\n`CancelledError`. The error of `fail_run` in the history, and a run's `error`, which adds\nwhere it failed, for a model to fix it.",
+        "properties": {
+          "failedCall": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/FailedCall",
+                "description": "A run's error: the call whose failure the code did not catch, if that is how it failed."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "frame": {
+            "description": "A run's error: a few lines of the source around `location`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "location": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Callsite",
+                "description": "A run's error: the innermost frame of the stack in `workflow.ts`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "name": {
+            "description": "`ActionError`, `TypeError`, `DeadlockError`, `CancelledError`…",
+            "type": "string"
+          },
+          "stack": {
+            "description": "The stack, source-mapped to `workflow.ts`, without the runtime's own frames.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "message"
+        ],
+        "type": "object"
+      },
       "Event": {
         "description": "A history event (`archi/02-history.md`): lifecycle, commands, completions and annotations.",
         "oneOf": [
@@ -2462,7 +2515,7 @@
           {
             "properties": {
               "error": {
-                "$ref": "#/components/schemas/ScriptError"
+                "$ref": "#/components/schemas/ErrorInfo"
               },
               "type": {
                 "enum": [
@@ -2871,6 +2924,7 @@
         "type": "object"
       },
       "FailedCall": {
+        "description": "The call a run's error names: the one whose failure the code did not catch.",
         "properties": {
           "action": {
             "type": "string"
@@ -5419,7 +5473,7 @@
           "error": {
             "oneOf": [
               {
-                "$ref": "#/components/schemas/RunError",
+                "$ref": "#/components/schemas/ErrorInfo",
                 "description": "With `failed` or `cancelled`: how the code failed."
               },
               {
@@ -5619,59 +5673,6 @@
           "failed",
           "cancelled",
           "aborted"
-        ],
-        "type": "object"
-      },
-      "RunError": {
-        "description": "How a code failed, with where, for a model to fix it.",
-        "properties": {
-          "failedCall": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/FailedCall",
-                "description": "The call whose failure the code did not catch, if that is how it failed."
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "frame": {
-            "description": "A few lines of the source around `location`.",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "location": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/Callsite",
-                "description": "The innermost frame of the stack in `workflow.ts`."
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "message": {
-            "type": "string"
-          },
-          "name": {
-            "description": "`ActionError`, `TypeError`, `DeadlockError`, `CancelledError`…",
-            "type": "string"
-          },
-          "stack": {
-            "description": "Source-mapped to `workflow.ts`, without the runtime's frames.",
-            "type": [
-              "string",
-              "null"
-            ]
-          }
-        },
-        "required": [
-          "name",
-          "message"
         ],
         "type": "object"
       },
@@ -6114,29 +6115,6 @@
         },
         "required": [
           "digest"
-        ],
-        "type": "object"
-      },
-      "ScriptError": {
-        "description": "How a code failed: what `main` threw, the rejection it left unhandled, `DeadlockError`,\nor `CancelledError`.",
-        "properties": {
-          "message": {
-            "type": "string"
-          },
-          "name": {
-            "type": "string"
-          },
-          "stack": {
-            "description": "The stack, source-mapped to `workflow.ts`, without the runtime's own frames.",
-            "type": [
-              "string",
-              "null"
-            ]
-          }
-        },
-        "required": [
-          "name",
-          "message"
         ],
         "type": "object"
       },
@@ -7299,7 +7277,7 @@
           "error": {
             "oneOf": [
               {
-                "$ref": "#/components/schemas/ScriptError"
+                "$ref": "#/components/schemas/ErrorInfo"
               },
               {
                 "type": "null"

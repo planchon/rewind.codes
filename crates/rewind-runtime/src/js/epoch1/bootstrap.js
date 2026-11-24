@@ -608,7 +608,7 @@
   }
 
   // A run this run started ended badly, or its output does not match its workflow's schema.
-  class WorkflowError extends Error {
+  class RunError extends Error {
     constructor(workflow, runId, status, detail) {
       const what = status === "invalid_output"
         ? "returned an output its schema refuses"
@@ -616,7 +616,7 @@
         ? "failed"
         : `was ${status}`;
       super(`workflow ${workflow} (run ${runId}) ${what}: ${detail}`);
-      this.name = "WorkflowError";
+      this.name = "RunError";
       this.workflow = workflow;
       this.runId = runId;
       this.status = status;
@@ -934,7 +934,7 @@
     return ObjectFreeze(handle);
   }
 
-  // The run's output, or a WorkflowError; with a timeout, `undefined` if the run has not ended
+  // The run's output, or a RunError; with a timeout, `undefined` if the run has not ended
   // in time. A wait on the end is a signal wait: `signal_awaited` names `rewind:ended:<run id>`.
   function awaitEnd(name, runId, options) {
     if (ends.has(runId)) {
@@ -983,7 +983,7 @@
         const output = end.output === undefined ? null : end.output;
         const refused = op_rewind_check_workflow_output(name, wellFormed(JSONStringify(output)));
         if (refused !== "") {
-          return { ok: false, value: new WorkflowError(name, runId, "invalid_output", refused) };
+          return { ok: false, value: new RunError(name, runId, "invalid_output", refused) };
         }
         return { ok: true, value: output };
       }
@@ -991,7 +991,7 @@
       case "cancelled":
         return {
           ok: false,
-          value: new WorkflowError(
+          value: new RunError(
             name,
             runId,
             end.status,
@@ -1001,7 +1001,7 @@
       default:
         return {
           ok: false,
-          value: new WorkflowError(
+          value: new RunError(
             name,
             runId,
             "aborted",
@@ -1408,7 +1408,10 @@
       ActionError,
       ToolError: ActionError,
       CancelledError,
-      WorkflowError,
+      RunError,
+      // Code written before runs' errors were named catches a `WorkflowError`, the same class
+      // (archi/08-decisions.md, R1).
+      WorkflowError: RunError,
       workflow,
       setMain(fn) {
         if (typeof fn !== "function") {

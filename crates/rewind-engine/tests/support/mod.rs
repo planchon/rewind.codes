@@ -12,8 +12,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use rewind_core::{
-    ActionFailure, ActionSet, Annotation, Callsite, Code, Command, Epoch, JsonValue, Payload,
-    RunId, ScriptError, Seq, Timestamp,
+    ActionFailure, ActionSet, Annotation, Callsite, Code, Command, Epoch, ErrorInfo, JsonValue,
+    Payload, RunId, Seq, Timestamp,
 };
 use rewind_engine::StartRun;
 use rewind_engine::ports::{
@@ -155,7 +155,7 @@ impl FakeRun {
 
     pub fn fail(&mut self, name: &str, message: &str) {
         self.emitted.push(Emitted::Command(Command::FailRun {
-            error: ScriptError {
+            error: ErrorInfo {
                 name: name.into(),
                 message: message.into(),
                 stack: None,

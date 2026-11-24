@@ -160,7 +160,7 @@ pub fn ending(outcome: &RunOutcome) -> Option<Ending> {
 
 #[cfg(test)]
 mod tests {
-    use rewind_core::{AbortKind, AbortReason, ScriptError};
+    use rewind_core::{AbortKind, AbortReason, ErrorInfo};
     use serde_json::json;
 
     use super::*;
@@ -332,7 +332,7 @@ mod tests {
     #[test]
     fn endings_come_from_failures_and_aborts() {
         let failed = RunOutcome::Failed {
-            error: ScriptError {
+            error: ErrorInfo {
                 name: "TypeError".into(),
                 message: "Cannot read properties of undefined (reading 'id') at workflow.ts:9:1"
                     .into(),
@@ -349,7 +349,7 @@ mod tests {
         assert_eq!(ending.fingerprint, fingerprint(&ending.signature));
 
         let without_stack = RunOutcome::Failed {
-            error: ScriptError {
+            error: ErrorInfo {
                 name: "SyntaxError".into(),
                 message: "unexpected token (workflow.ts:4:2)".into(),
                 stack: None,

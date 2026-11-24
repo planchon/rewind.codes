@@ -214,7 +214,7 @@ pub enum Command {
     /// The code failed: `main` threw, a rejection was left unhandled, or nothing can wake
     /// the code any more (`DeadlockError`). Emitted once no call is pending.
     FailRun {
-        error: ScriptError,
+        error: ErrorInfo,
     },
 }
 
@@ -317,13 +317,13 @@ impl fmt::Display for Command {
 /// What a failed code reports. Besides what `main` throws, the runtime fails a code with
 /// the rejection it left unhandled, or with the name `DeadlockError`.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ScriptError {
+pub struct ErrorInfo {
     pub name: String,
     pub message: String,
     pub stack: Option<String>,
 }
 
-impl ScriptError {
+impl ErrorInfo {
     /// The name of the error a run fails with when nothing can wake the code any more.
     pub const DEADLOCK: &'static str = "DeadlockError";
     /// The name of the error that rejects every pending await on cancellation. A run that
@@ -638,7 +638,7 @@ mod tests {
     #[test]
     fn failures_match_on_name_and_message_only() {
         let fail = |message: &str, stack: &str| Command::FailRun {
-            error: ScriptError {
+            error: ErrorInfo {
                 name: "TypeError".into(),
                 message: message.into(),
                 stack: Some(stack.into()),
@@ -687,12 +687,12 @@ mod tests {
             entry(5, schedule(3, "payments.charge")),
             entry(6, failed(3, "card expired")),
         ];
-        let error = |name: &str, message: &str| ScriptError {
+        let error = |name: &str, message: &str| ErrorInfo {
             name: name.into(),
             message: message.into(),
             stack: None,
         };
-        let uncaught = |message| error(ScriptError::ACTION_ERROR, message).failed_call(&history);
+        let uncaught = |message| error(ErrorInfo::ACTION_ERROR, message).failed_call(&history);
         assert_eq!(
             uncaught("payments.charge failed: card expired"),
             Some(Seq(3))
@@ -710,7 +710,7 @@ mod tests {
             "not an ActionError"
         );
         assert_eq!(
-            ScriptError::action_error_message(
+            ErrorInfo::action_error_message(
                 "github.close_issue",
                 &ActionFailure {
                     kind: ActionFailureKind::Timeout,

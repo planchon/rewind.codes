@@ -93,7 +93,7 @@ declare module "rewind" {
    * Thrown by `result()` when the run of a workflow this run started failed, was cancelled or
    * aborted, or returned an output its workflow's schema refuses. Only the runtime creates one.
    */
-  export class WorkflowError extends Error {
+  export class RunError extends Error {
     private constructor();
     /** The workflow, such as `triage`. */
     workflow: string;
@@ -128,7 +128,7 @@ declare module "rewind" {
   /** A run of a workflow this run started. */
   export interface WorkflowRun<O, S> extends WorkflowRunRef<S> {
     /**
-     * The run's output, once it has ended. Throws a `WorkflowError` if it failed, was
+     * The run's output, once it has ended. Throws a `RunError` if it failed, was
      * cancelled or aborted.
      */
     result(): Promise<O>;
