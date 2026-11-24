@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use utoipa::{IntoParams, ToSchema};
 
+use crate::calls::{CallState, ParkedReason};
 use crate::common::{
     AbortReason, ActionFailure, Callsite, Duration, Labels, LogLevel, Payload, RunMode, RunStatus,
     Timestamp,
@@ -17,7 +18,6 @@ use crate::common::{
 use crate::namespaces::NamespaceName;
 pub use crate::query::WaitKind;
 use crate::secrets::Attachments;
-use crate::tasks::{ParkedReason, TaskState};
 use crate::workflows::{RunWorkflow, StartedBy};
 
 /// `POST /v1/runs`: starts a run. The script is compiled, checked and type-checked first; a
@@ -261,16 +261,16 @@ pub struct CallAttempts {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Waiting {
-    /// A call in flight, and the state of its task.
+    /// A call in flight, and its state.
     #[serde(rename_all = "camelCase")]
     Call {
         seq: u32,
         action: String,
         /// The call's arguments: what the harness approves or rejects.
         args: Payload,
-        /// For `POST /v1/tasks/{id}/approve` and `/reject`.
-        task_id: String,
-        state: TaskState,
+        /// For `POST /v1/calls/{id}/approve` and `/reject`.
+        call_id: String,
+        state: CallState,
         /// With `parked`: why.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         parked: Option<ParkedReason>,
@@ -968,14 +968,14 @@ mod tests {
                 json!({ "question": "ok?" }),
                 crate::common::PAYLOAD_VALUE_LIMIT,
             ),
-            task_id: "t-1".into(),
-            state: TaskState::Approval,
+            call_id: "t-1".into(),
+            state: CallState::Approval,
             parked: None,
             attempt: 1,
             callsite: None,
         };
         let written = serde_json::to_value(&call).unwrap();
-        assert_eq!(written["taskId"], "t-1");
+        assert_eq!(written["callId"], "t-1");
         assert_eq!(written["args"]["value"], json!({ "question": "ok?" }));
         assert_eq!(written["state"], "approval");
         assert_eq!(serde_json::from_value::<Waiting>(written).unwrap(), call);

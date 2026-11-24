@@ -1,5 +1,5 @@
 //! The API `/v1` end to end over HTTP, on Turso: runs, idempotency, type-checking at start,
-//! exports, harness tasks, approvals, signals, inbound and outbound webhooks, the event
+//! exports, harness calls, approvals, signals, inbound and outbound webhooks, the event
 //! stream, quotas, keys, roles and label scopes.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -15,6 +15,9 @@ use axum::http::HeaderMap;
 use futures_util::StreamExt;
 use rewind_api::access::BuiltInRole;
 use rewind_api::action_sets::{ActionPolicy, CreateActionSet, HarnessAction};
+use rewind_api::calls::{
+    CallState, CallStreamQuery, CompleteCall, DeferCall, FailCall, RejectCall,
+};
 use rewind_api::common::{Labels, RunStatus};
 use rewind_api::events::{Event, EventsQuery, StreamEvent};
 use rewind_api::headers::IdempotencyKey;
@@ -23,9 +26,6 @@ use rewind_api::runs::{
     TraceFormat, WaitKind, Waiting,
 };
 use rewind_api::scripts::{CheckRequest, ScriptFilter};
-use rewind_api::tasks::{
-    CompleteTask, DeferTask, FailTask, RejectTask, TaskState, TaskStreamQuery,
-};
 use rewind_api::webhooks::{
     CreateSubscription, SignedHeaders, WebhookEvent, WebhookEventType, WebhookSecret,
 };
@@ -258,12 +258,12 @@ async fn harness_actions_are_handed_on_a_stream_and_answered() {
     request.action_set = Some(action_set.id.clone());
     let run = harness.start_run(&request, None).await.unwrap();
 
-    let query = TaskStreamQuery {
+    let query = CallStreamQuery {
         action_set: Some(action_set.id.clone()),
         actions: vec!["ask_user".into()],
         slots: Some(1),
         worker: Some("worker-1".into()),
-        ..TaskStreamQuery::default()
+        ..CallStreamQuery::default()
     };
     let mut stream = TaskWorker::open(&worker, &query).await;
     let task = &stream.task().await;
@@ -277,21 +277,21 @@ async fn harness_actions_are_handed_on_a_stream_and_answered() {
 
     // Deferred, then answered later through the same token.
     worker
-        .defer_task(&task.token, &DeferTask::default())
+        .defer_call(&task.token, &DeferCall::default())
         .await
         .unwrap();
     let state = harness.get_run(&run.id, None).await.unwrap();
     assert!(matches!(
         &state.waiting_for[0],
         Waiting::Call {
-            state: TaskState::Deferred,
+            state: CallState::Deferred,
             ..
         }
     ));
     worker
-        .complete_task(
+        .complete_call(
             &task.token,
-            &CompleteTask {
+            &CompleteCall {
                 result: json!("yes"),
             },
         )
@@ -306,9 +306,9 @@ async fn harness_actions_are_handed_on_a_stream_and_answered() {
     assert_eq!(
         problem(
             worker
-                .complete_task(
+                .complete_call(
                     &task.token,
-                    &CompleteTask {
+                    &CompleteCall {
                         result: json!("again")
                     }
                 )
@@ -316,16 +316,16 @@ async fn harness_actions_are_handed_on_a_stream_and_answered() {
                 .unwrap_err()
         )
         .kind(),
-        Some(ProblemType::TaskGone)
+        Some(ProblemType::CallGone)
     );
 
     // A retryable failure is retried: the next hand-out is attempt 2.
     let run = harness.start_run(&request, None).await.unwrap();
     let first = stream.task().await;
     worker
-        .fail_task(
+        .fail_call(
             &first.token,
-            &FailTask {
+            &FailCall {
                 message: "the user is away".into(),
                 data: None,
                 retryable: true,
@@ -341,9 +341,9 @@ async fn harness_actions_are_handed_on_a_stream_and_answered() {
     let attempts = harness.get_run(&run.id, None).await.unwrap().attempts;
     assert_eq!((attempts[0].seq, attempts[0].attempts), (1, 2));
     worker
-        .complete_task(
+        .complete_call(
             &second.token,
-            &CompleteTask {
+            &CompleteCall {
                 result: json!("back"),
             },
         )
@@ -379,18 +379,18 @@ export default async function main() {
     let mut request = start(script);
     request.action_set = Some(action_set.id.clone());
     let run = harness.start_run(&request, None).await.unwrap();
-    let query = TaskStreamQuery {
+    let query = CallStreamQuery {
         action_set: Some(action_set.id.clone()),
         actions: vec!["ask_user".into()],
-        ..TaskStreamQuery::default()
+        ..CallStreamQuery::default()
     };
     let mut stream = TaskWorker::open(&worker, &query).await;
     for message in ["the user is away", "the user left"] {
         let task = stream.task().await;
         worker
-            .fail_task(
+            .fail_call(
                 &task.token,
-                &FailTask {
+                &FailCall {
                     message: message.into(),
                     data: Some(json!({ "retryAfter": "1h" })),
                     retryable: false,
@@ -429,27 +429,27 @@ async fn a_call_under_approval_waits_for_the_harness_with_its_arguments() {
 
     // Rejected: the call fails with an ActionError, and the run fails.
     let run = harness.start_run(&request, None).await.unwrap();
-    let (task_id, args) = eventually(|| async {
+    let (call_id, args) = eventually(|| async {
         let state = harness.get_run(&run.id, None).await.unwrap();
         state
             .waiting_for
             .into_iter()
             .find_map(|waiting| match waiting {
                 Waiting::Call {
-                    task_id,
-                    state: TaskState::Approval,
+                    call_id,
+                    state: CallState::Approval,
                     args,
                     ..
-                } => Some((task_id, args)),
+                } => Some((call_id, args)),
                 _ => None,
             })
     })
     .await;
     assert_eq!(args.value, Some(json!({ "question": "ready?" })));
     harness
-        .reject_task(
-            &task_id,
-            &RejectTask {
+        .reject_call(
+            &call_id,
+            &RejectCall {
                 message: Some("not now".into()),
             },
         )
@@ -463,34 +463,34 @@ async fn a_call_under_approval_waits_for_the_harness_with_its_arguments() {
 
     // Approved: the worker gets it.
     let run = harness.start_run(&request, None).await.unwrap();
-    let task_id = eventually(|| async {
+    let call_id = eventually(|| async {
         let state = harness.get_run(&run.id, None).await.unwrap();
         state
             .waiting_for
             .into_iter()
             .find_map(|waiting| match waiting {
-                Waiting::Call { task_id, .. } => Some(task_id),
+                Waiting::Call { call_id, .. } => Some(call_id),
                 _ => None,
             })
     })
     .await;
     assert_eq!(
-        problem(harness.approve_task("nope.1").await.unwrap_err()).kind(),
+        problem(harness.approve_call("nope.1").await.unwrap_err()).kind(),
         Some(ProblemType::NotFound)
     );
-    harness.approve_task(&task_id).await.unwrap();
+    harness.approve_call(&call_id).await.unwrap();
     assert_eq!(
-        problem(harness.approve_task(&task_id).await.unwrap_err()).kind(),
-        Some(ProblemType::TaskNotWaiting)
+        problem(harness.approve_call(&call_id).await.unwrap_err()).kind(),
+        Some(ProblemType::CallNotWaiting)
     );
-    let task = TaskWorker::open(&harness, &TaskStreamQuery::default())
+    let task = TaskWorker::open(&harness, &CallStreamQuery::default())
         .await
         .task()
         .await;
     harness
-        .complete_task(
+        .complete_call(
             &task.token,
-            &CompleteTask {
+            &CompleteCall {
                 result: json!("ok"),
             },
         )
@@ -1201,35 +1201,35 @@ async fn harness_action_failures_are_bounded_like_results() {
     let mut request = start(ASK);
     request.action_set = Some(action_set.id.clone());
     let run = harness.start_run(&request, None).await.unwrap();
-    let task = TaskWorker::open(&harness, &TaskStreamQuery::default())
+    let task = TaskWorker::open(&harness, &CallStreamQuery::default())
         .await
         .task()
         .await;
     harness
-        .defer_task(&task.token, &DeferTask::default())
+        .defer_call(&task.token, &DeferCall::default())
         .await
         .unwrap();
 
     // A failure stays in its journal entry: message and data together hold 64 KiB at most.
     let large = 64 * 1024;
     for failure in [
-        FailTask {
+        FailCall {
             message: "m".repeat(large + 1),
             data: None,
             retryable: false,
         },
-        FailTask {
+        FailCall {
             message: "the user is away".into(),
             data: Some(json!("d".repeat(large))),
             retryable: false,
         },
-        FailTask {
+        FailCall {
             message: "m".repeat(large / 2),
             data: Some(json!("d".repeat(large / 2))),
             retryable: true,
         },
     ] {
-        let refused = problem(harness.fail_task(&task.token, &failure).await.unwrap_err());
+        let refused = problem(harness.fail_call(&task.token, &failure).await.unwrap_err());
         assert_eq!(
             refused.kind(),
             Some(ProblemType::PayloadTooLarge),
@@ -1237,9 +1237,9 @@ async fn harness_action_failures_are_bounded_like_results() {
         );
     }
     harness
-        .fail_task(
+        .fail_call(
             &task.token,
-            &FailTask {
+            &FailCall {
                 message: "m".repeat(large / 2),
                 data: Some(json!({ "reason": "away" })),
                 retryable: false,
@@ -1261,22 +1261,22 @@ async fn harness_action_failures_are_bounded_like_results() {
         .unwrap();
     request.action_set = Some(approved.id.clone());
     let run = harness.start_run(&request, None).await.unwrap();
-    let task_id = eventually(|| async {
+    let call_id = eventually(|| async {
         let state = harness.get_run(&run.id, None).await.unwrap();
         state
             .waiting_for
             .into_iter()
             .find_map(|waiting| match waiting {
-                Waiting::Call { task_id, .. } => Some(task_id),
+                Waiting::Call { call_id, .. } => Some(call_id),
                 _ => None,
             })
     })
     .await;
     let refused = problem(
         harness
-            .reject_task(
-                &task_id,
-                &RejectTask {
+            .reject_call(
+                &call_id,
+                &RejectCall {
                     message: Some("r".repeat(large + 1)),
                 },
             )
@@ -1289,9 +1289,9 @@ async fn harness_action_failures_are_bounded_like_results() {
         "{refused}"
     );
     harness
-        .reject_task(
-            &task_id,
-            &RejectTask {
+        .reject_call(
+            &call_id,
+            &RejectCall {
                 message: Some("not now".into()),
             },
         )

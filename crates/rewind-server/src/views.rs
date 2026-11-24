@@ -4,13 +4,13 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use rewind_api::calls::{CallState, ParkedReason};
 use rewind_api::common::{AbortReason, Callsite, Labels, Payload, RunMode, timestamp};
 use rewind_api::events::Entry;
 use rewind_api::runs::{
     CallAttempts, FailedCall, ForkParent, LogLine, Quarantine, QuarantineCause, Run, RunError,
     Waiting,
 };
-use rewind_api::tasks::{ParkedReason, TaskState};
 use rewind_core::{
     Annotation, Command, Completion, Digest, Event, HistoryEntry, Lifecycle, RunOutcome, RunState,
     ScriptError, Seq,
@@ -34,13 +34,13 @@ pub(crate) struct Views<'a> {
     pub(crate) app: &'a App,
 }
 
-/// A task's id in the API: `{run_id}.{seq}`.
-pub(crate) fn task_id(task: &TaskRef) -> String {
+/// A call's id in the API, from its task: `{run_id}.{seq}`.
+pub(crate) fn call_id(task: &TaskRef) -> String {
     format!("{}.{}", task.run.id, task.seq.0)
 }
 
-/// Reads a task id of the API.
-pub(crate) fn parse_task_id(tenant: &TenantId, id: &str) -> Option<TaskRef> {
+/// Reads a call's id of the API: its task.
+pub(crate) fn parse_call_id(tenant: &TenantId, id: &str) -> Option<TaskRef> {
     let (run, seq) = id.rsplit_once('.')?;
     Some(TaskRef {
         run: RunRef::new(tenant.clone(), run.parse().ok()?),
@@ -428,13 +428,13 @@ fn waiting(
         });
         let task = tasks.get(seq);
         let (task_state, parked) = match task.map(|task| &task.state) {
-            None => (TaskState::Done, None),
-            Some(rewind_engine::ports::TaskState::Approval) => (TaskState::Approval, None),
-            Some(rewind_engine::ports::TaskState::Ready { .. }) => (TaskState::Ready, None),
-            Some(rewind_engine::ports::TaskState::Claimed { .. }) => (TaskState::Claimed, None),
-            Some(rewind_engine::ports::TaskState::Deferred { .. }) => (TaskState::Deferred, None),
+            None => (CallState::Done, None),
+            Some(rewind_engine::ports::TaskState::Approval) => (CallState::Approval, None),
+            Some(rewind_engine::ports::TaskState::Ready { .. }) => (CallState::Ready, None),
+            Some(rewind_engine::ports::TaskState::Claimed { .. }) => (CallState::Claimed, None),
+            Some(rewind_engine::ports::TaskState::Deferred { .. }) => (CallState::Deferred, None),
             Some(rewind_engine::ports::TaskState::Parked(reason)) => (
-                TaskState::Parked,
+                CallState::Parked,
                 Some(match reason.kind {
                     ParkKind::SchemaChanged => ParkedReason::SchemaChanged,
                     ParkKind::CredentialsRefused => ParkedReason::CredentialsRefused,
@@ -446,7 +446,7 @@ fn waiting(
             seq: seq.0,
             action: action.clone(),
             args: args.unwrap_or_else(|| Payload::reference("", 0, "")),
-            task_id: task_id(&TaskRef {
+            call_id: call_id(&TaskRef {
                 run: run.clone(),
                 seq: *seq,
             }),
@@ -662,14 +662,14 @@ mod tests {
     }
 
     #[test]
-    fn task_ids_name_the_run_and_the_call() {
+    fn call_ids_name_the_run_and_the_call() {
         let tenant = TenantId::local();
         let task = TaskRef {
             run: RunRef::new(tenant.clone(), rewind_core::RunId::from_u128(7)),
             seq: Seq(3),
         };
-        let id = task_id(&task);
-        assert_eq!(parse_task_id(&tenant, &id), Some(task));
-        assert_eq!(parse_task_id(&tenant, "nope"), None);
+        let id = call_id(&task);
+        assert_eq!(parse_call_id(&tenant, &id), Some(task));
+        assert_eq!(parse_call_id(&tenant, "nope"), None);
     }
 }

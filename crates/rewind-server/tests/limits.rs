@@ -21,9 +21,9 @@ use std::time::Duration;
 use rewind_api::Client;
 use rewind_api::access::BuiltInRole;
 use rewind_api::action_sets::{CreateActionSet, HarnessAction};
+use rewind_api::calls::{CallStreamQuery, CompleteCall};
 use rewind_api::common::{AbortKind, RunStatus};
 use rewind_api::runs::{JournalExport, Run, StartRun};
-use rewind_api::tasks::{CompleteTask, TaskStreamQuery};
 use rewind_api::{Problem, ProblemType};
 use serde_json::{Value, json};
 use support::{TestServer, wait};
@@ -256,9 +256,9 @@ export default async function main() {
     let waiting = harness.start_run(&waiting, None).await.unwrap();
     let task = support::TaskWorker::open(
         &worker,
-        &TaskStreamQuery {
+        &CallStreamQuery {
             action_set: Some(action_set.id.clone()),
-            ..TaskStreamQuery::default()
+            ..CallStreamQuery::default()
         },
     )
     .await
@@ -266,9 +266,9 @@ export default async function main() {
     .await;
     let result = problem(
         worker
-            .complete_task(
+            .complete_call(
                 &task.token,
-                &CompleteTask {
+                &CompleteCall {
                     result: too_large.clone(),
                 },
             )
@@ -277,7 +277,7 @@ export default async function main() {
     );
     assert_eq!(result.kind(), Some(ProblemType::PayloadTooLarge));
     worker
-        .complete_task(&task.token, &CompleteTask { result: json!(1) })
+        .complete_call(&task.token, &CompleteCall { result: json!(1) })
         .await
         .unwrap();
     let signal = problem(

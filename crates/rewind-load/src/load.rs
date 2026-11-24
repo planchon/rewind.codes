@@ -2,7 +2,7 @@
 //! and the checks once every run has ended.
 //!
 //! Each run makes an MCP call (`fake.echo`), a harness call (`host.square`, answered by this
-//! process through `GET /v1/tasks`), an MCP call that fails transiently once and is retried
+//! process through `GET /v1/calls`), an MCP call that fails transiently once and is retried
 //! (`fake.flaky`), a durable sleep, then reads a signal sent right after its start (sent twice
 //! with one idempotency key) and waits for a second one that never comes (a timer).
 
@@ -14,12 +14,12 @@ use futures_util::StreamExt as _;
 use rewind_api::Client;
 use rewind_api::access::{BuiltInRole, CreateApiKey};
 use rewind_api::action_sets::{CreateActionSet, HarnessAction, McpServer};
+use rewind_api::calls::{CallStreamMessage, CallStreamQuery, CompleteCall};
 use rewind_api::common::{Labels, RunStatus};
 use rewind_api::headers::IdempotencyKey;
 use rewind_api::namespaces::NamespaceName;
 use rewind_api::reading::ActionStatsFilter;
 use rewind_api::runs::{Run, StartRun};
-use rewind_api::tasks::{CompleteTask, TaskStreamEvent, TaskStreamQuery};
 use serde_json::{Value, json};
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
@@ -177,11 +177,11 @@ pub(crate) async fn run(
         .map(|index| {
             tokio::spawn(harness_worker(
                 worker.clone(),
-                TaskStreamQuery {
+                CallStreamQuery {
                     action_set: Some(action_set.id.clone()),
                     slots: Some(HARNESS_SLOTS),
                     worker: Some(format!("{id}-host-{index}")),
-                    ..TaskStreamQuery::default()
+                    ..CallStreamQuery::default()
                 },
                 host.clone(),
                 errors.clone(),
@@ -353,12 +353,12 @@ const HARNESS_SLOTS: u32 = 16;
 /// How long a harness worker waits before it opens its stream again.
 const STREAM_BACKOFF: Duration = Duration::from_millis(200);
 
-/// Answers `host.square` on a task stream until stopped: the tasks handed to the worker as
+/// Answers `host.square` on a call stream until stopped: the tasks handed to the worker as
 /// they become ready, `query.slots` at once. A stream that fails or ends is opened again with the
 /// same worker id, after a backoff: the tasks handed on it stay this worker's.
 async fn harness_worker(
     worker: Client,
-    query: TaskStreamQuery,
+    query: CallStreamQuery,
     record: Arc<Mutex<HarnessRecord>>,
     errors: Arc<Mutex<BTreeMap<String, usize>>>,
     stop: CancellationToken,
@@ -373,7 +373,7 @@ async fn harness_worker(
     loop {
         let opened = tokio::select! {
             () = stop.cancelled() => return,
-            opened = worker.task_stream(&query) => opened,
+            opened = worker.call_stream(&query) => opened,
         };
         match opened {
             Ok(mut stream) => loop {
@@ -382,19 +382,19 @@ async fn harness_worker(
                     event = stream.next() => event,
                 };
                 match event {
-                    Some(Ok(TaskStreamEvent::Task(task))) => {
+                    Some(Ok(CallStreamMessage::Call(task))) => {
                         answer(&worker, *task, &record, &error).await;
                     }
                     // Its run ended, or its call timed out: nothing to answer.
-                    Some(Ok(TaskStreamEvent::Gone(_))) => {}
+                    Some(Ok(CallStreamMessage::Gone(_))) => {}
                     Some(Err(failure)) => {
-                        error(format!("task stream: {}", kind(&failure)));
+                        error(format!("call stream: {}", kind(&failure)));
                         break;
                     }
                     None => break,
                 }
             },
-            Err(failure) => error(format!("task stream: {}", kind(&failure))),
+            Err(failure) => error(format!("call stream: {}", kind(&failure))),
         }
         tokio::select! {
             () = stop.cancelled() => return,
@@ -406,7 +406,7 @@ async fn harness_worker(
 /// Answers one task of `host.square`.
 async fn answer(
     worker: &Client,
-    task: rewind_api::tasks::HandedTask,
+    task: rewind_api::calls::HandedCall,
     record: &Mutex<HarnessRecord>,
     error: &impl Fn(String),
 ) {
@@ -417,10 +417,10 @@ async fn answer(
         .entry((task.run_id.clone(), task.seq))
         .or_default() += 1;
     let n = task.args["n"].as_u64().unwrap_or(0);
-    let result = CompleteTask {
+    let result = CompleteCall {
         result: json!({ "square": n * n }),
     };
-    match worker.complete_task(&task.token, &result).await {
+    match worker.complete_call(&task.token, &result).await {
         Ok(()) => {
             record
                 .lock()

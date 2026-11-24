@@ -18,11 +18,11 @@ use utoipa::openapi::{
 use utoipa::{Modify, OpenApi};
 
 use crate::auth::SESSION_COOKIE;
+use crate::calls::CallStreamMessage;
 use crate::events::{ChangeEvent, StreamEvent};
 use crate::namespaces::{QuotaKind, QuotaScope, SignedTokenClaims};
 use crate::oauth::OAuthError;
 use crate::problem::{self, Problem, QuotaReached};
-use crate::tasks::TaskStreamEvent;
 use crate::webhooks::{
     WEBHOOK_ID, WEBHOOK_SIGNATURE, WEBHOOK_TIMESTAMP, WebhookEvent, WebhookEventType,
 };
@@ -32,7 +32,7 @@ use crate::webhooks::{
 #[openapi(
     info(
         title = "Rewind API",
-        description = "The HTTP API /v1 of Rewind: action sets, scripts, runs, harness tasks, \
+        description = "The HTTP API /v1 of Rewind: action sets, scripts, runs, harness calls, \
             webhooks, reading, the organization, access, namespaces and the server; and `/auth`, \
             the dashboard's sign-in. Every request to /v1 carries a Bearer token, an API key \
             (`rewind_sk_…`), a member's access token from `/auth`, or an end user's token \
@@ -85,12 +85,12 @@ use crate::webhooks::{
         operations::export_run_journal,
         operations::release_run,
         operations::give_up_run,
-        operations::stream_tasks,
-        operations::defer_task,
-        operations::complete_task,
-        operations::fail_task,
-        operations::approve_task,
-        operations::reject_task,
+        operations::stream_calls,
+        operations::defer_call,
+        operations::complete_call,
+        operations::fail_call,
+        operations::approve_call,
+        operations::reject_call,
         operations::post_hook,
         operations::create_subscription,
         operations::list_subscriptions,
@@ -177,7 +177,7 @@ use crate::webhooks::{
         QuotaScope,
         StreamEvent,
         ChangeEvent,
-        TaskStreamEvent,
+        CallStreamMessage,
         WebhookEvent,
         WebhookEventType,
         SignedTokenClaims,
@@ -190,7 +190,7 @@ use crate::webhooks::{
         (name = "workflows", description = "Workflows: named scripts with typed inputs, outputs and signals, that scripts start and signal."),
         (name = "scripts", description = "Type-check scripts, and run them as scenarios in mock mode."),
         (name = "runs", description = "Start, follow, steer, fork and erase runs."),
-        (name = "tasks", description = "Harness tasks: handed to the harness's SDK worker on its task stream, answered by their token, approved or rejected by the harness."),
+        (name = "calls", description = "Harness calls: handed to the harness's SDK worker on its call stream, answered by their token, approved or rejected by the harness."),
         (name = "webhooks", description = "Inbound webhooks that become signals, and subscriptions to signed lifecycle events."),
         (name = "reading", description = "The scripts executed on the platform, action statistics and payloads, for the dashboard."),
         (name = "organization", description = "Who calls; the organizations, their members and invitations."),
@@ -356,7 +356,7 @@ const NAMESPACED: [&str; 8] = [
     "/v1/scripts",
     "/v1/actions/stats",
     "/v1/payloads",
-    "/v1/tasks",
+    "/v1/calls",
 ];
 
 /// The paths under `/v1` that act in no tenant: a person's own connections and consents, and
@@ -528,6 +528,9 @@ mod operations {
         AuthConfig, AuthState, Callback, EmailVerification, GithubSignIn, MagicAuthRequest,
         MagicAuthVerification, OrganizationSelection, SessionRequest, WaitlistRequest,
     };
+    use crate::calls::{
+        CallStreamMessage, CallStreamQuery, CompleteCall, DeferCall, FailCall, RejectCall,
+    };
     use crate::connections::{
         Connection, ConnectionList, Consent, ConsentAnswer, ConsentQuery, ConsentRedirect,
         UpdateConnection,
@@ -558,9 +561,6 @@ mod operations {
     };
     use crate::secrets::{
         Jwks, PutSecret, Secret, SecretList, SecretUsage, SigningKey, SigningKeyList,
-    };
-    use crate::tasks::{
-        CompleteTask, DeferTask, FailTask, RejectTask, TaskStreamEvent, TaskStreamQuery,
     };
     use crate::testing::{Test, TestRun};
     use crate::webhooks::{CreateSubscription, Subscription, SubscriptionList};
@@ -1055,100 +1055,100 @@ mod operations {
     pub(super) fn give_up_run() {}
 
     // ---------------------------------------------------------------------------------------
-    // Harness tasks
+    // Harness calls
 
-    /// Follow the harness tasks handed to this worker (server-sent events)
+    /// Follow the harness calls handed to this worker (server-sent events)
     ///
-    /// The tasks of the harness actions it names (`actionSet`, `actions`), as they become ready, among
+    /// The calls of the harness actions it names (`actionSet`, `actions`), as they become ready, among
     /// the runs the caller sees: an end user's token those of its namespace, a key limited to labels those of the
     /// runs carrying them. At most `slots` are in flight on the stream at once. Each event's
-    /// `event` field names it and its `data` is a `TaskStreamEvent`: `task`, a task handed with
-    /// its token, to answer with `/complete`, `/fail` or `/defer`; `gone`, a task handed on this
-    /// stream that no longer waits for its answer. The open stream is the liveness of every task
-    /// handed on it: no heartbeat. When it closes, its tasks wait for the grace of their action
+    /// `event` field names it and its `data` is a `CallStreamMessage`: `call`, a call handed with
+    /// its token, to answer with `/complete`, `/fail` or `/defer`; `gone`, a call handed on this
+    /// stream that no longer waits for its answer. The open stream is the liveness of every call
+    /// handed on it: no heartbeat. When it closes, its calls wait for the grace of their action
     /// (60 s by default) for a stream opened again with the same `worker`, which keeps them; then
     /// each is handed to another worker with its attempt + 1, or fails with `outcomeUnknown`
     /// under `at_most_once`. A worker opens the stream again after it drops, with a backoff. The
     /// server writes a comment line at least every 15 seconds while it sends nothing else.
     #[utoipa::path(
-        get, path = "/v1/tasks/stream", tag = "tasks", operation_id = "streamTasks",
-        params(TaskStreamQuery),
+        get, path = "/v1/calls/stream", tag = "calls", operation_id = "streamCalls",
+        params(CallStreamQuery),
         responses(
-            (status = 200, description = "A stream of server-sent events `task` and `gone`; each `data` is a `TaskStreamEvent`.", body = TaskStreamEvent, content_type = "text/event-stream"),
+            (status = 200, description = "A stream of server-sent events `call` and `gone`; each `data` is a `CallStreamMessage`.", body = CallStreamMessage, content_type = "text/event-stream"),
             (status = 404, description = "No such action set.", body = Problem, content_type = "application/problem+json"),
         )
     )]
-    pub(super) fn stream_tasks() {}
+    pub(super) fn stream_calls() {}
 
     /// Answer later
     ///
-    /// The task waits for `/complete` or `/fail` with the same token, whether the stream it was
+    /// The call waits for `/complete` or `/fail` with the same token, whether the stream it was
     /// handed on stays open or not, up to its timeout.
     #[utoipa::path(
-        post, path = "/v1/tasks/{token}/defer", tag = "tasks", operation_id = "deferTask",
+        post, path = "/v1/calls/{token}/defer", tag = "calls", operation_id = "deferCall",
         params(("token" = String, Path, description = "The claim's token.")),
-        request_body(content = Option<DeferTask>, description = "Optional."),
+        request_body(content = Option<DeferCall>, description = "Optional."),
         responses(
             (status = 204, description = "Deferred."),
-            (status = 410, description = "The task no longer exists (`task-gone`).", body = Problem, content_type = "application/problem+json"),
+            (status = 410, description = "The call no longer exists (`call-gone`).", body = Problem, content_type = "application/problem+json"),
         )
     )]
-    pub(super) fn defer_task() {}
+    pub(super) fn defer_call() {}
 
-    /// Complete a task with its result
+    /// Complete a call with its result
     #[utoipa::path(
-        post, path = "/v1/tasks/{token}/complete", tag = "tasks", operation_id = "completeTask",
+        post, path = "/v1/calls/{token}/complete", tag = "calls", operation_id = "completeCall",
         params(("token" = String, Path, description = "The claim's token.")),
-        request_body = CompleteTask,
+        request_body = CompleteCall,
         responses(
             (status = 204, description = "Delivered to the run."),
-            (status = 410, description = "The task no longer exists; the result is dropped (`task-gone`).", body = Problem, content_type = "application/problem+json"),
+            (status = 410, description = "The call no longer exists; the result is dropped (`call-gone`).", body = Problem, content_type = "application/problem+json"),
             (status = 413, description = "The result is too large (`payload-too-large`).", body = Problem, content_type = "application/problem+json"),
         )
     )]
-    pub(super) fn complete_task() {}
+    pub(super) fn complete_call() {}
 
-    /// Fail a task
+    /// Fail a call
     #[utoipa::path(
-        post, path = "/v1/tasks/{token}/fail", tag = "tasks", operation_id = "failTask",
+        post, path = "/v1/calls/{token}/fail", tag = "calls", operation_id = "failCall",
         params(("token" = String, Path, description = "The claim's token.")),
-        request_body = FailTask,
+        request_body = FailCall,
         responses(
             (status = 204, description = "Recorded: delivered as an `ActionError`, or retried."),
-            (status = 410, description = "The task no longer exists (`task-gone`).", body = Problem, content_type = "application/problem+json"),
+            (status = 410, description = "The call no longer exists (`call-gone`).", body = Problem, content_type = "application/problem+json"),
         )
     )]
-    pub(super) fn fail_task() {}
+    pub(super) fn fail_call() {}
 
-    /// Approve a task that waits for the harness
+    /// Approve a call that waits for the harness
     ///
-    /// A task under the `approval` policy is sent; a task parked by a schema change continues
+    /// A call under the `approval` policy is sent; a call parked by a schema change continues
     /// against the new schema.
     #[utoipa::path(
-        post, path = "/v1/tasks/{id}/approve", tag = "tasks", operation_id = "approveTask",
-        params(("id" = String, Path, description = "The task's id, from the run's state or the webhook.")),
+        post, path = "/v1/calls/{id}/approve", tag = "calls", operation_id = "approveCall",
+        params(("id" = String, Path, description = "The call's id, from the run's state or the webhook.")),
         responses(
-            (status = 204, description = "The task is ready."),
-            (status = 404, description = "No such task.", body = Problem, content_type = "application/problem+json"),
-            (status = 409, description = "The task does not wait for the harness (`task-not-waiting`).", body = Problem, content_type = "application/problem+json"),
+            (status = 204, description = "The call is ready."),
+            (status = 404, description = "No such call.", body = Problem, content_type = "application/problem+json"),
+            (status = 409, description = "The call does not wait for the harness (`call-not-waiting`).", body = Problem, content_type = "application/problem+json"),
         )
     )]
-    pub(super) fn approve_task() {}
+    pub(super) fn approve_call() {}
 
-    /// Reject a task that waits for the harness
+    /// Reject a call that waits for the harness
     ///
     /// The call fails with an `ActionError`.
     #[utoipa::path(
-        post, path = "/v1/tasks/{id}/reject", tag = "tasks", operation_id = "rejectTask",
-        params(("id" = String, Path, description = "The task's id.")),
-        request_body(content = Option<RejectTask>, description = "Optional."),
+        post, path = "/v1/calls/{id}/reject", tag = "calls", operation_id = "rejectCall",
+        params(("id" = String, Path, description = "The call's id.")),
+        request_body(content = Option<RejectCall>, description = "Optional."),
         responses(
             (status = 204, description = "The call failed."),
-            (status = 404, description = "No such task.", body = Problem, content_type = "application/problem+json"),
-            (status = 409, description = "The task does not wait for the harness (`task-not-waiting`).", body = Problem, content_type = "application/problem+json"),
+            (status = 404, description = "No such call.", body = Problem, content_type = "application/problem+json"),
+            (status = 409, description = "The call does not wait for the harness (`call-not-waiting`).", body = Problem, content_type = "application/problem+json"),
         )
     )]
-    pub(super) fn reject_task() {}
+    pub(super) fn reject_call() {}
 
     // ---------------------------------------------------------------------------------------
     // Webhooks

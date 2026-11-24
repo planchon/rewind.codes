@@ -1,5 +1,5 @@
 //! What closes a stream held open for a caller (`GET /v1/runs/{id}/events`, `GET /v1/changes`,
-//! `GET /v1/tasks/stream`; `archi/07-code-architecture.md`, "HTTP API `/v1`"): the expiry of the
+//! `GET /v1/calls/stream`; `archi/07-code-architecture.md`, "HTTP API `/v1`"): the expiry of the
 //! token that opened it, the server stopping, and a change of the control plane after which the
 //! caller no longer holds the permission it read with. Rights are read again when the control
 //! plane says something of the caller's tenant changed, never on a timer.

@@ -30,7 +30,7 @@ use rewind_engine::ports::{
 use rewind_outbound::{Egress, NameResolver, SystemResolver};
 
 use crate::app::App;
-use crate::views::task_id;
+use crate::views::call_id;
 
 /// The longest one delivery takes, from its connection to the receiver's answer.
 pub(crate) const DELIVERY_TIMEOUT: Duration = Duration::from_secs(10);
@@ -219,7 +219,7 @@ impl Render for ServerRender {
             .ok_or_else(|| failed(format!("run {run_id} no longer exists")))?;
         let record = &view.head;
         let task = |seq| {
-            task_id(&TaskRef {
+            call_id(&TaskRef {
                 run: run.clone(),
                 seq,
             })
@@ -235,7 +235,7 @@ impl Render for ServerRender {
                     run_id: run.id.to_string(),
                     namespace: crate::views::namespace(&record.namespace),
                     labels: Labels::from(event.labels.clone()),
-                    task_id: task(*seq),
+                    call_id: task(*seq),
                     seq: seq.0,
                     action: action.clone(),
                     server: mcp_server(&app, record, action).await,
@@ -255,7 +255,7 @@ impl Render for ServerRender {
                     run_id: run.id.to_string(),
                     namespace: crate::views::namespace(&record.namespace),
                     labels: Labels::from(event.labels.clone()),
-                    task_id: task(*seq),
+                    call_id: task(*seq),
                     seq: seq.0,
                     action: action.clone(),
                     server: mcp_server(&app, record, action).await,

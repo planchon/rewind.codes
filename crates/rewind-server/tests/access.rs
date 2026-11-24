@@ -11,12 +11,12 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use rewind_api::access::{BuiltInRole, CreateApiKey, OPERATOR, Permission};
 use rewind_api::action_sets::{CreateActionSet, HarnessAction};
+use rewind_api::calls::{CallStreamQuery, CompleteCall};
 use rewind_api::common::Labels;
 use rewind_api::organization::Principal as CallerPrincipal;
 use rewind_api::reading::ActionStatsFilter;
 use rewind_api::runs::{CancelRun, ForkRun, RunFilter, StartRun};
 use rewind_api::scripts::{CheckRequest, ScriptFilter, SetScriptTitle};
-use rewind_api::tasks::{CompleteTask, TaskStreamQuery};
 use rewind_api::workflows::WorkflowQuery;
 use rewind_api::{Client, Problem, ProblemType};
 use rewind_core::Timestamp;
@@ -72,7 +72,7 @@ fn create(tenant: Option<&str>, name: &str, role: &str, labels: &[(&str, &str)])
 
 /// A representative request of each group of 07's table, each requiring one permission.
 #[derive(Clone, Copy, Debug)]
-enum Call {
+enum Request {
     ListActionSets,
     CreateActionSet,
     ListWorkflows,
@@ -83,8 +83,8 @@ enum Call {
     ReleaseRun,
     GiveUpRun,
     DeleteRun,
-    DeferTask,
-    ApproveTask,
+    DeferCall,
+    ApproveCall,
     ListSubscriptions,
     DeleteSubscription,
     ListScripts,
@@ -94,26 +94,26 @@ enum Call {
     RevokeApiKey,
 }
 
-const CALLS: [Call; 19] = [
-    Call::ListActionSets,
-    Call::CreateActionSet,
-    Call::ListWorkflows,
-    Call::Check,
-    Call::ListRuns,
-    Call::ForkRun,
-    Call::CancelRun,
-    Call::ReleaseRun,
-    Call::GiveUpRun,
-    Call::DeleteRun,
-    Call::DeferTask,
-    Call::ApproveTask,
-    Call::ListSubscriptions,
-    Call::DeleteSubscription,
-    Call::ListScripts,
-    Call::SetScriptTitle,
-    Call::ActionStats,
-    Call::ListApiKeys,
-    Call::RevokeApiKey,
+const REQUESTS: [Request; 19] = [
+    Request::ListActionSets,
+    Request::CreateActionSet,
+    Request::ListWorkflows,
+    Request::Check,
+    Request::ListRuns,
+    Request::ForkRun,
+    Request::CancelRun,
+    Request::ReleaseRun,
+    Request::GiveUpRun,
+    Request::DeleteRun,
+    Request::DeferCall,
+    Request::ApproveCall,
+    Request::ListSubscriptions,
+    Request::DeleteSubscription,
+    Request::ListScripts,
+    Request::SetScriptTitle,
+    Request::ActionStats,
+    Request::ListApiKeys,
+    Request::RevokeApiKey,
 ];
 
 /// The status of an answer, and the detail of a problem.
@@ -127,24 +127,24 @@ fn outcome<T>(result: Result<T, rewind_api::Error>) -> (u16, String) {
     }
 }
 
-impl Call {
+impl Request {
     /// The permission of 07's table.
     fn permission(self) -> Permission {
         match self {
-            Call::ListActionSets | Call::ListWorkflows => Permission::ActionsRead,
-            Call::CreateActionSet => Permission::ActionsWrite,
-            Call::SetScriptTitle => Permission::ScriptsWrite,
-            Call::Check | Call::ForkRun => Permission::RunsStart,
-            Call::ListRuns | Call::ListScripts | Call::ActionStats => Permission::RunsRead,
-            Call::CancelRun => Permission::RunsControl,
-            Call::ReleaseRun | Call::GiveUpRun => Permission::RunsQuarantine,
-            Call::DeleteRun => Permission::RunsDelete,
-            Call::DeferTask => Permission::TasksWork,
-            Call::ApproveTask => Permission::TasksApprove,
-            Call::ListSubscriptions => Permission::SubscriptionsRead,
-            Call::DeleteSubscription => Permission::SubscriptionsWrite,
-            Call::ListApiKeys => Permission::ApiKeysRead,
-            Call::RevokeApiKey => Permission::ApiKeysWrite,
+            Request::ListActionSets | Request::ListWorkflows => Permission::ActionsRead,
+            Request::CreateActionSet => Permission::ActionsWrite,
+            Request::SetScriptTitle => Permission::ScriptsWrite,
+            Request::Check | Request::ForkRun => Permission::RunsStart,
+            Request::ListRuns | Request::ListScripts | Request::ActionStats => Permission::RunsRead,
+            Request::CancelRun => Permission::RunsControl,
+            Request::ReleaseRun | Request::GiveUpRun => Permission::RunsQuarantine,
+            Request::DeleteRun => Permission::RunsDelete,
+            Request::DeferCall => Permission::CallsWork,
+            Request::ApproveCall => Permission::CallsApprove,
+            Request::ListSubscriptions => Permission::SubscriptionsRead,
+            Request::DeleteSubscription => Permission::SubscriptionsWrite,
+            Request::ListApiKeys => Permission::ApiKeysRead,
+            Request::RevokeApiKey => Permission::ApiKeysWrite,
         }
     }
 
@@ -152,12 +152,14 @@ impl Call {
     /// unknown ids are not found, and the empty action set is registered once.
     async fn on(self, client: &Client) -> (u16, String) {
         match self {
-            Call::ListActionSets => outcome(client.list_action_sets().await),
-            Call::CreateActionSet => {
+            Request::ListActionSets => outcome(client.list_action_sets().await),
+            Request::CreateActionSet => {
                 outcome(client.create_action_set(&CreateActionSet::default()).await)
             }
-            Call::ListWorkflows => outcome(client.list_workflows(&WorkflowQuery::default()).await),
-            Call::Check => outcome(
+            Request::ListWorkflows => {
+                outcome(client.list_workflows(&WorkflowQuery::default()).await)
+            }
+            Request::Check => outcome(
                 client
                     .check(&CheckRequest {
                         script: "export default async function main() {}".into(),
@@ -165,8 +167,8 @@ impl Call {
                     })
                     .await,
             ),
-            Call::ListRuns => outcome(client.list_runs(&RunFilter::default()).await),
-            Call::ForkRun => outcome(
+            Request::ListRuns => outcome(client.list_runs(&RunFilter::default()).await),
+            Request::ForkRun => outcome(
                 client
                     .fork_run(
                         UNKNOWN_RUN,
@@ -175,20 +177,22 @@ impl Call {
                     )
                     .await,
             ),
-            Call::CancelRun => outcome(client.cancel_run(UNKNOWN_RUN, &CancelRun::default()).await),
-            Call::ReleaseRun => outcome(client.release_run(UNKNOWN_RUN).await),
-            Call::GiveUpRun => outcome(client.give_up_run(UNKNOWN_RUN).await),
-            Call::DeleteRun => outcome(client.delete_run(UNKNOWN_RUN).await),
-            Call::DeferTask => outcome(
+            Request::CancelRun => {
+                outcome(client.cancel_run(UNKNOWN_RUN, &CancelRun::default()).await)
+            }
+            Request::ReleaseRun => outcome(client.release_run(UNKNOWN_RUN).await),
+            Request::GiveUpRun => outcome(client.give_up_run(UNKNOWN_RUN).await),
+            Request::DeleteRun => outcome(client.delete_run(UNKNOWN_RUN).await),
+            Request::DeferCall => outcome(
                 client
-                    .defer_task("unknown", &rewind_api::tasks::DeferTask::default())
+                    .defer_call("unknown", &rewind_api::calls::DeferCall::default())
                     .await,
             ),
-            Call::ApproveTask => outcome(client.approve_task("unknown").await),
-            Call::ListSubscriptions => outcome(client.list_subscriptions().await),
-            Call::DeleteSubscription => outcome(client.delete_subscription("unknown").await),
-            Call::ListScripts => outcome(client.list_scripts(&ScriptFilter::default()).await),
-            Call::SetScriptTitle => outcome(
+            Request::ApproveCall => outcome(client.approve_call("unknown").await),
+            Request::ListSubscriptions => outcome(client.list_subscriptions().await),
+            Request::DeleteSubscription => outcome(client.delete_subscription("unknown").await),
+            Request::ListScripts => outcome(client.list_scripts(&ScriptFilter::default()).await),
+            Request::SetScriptTitle => outcome(
                 client
                     .set_script_title(
                         &"00".repeat(32),
@@ -199,9 +203,11 @@ impl Call {
                     )
                     .await,
             ),
-            Call::ActionStats => outcome(client.action_stats(&ActionStatsFilter::default()).await),
-            Call::ListApiKeys => outcome(client.list_api_keys().await),
-            Call::RevokeApiKey => outcome(client.revoke_api_key("unknown").await),
+            Request::ActionStats => {
+                outcome(client.action_stats(&ActionStatsFilter::default()).await)
+            }
+            Request::ListApiKeys => outcome(client.list_api_keys().await),
+            Request::RevokeApiKey => outcome(client.revoke_api_key("unknown").await),
         }
     }
 }
@@ -215,7 +221,7 @@ fn without(permission: Permission) -> String {
 /// permission but the one of 07's table, and answered to the keys that lack another.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn every_endpoint_requires_its_permission() {
-    let guarded: BTreeSet<Permission> = CALLS.iter().map(|call| call.permission()).collect();
+    let guarded: BTreeSet<Permission> = REQUESTS.iter().map(|call| call.permission()).collect();
     let roles: Vec<(String, BTreeSet<String>)> = guarded
         .iter()
         .map(|&lacking| {
@@ -235,7 +241,7 @@ async fn every_endpoint_requires_its_permission() {
             server.key_with("acme", &without(lacking), &[]).await,
         );
     }
-    for call in CALLS {
+    for call in REQUESTS {
         for (&lacking, client) in &keys {
             let (status, detail) = call.on(client).await;
             if lacking == call.permission() {
@@ -363,7 +369,7 @@ async fn keys_are_given_within_what_their_creator_holds() {
 
     // A role of the tenant gives only what it holds, and takes away only that.
     let key_admin = server.key_with("acme", "key-admin", &[]).await;
-    for (role, lacking) in [("reader", "`actions:read`"), ("worker", "`tasks:work`")] {
+    for (role, lacking) in [("reader", "`actions:read`"), ("worker", "`calls:work`")] {
         let refused = problem(
             key_admin
                 .create_api_key(&create(None, role, role, &[]))
@@ -481,7 +487,7 @@ async fn a_key_limited_to_labels_does_not_administer() {
     server.stop().await;
 }
 
-/// A worker whose key is limited to labels claims the harness tasks of the runs carrying them
+/// A worker whose key is limited to labels claims the harness calls of the runs carrying them
 /// only, and cannot answer another scope's task: one tenant's environments (`env=dev`,
 /// `env=prod`) register the same action set, and each one's worker serves its own runs.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -521,11 +527,11 @@ export default async function main() {
 
     let dev = server.key(BuiltInRole::Worker, &[("env", "dev")]).await;
     let prod = server.key(BuiltInRole::Worker, &[("env", "prod")]).await;
-    let query = TaskStreamQuery {
+    let query = CallStreamQuery {
         action_set: Some(action_set.id.clone()),
         actions: vec!["ask_user".into()],
         slots: Some(10),
-        ..TaskStreamQuery::default()
+        ..CallStreamQuery::default()
     };
     let mut devs = support::TaskWorker::open(&dev, &query).await;
     let ours = devs.task().await;
@@ -540,15 +546,15 @@ export default async function main() {
     assert_eq!(theirs.run_id, prod_run.id);
 
     // A token of the other scope's task is answered as a task that no longer exists.
-    let answer = CompleteTask {
+    let answer = CompleteCall {
         result: serde_json::json!("from dev"),
     };
-    let refused = problem(dev.complete_task(&theirs.token, &answer).await.unwrap_err());
+    let refused = problem(dev.complete_call(&theirs.token, &answer).await.unwrap_err());
     assert_eq!(
         (refused.status, refused.kind()),
-        (410, Some(ProblemType::TaskGone))
+        (410, Some(ProblemType::CallGone))
     );
-    dev.complete_task(&ours.token, &answer).await.unwrap();
+    dev.complete_call(&ours.token, &answer).await.unwrap();
     let ended = dev_harness
         .get_run(&dev_run.id, support::wait("20s"))
         .await
@@ -557,7 +563,7 @@ export default async function main() {
         ended.output.and_then(|output| output.value),
         Some(serde_json::json!("from dev"))
     );
-    prod.complete_task(&theirs.token, &answer).await.unwrap();
+    prod.complete_call(&theirs.token, &answer).await.unwrap();
     server.stop().await;
 }
 

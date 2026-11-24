@@ -4,6 +4,7 @@
 
 mod action_sets;
 mod admin;
+mod calls;
 mod changes;
 mod connections;
 mod dashboard;
@@ -21,7 +22,6 @@ mod secrets;
 mod sign_in;
 mod stats;
 mod subscriptions;
-mod tasks;
 mod testing;
 mod tokens;
 mod workflows;
@@ -87,12 +87,12 @@ pub(crate) fn router(app: Arc<App>, socket: bool, mcp: Option<Router>) -> Router
         .route(routes::RUN_JOURNAL, get(runs::journal))
         .route(routes::RUN_RELEASE, post(runs::release))
         .route(routes::RUN_GIVE_UP, post(runs::give_up))
-        .route(routes::TASK_STREAM, get(tasks::stream))
-        .route(routes::TASK_DEFER, post(tasks::defer))
-        .route(routes::TASK_COMPLETE, post(tasks::complete))
-        .route(routes::TASK_FAIL, post(tasks::fail))
-        .route(routes::TASK_APPROVE, post(tasks::approve))
-        .route(routes::TASK_REJECT, post(tasks::reject))
+        .route(routes::CALL_STREAM, get(calls::stream))
+        .route(routes::CALL_DEFER, post(calls::defer))
+        .route(routes::CALL_COMPLETE, post(calls::complete))
+        .route(routes::CALL_FAIL, post(calls::fail))
+        .route(routes::CALL_APPROVE, post(calls::approve))
+        .route(routes::CALL_REJECT, post(calls::reject))
         .route(
             routes::SUBSCRIPTIONS,
             post(subscriptions::create).get(subscriptions::list),

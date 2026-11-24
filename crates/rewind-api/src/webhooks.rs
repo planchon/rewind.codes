@@ -161,7 +161,7 @@ pub enum WebhookEvent {
         data: RunEvent,
     },
     /// An activation left the run waiting for something other than its calls in flight:
-    /// a signal, a timer, or a task that waits for the harness. `data.run.waitingFor` says
+    /// a signal, a timer, or a call that waits for the harness. `data.run.waitingFor` says
     /// what.
     #[serde(rename = "run.suspended")]
     RunSuspended {
@@ -235,7 +235,7 @@ pub struct RunEvent {
 }
 
 /// A call parked because the action no longer matches its pinned schema
-/// (`archi/04-tools.md`, "When an action set changes during a run"). Approve the task to continue
+/// (`archi/04-tools.md`, "When an action set changes during a run"). Approve the call to continue
 /// against the new schema, reject it, fork the run, or cancel it. The pinned schema is in the
 /// action set; `message` says what changed.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -244,8 +244,8 @@ pub struct ActionSchemaChanged {
     pub run_id: String,
     pub namespace: NamespaceName,
     pub labels: Labels,
-    /// For `POST /v1/tasks/{id}/approve` and `/reject`.
-    pub task_id: String,
+    /// For `POST /v1/calls/{id}/approve` and `/reject`.
+    pub call_id: String,
     pub seq: u32,
     pub action: String,
     /// The action's MCP server.
@@ -270,7 +270,7 @@ pub struct CredentialsExpired {
     pub run_id: String,
     pub namespace: NamespaceName,
     pub labels: Labels,
-    pub task_id: String,
+    pub call_id: String,
     pub seq: u32,
     pub action: String,
     /// The action's MCP server or API.
@@ -447,7 +447,7 @@ mod tests {
             "type": "credentials.expired",
             "timestamp": "2026-11-09T10:02:11Z",
             "data": {
-                "runId": "r1", "namespace": "alice", "labels": {}, "taskId": "t1", "seq": 2,
+                "runId": "r1", "namespace": "alice", "labels": {}, "callId": "t1", "seq": 2,
                 "action": "github.list_issues",
                 "server": "github", "actionSet": "ab", "reason": "refused", "secret": "ns/github",
                 "message": "401 Unauthorized"

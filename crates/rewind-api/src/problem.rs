@@ -30,24 +30,24 @@ pub enum ProblemType {
     /// names it), or its allowed labels do not cover the request; a member without a grant in
     /// the organization.
     Forbidden,
-    /// 404: no such run, action set, workflow, script, task, payload, subscription, API key, role,
+    /// 404: no such run, action set, workflow, script, call, payload, subscription, API key, role,
     /// member or invitation (for this tenant).
     NotFound,
     /// 409: a signal or a cancellation sent to a run that has ended.
     RunEnded,
     /// 409: releasing or giving up a run that is not quarantined.
     NotQuarantined,
-    /// 409: approving or rejecting a task that does not wait for the harness.
-    TaskNotWaiting,
+    /// 409: approving or rejecting a call that does not wait for the harness.
+    CallNotWaiting,
     /// 409: deleting a role that a grant still points to.
     RoleInUse,
     /// 409: a change that would leave the organization without an `owner`.
     LastOwner,
     /// 409: starting a run in, or minting a token for, a namespace being erased.
     NamespaceDeleting,
-    /// 410: the task no longer exists: its run ended, it was completed, or its claim expired
+    /// 410: the call no longer exists: its run ended, it was completed, or its claim expired
     /// and another worker took it.
-    TaskGone,
+    CallGone,
     /// 413: a body or a payload above the server's limits.
     PayloadTooLarge,
     /// 415: a body that is not JSON where JSON is expected.
@@ -102,11 +102,11 @@ impl ProblemType {
         ProblemType::NotFound,
         ProblemType::RunEnded,
         ProblemType::NotQuarantined,
-        ProblemType::TaskNotWaiting,
+        ProblemType::CallNotWaiting,
         ProblemType::RoleInUse,
         ProblemType::LastOwner,
         ProblemType::NamespaceDeleting,
-        ProblemType::TaskGone,
+        ProblemType::CallGone,
         ProblemType::PayloadTooLarge,
         ProblemType::UnsupportedMediaType,
         ProblemType::InvalidScript,
@@ -135,11 +135,11 @@ impl ProblemType {
             ProblemType::NotFound => "urn:rewind:problem:not-found",
             ProblemType::RunEnded => "urn:rewind:problem:run-ended",
             ProblemType::NotQuarantined => "urn:rewind:problem:not-quarantined",
-            ProblemType::TaskNotWaiting => "urn:rewind:problem:task-not-waiting",
+            ProblemType::CallNotWaiting => "urn:rewind:problem:call-not-waiting",
             ProblemType::RoleInUse => "urn:rewind:problem:role-in-use",
             ProblemType::LastOwner => "urn:rewind:problem:last-owner",
             ProblemType::NamespaceDeleting => "urn:rewind:problem:namespace-deleting",
-            ProblemType::TaskGone => "urn:rewind:problem:task-gone",
+            ProblemType::CallGone => "urn:rewind:problem:call-gone",
             ProblemType::PayloadTooLarge => "urn:rewind:problem:payload-too-large",
             ProblemType::UnsupportedMediaType => "urn:rewind:problem:unsupported-media-type",
             ProblemType::InvalidScript => "urn:rewind:problem:invalid-script",
@@ -168,11 +168,11 @@ impl ProblemType {
             ProblemType::NotFound => 404,
             ProblemType::RunEnded
             | ProblemType::NotQuarantined
-            | ProblemType::TaskNotWaiting
+            | ProblemType::CallNotWaiting
             | ProblemType::RoleInUse
             | ProblemType::LastOwner
             | ProblemType::NamespaceDeleting => 409,
-            ProblemType::TaskGone => 410,
+            ProblemType::CallGone => 410,
             ProblemType::PayloadTooLarge => 413,
             ProblemType::UnsupportedMediaType => 415,
             ProblemType::InvalidScript
@@ -201,11 +201,11 @@ impl ProblemType {
             ProblemType::NotFound => "Not found",
             ProblemType::RunEnded => "The run has ended",
             ProblemType::NotQuarantined => "The run is not quarantined",
-            ProblemType::TaskNotWaiting => "The task does not wait for the harness",
+            ProblemType::CallNotWaiting => "The call does not wait for the harness",
             ProblemType::RoleInUse => "The role is in use",
             ProblemType::LastOwner => "The organization would have no owner",
             ProblemType::NamespaceDeleting => "The namespace is being erased",
-            ProblemType::TaskGone => "The task no longer exists",
+            ProblemType::CallGone => "The call no longer exists",
             ProblemType::PayloadTooLarge => "Payload too large",
             ProblemType::UnsupportedMediaType => "Unsupported media type",
             ProblemType::InvalidScript => "The script was refused",

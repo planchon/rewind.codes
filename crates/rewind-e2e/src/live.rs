@@ -3,7 +3,7 @@
 //!
 //! One node holds the one partition of the deployment, over the memory adapters, with the V8
 //! executor and the scenario's actions, in virtual time from [`T0`]. A harness's
-//! worker is an SDK stream at the node's edge: it is handed the harness tasks and answers them
+//! worker is an SDK stream at the node's edge: it is handed the harness calls and answers them
 //! through their token; a worker that crashes closes its stream, and another worker opens one.
 //! The entropy draws the scenario's ids and seeds in order, whatever the partition, so a case's
 //! run has the id its committed journal holds.

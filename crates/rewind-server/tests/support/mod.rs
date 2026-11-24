@@ -490,9 +490,9 @@ pub(crate) fn wait(text: &str) -> Option<rewind_api::common::Duration> {
 /// character in a query, and its error was answered 503 "the store cannot be reached".
 pub(crate) async fn nul_lookups_match_nothing(server: &TestServer) {
     use rewind_api::ProblemType;
+    use rewind_api::calls::{CallStreamQuery, CompleteCall, DeferCall, FailCall, RejectCall};
     use rewind_api::runs::RunFilter;
     use rewind_api::scripts::ScriptFilter;
-    use rewind_api::tasks::{CompleteTask, DeferTask, FailTask, RejectTask, TaskStreamQuery};
     use serde_json::json;
 
     let harness = server.key(BuiltInRole::Harness, &[]).await;
@@ -516,7 +516,7 @@ pub(crate) async fn nul_lookups_match_nothing(server: &TestServer) {
         let (kind, status, detail) = answer(error);
         assert_eq!(
             (kind, status),
-            (Some(ProblemType::TaskGone), 410),
+            (Some(ProblemType::CallGone), 410),
             "{detail}"
         );
     };
@@ -540,21 +540,21 @@ pub(crate) async fn nul_lookups_match_nothing(server: &TestServer) {
     let token = "task\u{0}token";
     gone(
         worker
-            .defer_task(token, &DeferTask::default())
+            .defer_call(token, &DeferCall::default())
             .await
             .unwrap_err(),
     );
     gone(
         worker
-            .complete_task(token, &CompleteTask { result: json!(1) })
+            .complete_call(token, &CompleteCall { result: json!(1) })
             .await
             .unwrap_err(),
     );
     gone(
         worker
-            .fail_task(
+            .fail_call(
                 token,
-                &FailTask {
+                &FailCall {
                     message: "no".into(),
                     data: None,
                     retryable: false,
@@ -565,10 +565,10 @@ pub(crate) async fn nul_lookups_match_nothing(server: &TestServer) {
     );
 
     // Ids: a task's, a subscription's, a run's.
-    not_found(harness.approve_task("run\u{0}.1").await.unwrap_err());
+    not_found(harness.approve_call("run\u{0}.1").await.unwrap_err());
     not_found(
         harness
-            .reject_task("run\u{0}.1", &RejectTask::default())
+            .reject_call("run\u{0}.1", &RejectCall::default())
             .await
             .unwrap_err(),
     );
@@ -595,23 +595,23 @@ pub(crate) async fn nul_lookups_match_nothing(server: &TestServer) {
         ..ScriptFilter::default()
     };
     refused(harness.list_scripts(&scripts).await.unwrap_err());
-    let stream = TaskStreamQuery {
+    let stream = CallStreamQuery {
         actions: vec!["ask_user".into(), "ask\u{0}".into()],
-        ..TaskStreamQuery::default()
+        ..CallStreamQuery::default()
     };
-    refused(worker.task_stream(&stream).await.unwrap_err());
+    refused(worker.call_stream(&stream).await.unwrap_err());
 }
 
-/// A worker's task stream, as the SDK's worker holds it open.
+/// A worker's call stream, as the SDK's worker holds it open.
 pub(crate) struct TaskWorker {
-    stream: rewind_api::TaskStream,
+    stream: rewind_api::CallStream,
 }
 
 impl TaskWorker {
     /// Opens a stream for the tasks `query` names.
-    pub(crate) async fn open(client: &Client, query: &rewind_api::tasks::TaskStreamQuery) -> Self {
+    pub(crate) async fn open(client: &Client, query: &rewind_api::calls::CallStreamQuery) -> Self {
         Self {
-            stream: client.task_stream(query).await.unwrap(),
+            stream: client.call_stream(query).await.unwrap(),
         }
     }
 
@@ -619,7 +619,7 @@ impl TaskWorker {
     pub(crate) async fn event(
         &mut self,
         wait: Duration,
-    ) -> Option<rewind_api::tasks::TaskStreamEvent> {
+    ) -> Option<rewind_api::calls::CallStreamMessage> {
         use futures_util::StreamExt as _;
         match tokio::time::timeout(wait, self.stream.next()).await {
             Ok(Some(event)) => Some(event.unwrap()),
@@ -628,11 +628,11 @@ impl TaskWorker {
     }
 
     /// The next task handed, within 30 s; `gone` events before it are skipped.
-    pub(crate) async fn task(&mut self) -> rewind_api::tasks::HandedTask {
+    pub(crate) async fn task(&mut self) -> rewind_api::calls::HandedCall {
         loop {
             match self.event(Duration::from_secs(30)).await {
-                Some(rewind_api::tasks::TaskStreamEvent::Task(task)) => return *task,
-                Some(rewind_api::tasks::TaskStreamEvent::Gone(_)) => {}
+                Some(rewind_api::calls::CallStreamMessage::Call(task)) => return *task,
+                Some(rewind_api::calls::CallStreamMessage::Gone(_)) => {}
                 None => panic!("no task was handed within 30 s"),
             }
         }
@@ -642,8 +642,8 @@ impl TaskWorker {
     pub(crate) async fn none_within(&mut self, wait: Duration) -> bool {
         loop {
             match self.event(wait).await {
-                Some(rewind_api::tasks::TaskStreamEvent::Task(_)) => return false,
-                Some(rewind_api::tasks::TaskStreamEvent::Gone(_)) => {}
+                Some(rewind_api::calls::CallStreamMessage::Call(_)) => return false,
+                Some(rewind_api::calls::CallStreamMessage::Gone(_)) => {}
                 None => return true,
             }
         }

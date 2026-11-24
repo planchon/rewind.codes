@@ -19,6 +19,7 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use futures_util::StreamExt;
 use rewind_api::access::{BuiltInRole, Permission, PutRole};
 use rewind_api::action_sets::{CreateActionSet, HarnessAction};
+use rewind_api::calls::{CallStreamQuery, CompleteCall};
 use rewind_api::common::{Labels, RunStatus};
 use rewind_api::events::EventsQuery;
 use rewind_api::namespaces::{
@@ -31,7 +32,6 @@ use rewind_api::problem::QuotaReached;
 use rewind_api::reading::ActionStatsFilter;
 use rewind_api::runs::{CancelRun, ForkRun, RunFilter, StartRun};
 use rewind_api::scripts::{CheckRequest, TestRequest};
-use rewind_api::tasks::{CompleteTask, TaskStreamQuery};
 use rewind_api::{Client, Problem, ProblemType};
 use serde_json::{Value, json};
 use support::{ADMIN_KEY, TestServer, eventually, wait};
@@ -381,7 +381,7 @@ async fn an_end_user_s_token_reaches_its_namespace_only() {
     server.stop().await;
 }
 
-/// A worker acting for an end user claims the tasks of its namespace's runs only.
+/// A worker acting for an end user claims the calls of its namespace's runs only.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_token_claims_the_tasks_of_its_namespace_only() {
     let server = TestServer::in_memory(&[]).await;
@@ -416,15 +416,15 @@ async fn a_token_claims_the_tasks_of_its_namespace_only() {
         .await
         .unwrap();
     let worker = CreateToken {
-        permissions: Some(vec![Permission::TasksWork]),
+        permissions: Some(vec![Permission::CallsWork]),
         ..CreateToken::default()
     };
     let alice = server.bare(&token(&customer, "alice", &worker).await);
-    let query = TaskStreamQuery {
+    let query = CallStreamQuery {
         action_set: Some(action_set.id.clone()),
         actions: vec!["ask_user".into()],
         slots: Some(10),
-        ..TaskStreamQuery::default()
+        ..CallStreamQuery::default()
     };
     let mut alices_stream = support::TaskWorker::open(&alice, &query).await;
     let mine = alices_stream.task().await;
@@ -442,14 +442,14 @@ async fn a_token_claims_the_tasks_of_its_namespace_only() {
         .task()
         .await;
     assert_eq!(theirs.run_id, bobs.id);
-    let answer = CompleteTask {
+    let answer = CompleteCall {
         result: serde_json::json!("ok"),
     };
     assert_eq!(
-        refused(alice.complete_task(&theirs.token, &answer).await),
-        (410, Some(ProblemType::TaskGone))
+        refused(alice.complete_call(&theirs.token, &answer).await),
+        (410, Some(ProblemType::CallGone))
     );
-    alice.complete_task(&mine.token, &answer).await.unwrap();
+    alice.complete_call(&mine.token, &answer).await.unwrap();
     server.stop().await;
 }
 

@@ -316,7 +316,7 @@ pub enum ActionRoute {
     /// A built-in, called by the dispatcher of Rewind.
     Builtin(Builtin),
     /// A function of the harness, executed by its SDK worker, which claims the task through
-    /// `GET /v1/tasks`. A grouped harness action is named `{group}.{action}`.
+    /// `GET /v1/calls`. A grouped harness action is named `{group}.{action}`.
     Harness { group: Option<String> },
 }
 

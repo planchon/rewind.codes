@@ -7,7 +7,7 @@
 //!
 //! - the DTOs of every endpoint, request and response, one module per group of the endpoint
 //!   table: [`action_sets`], [`workflows`], [`scripts`], [`runs`] (with [`events`], the journal
-//!   entries and the event stream), [`tasks`], [`webhooks`], [`reading`], [`organization`],
+//!   entries and the event stream), [`calls`], [`webhooks`], [`reading`], [`organization`],
 //!   [`access`] (with the catalog of permissions and the built-in roles), [`namespaces`] (the
 //!   end users, their quotas and their tokens), [`connections`] (a person's connections and the
 //!   consent) and [`admin`] (the server); the dashboard's sign-in, [`auth`]; and the OAuth
@@ -36,6 +36,7 @@ pub mod access;
 pub mod action_sets;
 pub mod admin;
 pub mod auth;
+pub mod calls;
 mod client;
 pub mod common;
 pub mod connections;
@@ -53,11 +54,10 @@ pub mod routes;
 pub mod runs;
 pub mod scripts;
 pub mod secrets;
-pub mod tasks;
 pub mod testing;
 pub mod webhooks;
 pub mod workflows;
 
-pub use client::{ChangeStream, Client, EventStream, TaskStream};
+pub use client::{CallStream, ChangeStream, Client, EventStream};
 pub use error::Error;
 pub use problem::{Problem, ProblemType};

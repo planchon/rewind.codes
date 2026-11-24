@@ -43,10 +43,10 @@ pub enum Permission {
     SecretsWrite,
     #[serde(rename = "secrets:use")]
     SecretsUse,
-    #[serde(rename = "tasks:work")]
-    TasksWork,
-    #[serde(rename = "tasks:approve")]
-    TasksApprove,
+    #[serde(rename = "calls:work")]
+    CallsWork,
+    #[serde(rename = "calls:approve")]
+    CallsApprove,
     #[serde(rename = "subscriptions:read")]
     SubscriptionsRead,
     #[serde(rename = "subscriptions:write")]
@@ -89,8 +89,8 @@ impl Permission {
         Permission::SecretsRead,
         Permission::SecretsWrite,
         Permission::SecretsUse,
-        Permission::TasksWork,
-        Permission::TasksApprove,
+        Permission::CallsWork,
+        Permission::CallsApprove,
         Permission::SubscriptionsRead,
         Permission::SubscriptionsWrite,
         Permission::MembersRead,
@@ -118,8 +118,8 @@ impl Permission {
         Permission::SecretsRead,
         Permission::SecretsWrite,
         Permission::SecretsUse,
-        Permission::TasksWork,
-        Permission::TasksApprove,
+        Permission::CallsWork,
+        Permission::CallsApprove,
     ];
 
     /// The permissions of a token minted or signed without `permissions`.
@@ -149,8 +149,8 @@ impl Permission {
             Permission::SecretsRead => "secrets:read",
             Permission::SecretsWrite => "secrets:write",
             Permission::SecretsUse => "secrets:use",
-            Permission::TasksWork => "tasks:work",
-            Permission::TasksApprove => "tasks:approve",
+            Permission::CallsWork => "calls:work",
+            Permission::CallsApprove => "calls:approve",
             Permission::SubscriptionsRead => "subscriptions:read",
             Permission::SubscriptionsWrite => "subscriptions:write",
             Permission::MembersRead => "members:read",
@@ -199,10 +199,10 @@ impl Permission {
             }
             Permission::SecretsWrite => "Put and delete secrets.",
             Permission::SecretsUse => "Attach an organization's secret to a run or a workflow.",
-            Permission::TasksWork => {
-                "Hold a task stream of harness tasks, and defer, complete or fail them."
+            Permission::CallsWork => {
+                "Hold a call stream of harness calls, and defer, complete or fail them."
             }
-            Permission::TasksApprove => "Approve or reject a parked task.",
+            Permission::CallsApprove => "Approve or reject a call that waits for the harness.",
             Permission::SubscriptionsRead => "List the lifecycle webhooks.",
             Permission::SubscriptionsWrite => "Create and delete lifecycle webhooks.",
             Permission::MembersRead => "List the members, their grants and the invitations.",
@@ -253,10 +253,10 @@ impl FromStr for Permission {
 pub enum BuiltInRole {
     /// Every permission: the creator of an organization.
     Owner,
-    /// Everything about runs, action sets, tasks and subscriptions, and reading the members and
+    /// Everything about runs, action sets, calls and subscriptions, and reading the members and
     /// roles: a harness and its agent tools.
     Harness,
-    /// Only the harness tasks: a harness's SDK worker.
+    /// Only the harness calls: a harness's SDK worker.
     Worker,
     /// Only reading.
     Reader,
@@ -282,8 +282,8 @@ const HARNESS: [Permission; 20] = [
     Permission::SecretsRead,
     Permission::SecretsWrite,
     Permission::SecretsUse,
-    Permission::TasksWork,
-    Permission::TasksApprove,
+    Permission::CallsWork,
+    Permission::CallsApprove,
     Permission::SubscriptionsRead,
     Permission::SubscriptionsWrite,
     Permission::MembersRead,
@@ -293,7 +293,7 @@ const HARNESS: [Permission; 20] = [
     Permission::TokensWrite,
 ];
 
-const WORKER: [Permission; 1] = [Permission::TasksWork];
+const WORKER: [Permission; 1] = [Permission::CallsWork];
 
 const READER: [Permission; 7] = [
     Permission::RunsRead,
@@ -330,10 +330,10 @@ impl BuiltInRole {
         match self {
             BuiltInRole::Owner => "Every permission: administers the organization.",
             BuiltInRole::Harness => {
-                "Runs, action sets, secrets, tasks and subscriptions, and reading the members \
+                "Runs, action sets, secrets, calls and subscriptions, and reading the members \
                  and roles: a harness and its agent tools."
             }
-            BuiltInRole::Worker => "Only the harness tasks: a harness's SDK worker.",
+            BuiltInRole::Worker => "Only the harness calls: a harness's SDK worker.",
             BuiltInRole::Reader => {
                 "Reading runs, action sets, subscriptions, members and roles: a dashboard."
             }
@@ -610,8 +610,8 @@ mod tests {
                 "secrets:read",
                 "secrets:write",
                 "secrets:use",
-                "tasks:work",
-                "tasks:approve",
+                "calls:work",
+                "calls:approve",
                 "subscriptions:read",
                 "subscriptions:write",
                 "members:read",
@@ -621,7 +621,7 @@ mod tests {
                 "tokens:write",
             ]
         );
-        assert_eq!(names(BuiltInRole::Worker.permissions()), ["tasks:work"]);
+        assert_eq!(names(BuiltInRole::Worker.permissions()), ["calls:work"]);
         assert_eq!(
             names(BuiltInRole::Reader.permissions()),
             [
@@ -642,7 +642,7 @@ mod tests {
 
     /// What the key roles allowed before roles became data: `reader` the reading endpoints of
     /// its tenant, `harness` everything of its tenant but the administration, `worker` the
-    /// harness tasks, the administration only `admin`, now `operator`. The permissions of
+    /// harness calls, the administration only `admin`, now `operator`. The permissions of
     /// namespaces came after: `harness` manages its end users, `reader` reads them; and so did
     /// `scripts:write`, which `harness` holds with `actions:write`.
     #[derive(Clone, Copy, PartialEq, Eq)]
@@ -670,11 +670,11 @@ mod tests {
             | Permission::ScriptsWrite
             | Permission::SecretsWrite
             | Permission::SecretsUse
-            | Permission::TasksApprove
+            | Permission::CallsApprove
             | Permission::SubscriptionsWrite
             | Permission::NamespacesWrite
             | Permission::TokensWrite => Former::Write,
-            Permission::TasksWork => Former::Tasks,
+            Permission::CallsWork => Former::Tasks,
             Permission::MembersInvite
             | Permission::MembersManage
             | Permission::RolesWrite
@@ -721,8 +721,8 @@ mod tests {
                 "secrets:read",
                 "secrets:write",
                 "secrets:use",
-                "tasks:work",
-                "tasks:approve",
+                "calls:work",
+                "calls:approve",
             ]
         );
         assert!(Permission::TOKEN_DEFAULT.iter().all(|p| p.in_token()));
@@ -777,7 +777,7 @@ mod tests {
             json!({
                 "name": "worker",
                 "description": BuiltInRole::Worker.description(),
-                "permissions": ["tasks:work"],
+                "permissions": ["calls:work"],
                 "builtIn": true
             })
         );

@@ -42,11 +42,11 @@ use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use clap::Parser;
 use rewind_api::action_sets::{Api, Auth, CreateActionSet, McpServer, OpenApiDocument};
+use rewind_api::calls::{CallState, ParkedReason};
 use rewind_api::common::{Labels, RunStatus};
 use rewind_api::namespaces::NamespaceName;
 use rewind_api::runs::{Run, RunFilter, StartRun, Waiting};
 use rewind_api::secrets::{AttachmentProblemKind, PutSecret};
-use rewind_api::tasks::{ParkedReason, TaskState};
 use rewind_api::webhooks::{
     CreateSubscription, CredentialsExpired, CredentialsExpiredReason, WebhookEvent,
     WebhookEventType,
@@ -753,11 +753,11 @@ async fn parked(client: &Client, run: &str) -> (String, u32, ParkedReason) {
         run.waiting_for.iter().find_map(|waiting| match waiting {
             Waiting::Call {
                 seq,
-                task_id,
-                state: TaskState::Parked,
+                call_id,
+                state: CallState::Parked,
                 parked: Some(reason),
                 ..
-            } => Some((task_id.clone(), *seq, *reason)),
+            } => Some((call_id.clone(), *seq, *reason)),
             _ => None,
         })
     })
@@ -1184,7 +1184,7 @@ async fn a_call_waits_until_its_secret_is_put_again(server: &TestServer, outside
             hook.secret.as_deref(),
             hook.server.as_deref(),
             hook.seq,
-            hook.task_id.as_str()
+            hook.call_id.as_str()
         ),
         (
             CredentialsExpiredReason::Missing,
@@ -1240,7 +1240,7 @@ async fn a_call_waits_until_its_secret_is_put_again(server: &TestServer, outside
     })
     .await;
     assert_eq!(
-        (hook.secret.as_deref(), hook.seq, hook.task_id.as_str()),
+        (hook.secret.as_deref(), hook.seq, hook.call_id.as_str()),
         (Some("ns/github"), seq, task.as_str())
     );
     let usage = customer
@@ -1440,7 +1440,7 @@ async fn a_signed_server_checks_every_request(server: &TestServer, outside: &Out
         (CredentialsExpiredReason::Refused, None, Some("crm"))
     );
     crm.require_labels(&[]);
-    customer.approve_task(&task).await.unwrap();
+    customer.approve_call(&task).await.unwrap();
     let ended = carol.get_run(&dev.id, wait("60s")).await.unwrap();
     assert_eq!(output(&ended), json!({ "user": "carol" }));
     let key = format!("{}/{seq}", dev.id);

@@ -68,7 +68,7 @@ struct RunArgs {
     #[arg(long, default_value_t = 100)]
     concurrency: usize,
 
-    /// Workers answering the harness action, each on a task stream of 16 slots.
+    /// Workers answering the harness action, each on a call stream of 16 slots.
     #[arg(long, default_value_t = 8)]
     harness_workers: usize,
 

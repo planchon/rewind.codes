@@ -23,6 +23,9 @@ use crate::action_sets::{
     DeclarationsQuery, DeclarationsText, SearchQuery,
 };
 use crate::admin::ServerInfo;
+use crate::calls::{
+    CallStreamMessage, CallStreamQuery, CompleteCall, DeferCall, FailCall, RejectCall,
+};
 use crate::common::Duration;
 use crate::events::{ChangeEvent, Entry, EventsQuery, StreamEvent};
 use crate::headers::{IDEMPOTENCY_KEY, IdempotencyKey, NAMESPACE, ORGANIZATION};
@@ -49,9 +52,6 @@ use crate::scripts::{
 };
 use crate::secrets::{
     Jwks, PutSecret, Secret, SecretList, SecretUsage, SigningKey, SigningKeyList,
-};
-use crate::tasks::{
-    CompleteTask, DeferTask, FailTask, RejectTask, TaskStreamEvent, TaskStreamQuery,
 };
 use crate::webhooks::{CreateSubscription, Subscription, SubscriptionList};
 
@@ -505,56 +505,56 @@ impl Client {
     }
 
     // ---------------------------------------------------------------------------------------
-    // Harness tasks
+    // Harness calls
 
-    /// `GET /v1/tasks/stream`: the tasks handed to this worker as they become ready, until the
+    /// `GET /v1/calls/stream`: the calls handed to this worker as they become ready, until the
     /// server ends the stream or the connection drops. The open stream is the liveness of the
-    /// tasks handed on it: open it again after a drop, with the same `query.worker`, and the
+    /// calls handed on it: open it again after a drop, with the same `query.worker`, and the
     /// server keeps them for their grace. Events of a later version and comments are skipped.
-    pub async fn task_stream(&self, query: &TaskStreamQuery) -> Result<TaskStream, Error> {
+    pub async fn call_stream(&self, query: &CallStreamQuery) -> Result<CallStream, Error> {
         let request = self
-            .request_with(Method::GET, routes::TASK_STREAM, &[], query)?
+            .request_with(Method::GET, routes::CALL_STREAM, &[], query)?
             .header(ACCEPT, "text/event-stream");
         let inner = self
-            .named_events(request, "task stream", TaskStreamEvent::from_sse)
+            .named_events(request, "call stream", CallStreamMessage::from_sse)
             .await?;
-        Ok(TaskStream { inner })
+        Ok(CallStream { inner })
     }
 
-    /// `POST /v1/tasks/{token}/defer`.
-    pub async fn defer_task(&self, token: &str, defer: &DeferTask) -> Result<(), Error> {
+    /// `POST /v1/calls/{token}/defer`.
+    pub async fn defer_call(&self, token: &str, defer: &DeferCall) -> Result<(), Error> {
         let request = self
-            .request(Method::POST, routes::TASK_DEFER, &[token])?
+            .request(Method::POST, routes::CALL_DEFER, &[token])?
             .json(defer);
         self.empty(request).await
     }
 
-    /// `POST /v1/tasks/{token}/complete`.
-    pub async fn complete_task(&self, token: &str, complete: &CompleteTask) -> Result<(), Error> {
+    /// `POST /v1/calls/{token}/complete`.
+    pub async fn complete_call(&self, token: &str, complete: &CompleteCall) -> Result<(), Error> {
         let request = self
-            .request(Method::POST, routes::TASK_COMPLETE, &[token])?
+            .request(Method::POST, routes::CALL_COMPLETE, &[token])?
             .json(complete);
         self.empty(request).await
     }
 
-    /// `POST /v1/tasks/{token}/fail`.
-    pub async fn fail_task(&self, token: &str, fail: &FailTask) -> Result<(), Error> {
+    /// `POST /v1/calls/{token}/fail`.
+    pub async fn fail_call(&self, token: &str, fail: &FailCall) -> Result<(), Error> {
         let request = self
-            .request(Method::POST, routes::TASK_FAIL, &[token])?
+            .request(Method::POST, routes::CALL_FAIL, &[token])?
             .json(fail);
         self.empty(request).await
     }
 
-    /// `POST /v1/tasks/{id}/approve`.
-    pub async fn approve_task(&self, task: &str) -> Result<(), Error> {
-        let request = self.request(Method::POST, routes::TASK_APPROVE, &[task])?;
+    /// `POST /v1/calls/{id}/approve`.
+    pub async fn approve_call(&self, call: &str) -> Result<(), Error> {
+        let request = self.request(Method::POST, routes::CALL_APPROVE, &[call])?;
         self.empty(request).await
     }
 
-    /// `POST /v1/tasks/{id}/reject`.
-    pub async fn reject_task(&self, task: &str, reject: &RejectTask) -> Result<(), Error> {
+    /// `POST /v1/calls/{id}/reject`.
+    pub async fn reject_call(&self, call: &str, reject: &RejectCall) -> Result<(), Error> {
         let request = self
-            .request(Method::POST, routes::TASK_REJECT, &[task])?
+            .request(Method::POST, routes::CALL_REJECT, &[call])?
             .json(reject);
         self.empty(request).await
     }
@@ -1234,20 +1234,20 @@ impl Stream for ChangeStream {
     }
 }
 
-/// The events of `GET /v1/tasks/stream`, until the server ends the stream or the connection
+/// The events of `GET /v1/calls/stream`, until the server ends the stream or the connection
 /// drops.
-pub struct TaskStream {
-    inner: Pin<Box<dyn Stream<Item = Result<TaskStreamEvent, Error>> + Send>>,
+pub struct CallStream {
+    inner: Pin<Box<dyn Stream<Item = Result<CallStreamMessage, Error>> + Send>>,
 }
 
-impl fmt::Debug for TaskStream {
+impl fmt::Debug for CallStream {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("TaskStream")
+        f.write_str("CallStream")
     }
 }
 
-impl Stream for TaskStream {
-    type Item = Result<TaskStreamEvent, Error>;
+impl Stream for CallStream {
+    type Item = Result<CallStreamMessage, Error>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         self.inner.as_mut().poll_next(cx)
@@ -1302,14 +1302,14 @@ mod tests {
         };
         assert_eq!(round_trip(&filter), filter);
 
-        let tasks = TaskStreamQuery {
+        let calls = CallStreamQuery {
             action_set: Some("ab".into()),
             actions: vec!["ask_user".into(), "approve".into()],
             slots: Some(5),
             worker: Some("w-1".into()),
-            ..TaskStreamQuery::default()
+            ..CallStreamQuery::default()
         };
-        assert_eq!(round_trip(&tasks), tasks);
+        assert_eq!(round_trip(&calls), calls);
 
         let events = EventsQuery {
             follow: Some(true),

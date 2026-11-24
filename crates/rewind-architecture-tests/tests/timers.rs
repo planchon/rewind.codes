@@ -118,7 +118,7 @@ const EXCEPTIONS: &[Exception] = &[
         file: "crates/rewind-load/src/load.rs",
         function: "harness_worker",
         kind: Kind::Backoff,
-        reason: "the load generator's harness worker opens its task stream again after a drop",
+        reason: "the load generator's harness worker opens its call stream again after a drop",
     },
     Exception {
         file: "crates/rewind-load/src/load.rs",

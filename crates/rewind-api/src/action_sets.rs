@@ -43,7 +43,7 @@ pub struct CreateActionSet {
     /// `<api>.<operationId>`, called by Rewind.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub apis: Vec<Api>,
-    /// Harness actions: functions of the harness, executed by its SDK worker (`GET /v1/tasks`). A
+    /// Harness actions: functions of the harness, executed by its SDK worker (`GET /v1/calls`). A
     /// name `group.action` puts the action in the `group` namespace of `rewind:actions`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub harness: Vec<HarnessAction>,
@@ -288,14 +288,14 @@ pub struct ActionPolicy {
     /// What happens to a call interrupted mid-flight. `retry` by default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub on_interruption: Option<OnInterruption>,
-    /// The call waits for the harness's approval (`POST /v1/tasks/{id}/approve`) before it is
+    /// The call waits for the harness's approval (`POST /v1/calls/{id}/approve`) before it is
     /// sent. Off by default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approval: Option<bool>,
     /// How long one attempt may take. 5 minutes by default for MCP actions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout: Option<Duration>,
-    /// The grace after a stream closes: how long a harness task handed on a stream that closed
+    /// The grace after a stream closes: how long a harness call handed on a stream that closed
     /// waits for its worker to come back before it is handed again, as attempt + 1. 60 seconds
     /// by default.
     #[serde(default, skip_serializing_if = "Option::is_none")]

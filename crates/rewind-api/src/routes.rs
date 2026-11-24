@@ -35,14 +35,14 @@ pub const RUN_GIVE_UP: &str = "/v1/runs/{id}/give-up";
 /// (`crate::events::ChangeEvent`).
 pub const CHANGES: &str = "/v1/changes";
 
-/// The harness tasks handed to a worker, as server-sent events
-/// (`crate::tasks::TaskStreamEvent`).
-pub const TASK_STREAM: &str = "/v1/tasks/stream";
-pub const TASK_DEFER: &str = "/v1/tasks/{token}/defer";
-pub const TASK_COMPLETE: &str = "/v1/tasks/{token}/complete";
-pub const TASK_FAIL: &str = "/v1/tasks/{token}/fail";
-pub const TASK_APPROVE: &str = "/v1/tasks/{id}/approve";
-pub const TASK_REJECT: &str = "/v1/tasks/{id}/reject";
+/// The harness calls handed to a worker, as server-sent events
+/// (`crate::calls::CallStreamMessage`).
+pub const CALL_STREAM: &str = "/v1/calls/stream";
+pub const CALL_DEFER: &str = "/v1/calls/{token}/defer";
+pub const CALL_COMPLETE: &str = "/v1/calls/{token}/complete";
+pub const CALL_FAIL: &str = "/v1/calls/{token}/fail";
+pub const CALL_APPROVE: &str = "/v1/calls/{id}/approve";
+pub const CALL_REJECT: &str = "/v1/calls/{id}/reject";
 
 pub const HOOK: &str = "/hooks/{token}";
 pub const SUBSCRIPTIONS: &str = "/v1/subscriptions";
@@ -156,12 +156,12 @@ pub const OPERATIONS: [(&str, &str); 114] = [
     ("GET", RUN_JOURNAL),
     ("POST", RUN_RELEASE),
     ("POST", RUN_GIVE_UP),
-    ("GET", TASK_STREAM),
-    ("POST", TASK_DEFER),
-    ("POST", TASK_COMPLETE),
-    ("POST", TASK_FAIL),
-    ("POST", TASK_APPROVE),
-    ("POST", TASK_REJECT),
+    ("GET", CALL_STREAM),
+    ("POST", CALL_DEFER),
+    ("POST", CALL_COMPLETE),
+    ("POST", CALL_FAIL),
+    ("POST", CALL_APPROVE),
+    ("POST", CALL_REJECT),
     ("POST", HOOK),
     ("POST", SUBSCRIPTIONS),
     ("GET", SUBSCRIPTIONS),

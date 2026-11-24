@@ -141,7 +141,7 @@
         "description": "An action's policy, pinned in the action set (`archi/04-tools.md`, \"Policies\"). Every field is\noptional: what is not given takes its default.",
         "properties": {
           "approval": {
-            "description": "The call waits for the harness's approval (`POST /v1/tasks/{id}/approve`) before it is\nsent. Off by default.",
+            "description": "The call waits for the harness's approval (`POST /v1/calls/{id}/approve`) before it is\nsent. Off by default.",
             "type": [
               "boolean",
               "null"
@@ -160,7 +160,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/Duration",
-                "description": "The grace after a stream closes: how long a harness task handed on a stream that closed\nwaits for its worker to come back before it is handed again, as attempt + 1. 60 seconds\nby default."
+                "description": "The grace after a stream closes: how long a harness call handed on a stream that closed\nwaits for its worker to come back before it is handed again, as attempt + 1. 60 seconds\nby default."
               },
               {
                 "type": "null"
@@ -244,13 +244,17 @@
         ]
       },
       "ActionSchemaChanged": {
-        "description": "A call parked because the action no longer matches its pinned schema\n(`archi/04-tools.md`, \"When an action set changes during a run\"). Approve the task to continue\nagainst the new schema, reject it, fork the run, or cancel it. The pinned schema is in the\naction set; `message` says what changed.",
+        "description": "A call parked because the action no longer matches its pinned schema\n(`archi/04-tools.md`, \"When an action set changes during a run\"). Approve the call to continue\nagainst the new schema, reject it, fork the run, or cancel it. The pinned schema is in the\naction set; `message` says what changed.",
         "properties": {
           "action": {
             "type": "string"
           },
           "actionSet": {
             "description": "The run's action set, where the pinned schema is.",
+            "type": "string"
+          },
+          "callId": {
+            "description": "For `POST /v1/calls/{id}/approve` and `/reject`.",
             "type": "string"
           },
           "labels": {
@@ -277,17 +281,13 @@
               "string",
               "null"
             ]
-          },
-          "taskId": {
-            "description": "For `POST /v1/tasks/{id}/approve` and `/reject`.",
-            "type": "string"
           }
         },
         "required": [
           "runId",
           "namespace",
           "labels",
-          "taskId",
+          "callId",
           "seq",
           "action",
           "actionSet",
@@ -1020,12 +1020,50 @@
         ],
         "type": "object"
       },
+      "CallGone": {
+        "description": "The data of a `gone` message: a call handed on this stream no longer waits for its answer. Its\nrun ended, or its call timed out; an answer sent now is dropped (`call-gone`), and its slot is\nfree.",
+        "properties": {
+          "token": {
+            "description": "The token the call was handed with.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "token"
+        ],
+        "type": "object"
+      },
       "CallOrder": {
         "enum": [
           "any",
           "listed"
         ],
         "type": "string"
+      },
+      "CallState": {
+        "description": "The state of a call.",
+        "enum": [
+          "approval",
+          "ready",
+          "claimed",
+          "deferred",
+          "parked",
+          "done"
+        ],
+        "type": "string"
+      },
+      "CallStreamMessage": {
+        "description": "One message of the call stream (`GET /v1/calls/stream`). On the wire, each is a server-sent\nevent whose `event` field is `call` or `gone` and whose `data` is this JSON object; events\nhave no `id`. While it sends nothing else, the server writes a comment line (`:`) at least\nevery 15 seconds, so that proxies keep the stream open: a client skips comments, and may take\na stream silent for longer as broken. The stream closes once the caller stops authenticating\nor no longer holds `calls:work`, as the change stream does.",
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/HandedCall",
+            "description": "`call`: a call handed to this worker, with its token."
+          },
+          {
+            "$ref": "#/components/schemas/CallGone",
+            "description": "`gone`: a call handed on this stream no longer waits for its answer."
+          }
+        ]
       },
       "Callsite": {
         "description": "A position in the script's TypeScript source (`script.ts`), 1-based.",
@@ -1238,9 +1276,9 @@
         },
         "type": "object"
       },
-      "CompleteTask": {
+      "CompleteCall": {
         "additionalProperties": false,
-        "description": "`POST /v1/tasks/{token}/complete`: the action's result, delivered to the script.",
+        "description": "`POST /v1/calls/{token}/complete`: the action's result, delivered to the script.",
         "properties": {
           "result": {}
         },
@@ -1640,7 +1678,7 @@
             ]
           },
           "harness": {
-            "description": "Harness actions: functions of the harness, executed by its SDK worker (`GET /v1/tasks`). A\nname `group.action` puts the action in the `group` namespace of `rewind:actions`.",
+            "description": "Harness actions: functions of the harness, executed by its SDK worker (`GET /v1/calls`). A\nname `group.action` puts the action in the `group` namespace of `rewind:actions`.",
             "items": {
               "$ref": "#/components/schemas/HarnessAction"
             },
@@ -1954,6 +1992,9 @@
           "actionSet": {
             "type": "string"
           },
+          "callId": {
+            "type": "string"
+          },
           "labels": {
             "$ref": "#/components/schemas/Labels"
           },
@@ -1988,16 +2029,13 @@
               "string",
               "null"
             ]
-          },
-          "taskId": {
-            "type": "string"
           }
         },
         "required": [
           "runId",
           "namespace",
           "labels",
-          "taskId",
+          "callId",
           "seq",
           "action",
           "actionSet",
@@ -2098,9 +2136,9 @@
         ],
         "type": "object"
       },
-      "DeferTask": {
+      "DeferCall": {
         "additionalProperties": false,
-        "description": "`POST /v1/tasks/{token}/defer`: the handler will answer later, possibly days later, with\n`/complete` or `/fail` and the same token, whether the task stream it was handed on stays open\nor not: its slot on the stream is free.",
+        "description": "`POST /v1/calls/{token}/defer`: the handler will answer later, possibly days later, with\n`/complete` or `/fail` and the same token, whether the call stream it was handed on stays open\nor not: its slot on the stream is free.",
         "properties": {
           "timeout": {
             "oneOf": [
@@ -2840,9 +2878,9 @@
         ],
         "type": "object"
       },
-      "FailTask": {
+      "FailCall": {
         "additionalProperties": false,
-        "description": "`POST /v1/tasks/{token}/fail`: the action failed. The script gets an `ActionError`, unless the\nfailure is retryable and the action's policy is `retry`: the call is then made again, with\nbackoff.",
+        "description": "`POST /v1/calls/{token}/fail`: the action failed. The script gets an `ActionError`, unless the\nfailure is retryable and the action's policy is `retry`: the call is then made again, with\nbackoff.",
         "properties": {
           "data": {
             "description": "`ActionError.data`."
@@ -3192,8 +3230,8 @@
         ],
         "type": "object"
       },
-      "HandedTask": {
-        "description": "A harness call handed to a worker on its task stream. The worker answers it by its token,\nwith `/complete` or `/fail`, or `/defer` to answer later; nothing else is asked of it while it\nworks.",
+      "HandedCall": {
+        "description": "A harness call handed to a worker on its call stream. The worker answers it by its token,\nwith `/complete` or `/fail`, or `/defer` to answer later; nothing else is asked of it while it\nworks.",
         "properties": {
           "action": {
             "type": "string"
@@ -3208,7 +3246,7 @@
             "type": "integer"
           },
           "id": {
-            "description": "The task's id, as listed in the run's state.",
+            "description": "The call's id, as listed in the run's state.",
             "type": "string"
           },
           "idempotencyKey": {
@@ -3241,7 +3279,7 @@
             ]
           },
           "token": {
-            "description": "The hand-out's secret token: `/v1/tasks/{token}/…`. A new one at each hand-out. It names\nthe run, so an answer reaches the run's owner from whichever process receives it.",
+            "description": "The hand-out's secret token: `/v1/calls/{token}/…`. A new one at each hand-out. It names\nthe run, so an answer reaches the run's owner from whichever process receives it.",
             "type": "string"
           },
           "traceparent": {
@@ -4240,7 +4278,7 @@
         "type": "object"
       },
       "ParkedReason": {
-        "description": "Why a task is parked.",
+        "description": "Why a call is parked.",
         "enum": [
           "schema_changed",
           "credentials_refused",
@@ -4290,8 +4328,8 @@
           "secrets:read",
           "secrets:write",
           "secrets:use",
-          "tasks:work",
-          "tasks:approve",
+          "calls:work",
+          "calls:approve",
           "subscriptions:read",
           "subscriptions:write",
           "members:read",
@@ -5160,9 +5198,9 @@
         ],
         "type": "object"
       },
-      "RejectTask": {
+      "RejectCall": {
         "additionalProperties": false,
-        "description": "`POST /v1/tasks/{id}/reject`: the call fails with an `ActionError` carrying this message.",
+        "description": "`POST /v1/calls/{id}/reject`: the call fails with an `ActionError` carrying this message.",
         "properties": {
           "message": {
             "description": "Why, written for the model. \"rejected by the harness\" when absent.",
@@ -7016,44 +7054,6 @@
         ],
         "type": "object"
       },
-      "TaskGone": {
-        "description": "The data of a `gone` event: a task handed on this stream no longer waits for its answer. Its\nrun ended, or its call timed out; an answer sent now is dropped (`task-gone`), and its slot is\nfree.",
-        "properties": {
-          "token": {
-            "description": "The token the task was handed with.",
-            "type": "string"
-          }
-        },
-        "required": [
-          "token"
-        ],
-        "type": "object"
-      },
-      "TaskState": {
-        "description": "The state of a call's task.",
-        "enum": [
-          "approval",
-          "ready",
-          "claimed",
-          "deferred",
-          "parked",
-          "done"
-        ],
-        "type": "string"
-      },
-      "TaskStreamEvent": {
-        "description": "One event of the task stream (`GET /v1/tasks/stream`). On the wire, each is a server-sent\nevent whose `event` field is `task` or `gone` and whose `data` is this JSON object; events\nhave no `id`. While it sends nothing else, the server writes a comment line (`:`) at least\nevery 15 seconds, so that proxies keep the stream open: a client skips comments, and may take\na stream silent for longer as broken. The stream closes once the caller stops authenticating\nor no longer holds `tasks:work`, as the change stream does.",
-        "oneOf": [
-          {
-            "$ref": "#/components/schemas/HandedTask",
-            "description": "`task`: a task handed to this worker, with its token."
-          },
-          {
-            "$ref": "#/components/schemas/TaskGone",
-            "description": "`gone`: a task handed on this stream no longer waits for its answer."
-          }
-        ]
-      },
       "Test": {
         "additionalProperties": false,
         "description": "A test: what the run is given (its input, the actions' answers, signals), and what must hold\nat the end. It never names its script.",
@@ -7874,7 +7874,7 @@
         "description": "Something an active run waits for.",
         "oneOf": [
           {
-            "description": "A call in flight, and the state of its task.",
+            "description": "A call in flight, and its state.",
             "properties": {
               "action": {
                 "type": "string"
@@ -7888,6 +7888,10 @@
                 "format": "int32",
                 "minimum": 0,
                 "type": "integer"
+              },
+              "callId": {
+                "description": "For `POST /v1/calls/{id}/approve` and `/reject`.",
+                "type": "string"
               },
               "callsite": {
                 "oneOf": [
@@ -7922,18 +7926,14 @@
                 "type": "integer"
               },
               "state": {
-                "$ref": "#/components/schemas/TaskState"
-              },
-              "taskId": {
-                "description": "For `POST /v1/tasks/{id}/approve` and `/reject`.",
-                "type": "string"
+                "$ref": "#/components/schemas/CallState"
               }
             },
             "required": [
               "seq",
               "action",
               "args",
-              "taskId",
+              "callId",
               "state",
               "attempt",
               "kind"
@@ -8128,7 +8128,7 @@
             "type": "object"
           },
           {
-            "description": "An activation left the run waiting for something other than its calls in flight:\na signal, a timer, or a task that waits for the harness. `data.run.waitingFor` says\nwhat.",
+            "description": "An activation left the run waiting for something other than its calls in flight:\na signal, a timer, or a call that waits for the harness. `data.run.waitingFor` says\nwhat.",
             "properties": {
               "data": {
                 "$ref": "#/components/schemas/RunEvent"
@@ -8497,7 +8497,7 @@
     }
   },
   "info": {
-    "description": "The HTTP API /v1 of Rewind: action sets, scripts, runs, harness tasks, webhooks, reading, the organization, access, namespaces and the server; and `/auth`, the dashboard's sign-in. Every request to /v1 carries a Bearer token, an API key (`rewind_sk_…`), a member's access token from `/auth`, or an end user's token (`rewind_nt_…`, or a JWT the customer signed with a key whose `kid` starts with `rk_`), or a person's connection (`rewind_ct_…`), except over the embedded server's unix socket and to the inbound webhook URL. A connection names the organization a request acts in with the header `Rewind-Organization`. What the caller may do is its grant's, or its token's: every operation requires one permission of the catalog (`GET /v1/permissions`), and answers 403 without it. A key or a member names the namespace (the end user) a request acts for with the header `Rewind-Namespace`: required to start a run, check or test a script, it narrows a read to that namespace. An end user's token reaches its own namespace only. `/auth` is for a browser: it reads and writes the cookie `rewind_session`, which /v1 never reads. Errors are `application/problem+json`, with a `detail` written for a model. Fields are camelCase, enumerated values snake_case, times RFC 3339, and durations a number and a unit (`\"30s\"`, `\"1h30m\"`) or a number of milliseconds. `/oauth` and `/.well-known` are the OAuth authorization server of people's connections, in OAuth's own formats.",
+    "description": "The HTTP API /v1 of Rewind: action sets, scripts, runs, harness calls, webhooks, reading, the organization, access, namespaces and the server; and `/auth`, the dashboard's sign-in. Every request to /v1 carries a Bearer token, an API key (`rewind_sk_…`), a member's access token from `/auth`, or an end user's token (`rewind_nt_…`, or a JWT the customer signed with a key whose `kid` starts with `rk_`), or a person's connection (`rewind_ct_…`), except over the embedded server's unix socket and to the inbound webhook URL. A connection names the organization a request acts in with the header `Rewind-Organization`. What the caller may do is its grant's, or its token's: every operation requires one permission of the catalog (`GET /v1/permissions`), and answers 403 without it. A key or a member names the namespace (the end user) a request acts for with the header `Rewind-Namespace`: required to start a run, check or test a script, it narrows a read to that namespace. An end user's token reaches its own namespace only. `/auth` is for a browser: it reads and writes the cookie `rewind_session`, which /v1 never reads. Errors are `application/problem+json`, with a `detail` written for a model. Fields are camelCase, enumerated values snake_case, times RFC 3339, and durations a number and a unit (`\"30s\"`, `\"1h30m\"`) or a number of milliseconds. `/oauth` and `/.well-known` are the OAuth authorization server of people's connections, in OAuth's own formats.",
     "title": "Rewind API",
     "version": "0.1.0"
   },
@@ -10789,6 +10789,760 @@
         "summary": "Revoke an API key",
         "tags": [
           "access"
+        ]
+      }
+    },
+    "/v1/calls/stream": {
+      "get": {
+        "description": "The calls of the harness actions it names (`actionSet`, `actions`), as they become ready, among\nthe runs the caller sees: an end user's token those of its namespace, a key limited to labels those of the\nruns carrying them. At most `slots` are in flight on the stream at once. Each event's\n`event` field names it and its `data` is a `CallStreamMessage`: `call`, a call handed with\nits token, to answer with `/complete`, `/fail` or `/defer`; `gone`, a call handed on this\nstream that no longer waits for its answer. The open stream is the liveness of every call\nhanded on it: no heartbeat. When it closes, its calls wait for the grace of their action\n(60 s by default) for a stream opened again with the same `worker`, which keeps them; then\neach is handed to another worker with its attempt + 1, or fails with `outcomeUnknown`\nunder `at_most_once`. A worker opens the stream again after it drops, with a backoff. The\nserver writes a comment line at least every 15 seconds while it sends nothing else.",
+        "operationId": "streamCalls",
+        "parameters": [
+          {
+            "description": "The action set whose harness actions this worker executes: only the calls of runs of this action set.\nWithout it, the calls of the actions named in `actions`, whatever the action set of their run (an\naction set derived from another, as saving a workflow does, keeps its harness actions' names).",
+            "in": "query",
+            "name": "actionSet",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only the calls of runs of this namespace. An end user's token is limited to its own: it\nmay name it, and naming another is `forbidden`. The header `Rewind-Namespace` narrows the\nsame way.",
+            "in": "query",
+            "name": "namespace",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only these actions. Repeat for several. All the harness actions of `actionSet` when absent, every\nharness action without `actionSet` either.",
+            "in": "query",
+            "name": "actions",
+            "required": false,
+            "schema": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          {
+            "description": "At most this many calls in flight on this stream: handed, and neither completed, failed,\ndeferred (by whichever process answers) nor gone. 1 by default, 100 at most. With 0, none\nis handed: a worker that stops opens its stream again with 0 slots and its `worker`, which\nkeeps alive the calls handed to it before while its handlers finish them.",
+            "in": "query",
+            "name": "slots",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The worker's own id, drawn once when it starts (a UUID) and sent again on every\nreconnection: a stream opened again with it within the grace keeps the calls handed on the\none that closed, and they are not handed again. 1 to 128 visible ASCII characters. Without\nit, the calls of a closed stream go to another worker once the grace has passed.",
+            "in": "query",
+            "name": "worker",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Namespace",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/CallStreamMessage"
+                }
+              }
+            },
+            "description": "A stream of server-sent events `call` and `gone`; each `data` is a `CallStreamMessage`."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The request is malformed (`invalid-request`)."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No such action set."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A fault of the platform (`internal`)."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The server cannot serve the request now (`unavailable`)."
+          }
+        },
+        "summary": "Follow the harness calls handed to this worker (server-sent events)",
+        "tags": [
+          "calls"
+        ]
+      }
+    },
+    "/v1/calls/{id}/approve": {
+      "post": {
+        "description": "A call under the `approval` policy is sent; a call parked by a schema change continues\nagainst the new schema.",
+        "operationId": "approveCall",
+        "parameters": [
+          {
+            "description": "The call's id, from the run's state or the webhook.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Namespace",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The call is ready."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The request is malformed (`invalid-request`)."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No such call."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The call does not wait for the harness (`call-not-waiting`)."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A fault of the platform (`internal`)."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The server cannot serve the request now (`unavailable`)."
+          }
+        },
+        "summary": "Approve a call that waits for the harness",
+        "tags": [
+          "calls"
+        ]
+      }
+    },
+    "/v1/calls/{id}/reject": {
+      "post": {
+        "description": "The call fails with an `ActionError`.",
+        "operationId": "rejectCall",
+        "parameters": [
+          {
+            "description": "The call's id.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Namespace",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/RejectCall"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
+          },
+          "description": "Optional."
+        },
+        "responses": {
+          "204": {
+            "description": "The call failed."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The request is malformed (`invalid-request`)."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No such call."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The call does not wait for the harness (`call-not-waiting`)."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A fault of the platform (`internal`)."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The server cannot serve the request now (`unavailable`)."
+          }
+        },
+        "summary": "Reject a call that waits for the harness",
+        "tags": [
+          "calls"
+        ]
+      }
+    },
+    "/v1/calls/{token}/complete": {
+      "post": {
+        "operationId": "completeCall",
+        "parameters": [
+          {
+            "description": "The claim's token.",
+            "in": "path",
+            "name": "token",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Namespace",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompleteCall"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Delivered to the run."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The request is malformed (`invalid-request`)."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
+          },
+          "410": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The call no longer exists; the result is dropped (`call-gone`)."
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The result is too large (`payload-too-large`)."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A fault of the platform (`internal`)."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The server cannot serve the request now (`unavailable`)."
+          }
+        },
+        "summary": "Complete a call with its result",
+        "tags": [
+          "calls"
+        ]
+      }
+    },
+    "/v1/calls/{token}/defer": {
+      "post": {
+        "description": "The call waits for `/complete` or `/fail` with the same token, whether the stream it was\nhanded on stays open or not, up to its timeout.",
+        "operationId": "deferCall",
+        "parameters": [
+          {
+            "description": "The claim's token.",
+            "in": "path",
+            "name": "token",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Namespace",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/DeferCall"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
+          },
+          "description": "Optional."
+        },
+        "responses": {
+          "204": {
+            "description": "Deferred."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The request is malformed (`invalid-request`)."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
+          },
+          "410": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The call no longer exists (`call-gone`)."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A fault of the platform (`internal`)."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The server cannot serve the request now (`unavailable`)."
+          }
+        },
+        "summary": "Answer later",
+        "tags": [
+          "calls"
+        ]
+      }
+    },
+    "/v1/calls/{token}/fail": {
+      "post": {
+        "operationId": "failCall",
+        "parameters": [
+          {
+            "description": "The claim's token.",
+            "in": "path",
+            "name": "token",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Namespace",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FailCall"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Recorded: delivered as an `ActionError`, or retried."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The request is malformed (`invalid-request`)."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
+          },
+          "410": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The call no longer exists (`call-gone`)."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A fault of the platform (`internal`)."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The server cannot serve the request now (`unavailable`)."
+          }
+        },
+        "summary": "Fail a call",
+        "tags": [
+          "calls"
         ]
       }
     },
@@ -18789,760 +19543,6 @@
         ]
       }
     },
-    "/v1/tasks/stream": {
-      "get": {
-        "description": "The tasks of the harness actions it names (`actionSet`, `actions`), as they become ready, among\nthe runs the caller sees: an end user's token those of its namespace, a key limited to labels those of the\nruns carrying them. At most `slots` are in flight on the stream at once. Each event's\n`event` field names it and its `data` is a `TaskStreamEvent`: `task`, a task handed with\nits token, to answer with `/complete`, `/fail` or `/defer`; `gone`, a task handed on this\nstream that no longer waits for its answer. The open stream is the liveness of every task\nhanded on it: no heartbeat. When it closes, its tasks wait for the grace of their action\n(60 s by default) for a stream opened again with the same `worker`, which keeps them; then\neach is handed to another worker with its attempt + 1, or fails with `outcomeUnknown`\nunder `at_most_once`. A worker opens the stream again after it drops, with a backoff. The\nserver writes a comment line at least every 15 seconds while it sends nothing else.",
-        "operationId": "streamTasks",
-        "parameters": [
-          {
-            "description": "The action set whose harness actions this worker executes: only the tasks of runs of this action set.\nWithout it, the tasks of the actions named in `actions`, whatever the action set of their run (an\naction set derived from another, as saving a workflow does, keeps its harness actions' names).",
-            "in": "query",
-            "name": "actionSet",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Only the tasks of runs of this namespace. An end user's token is limited to its own: it\nmay name it, and naming another is `forbidden`. The header `Rewind-Namespace` narrows the\nsame way.",
-            "in": "query",
-            "name": "namespace",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Only these actions. Repeat for several. All the harness actions of `actionSet` when absent, every\nharness action without `actionSet` either.",
-            "in": "query",
-            "name": "actions",
-            "required": false,
-            "schema": {
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            }
-          },
-          {
-            "description": "At most this many tasks in flight on this stream: handed, and neither completed, failed,\ndeferred (by whichever process answers) nor gone. 1 by default, 100 at most. With 0, none\nis handed: a worker that stops opens its stream again with 0 slots and its `worker`, which\nkeeps alive the tasks handed to it before while its handlers finish them.",
-            "in": "query",
-            "name": "slots",
-            "required": false,
-            "schema": {
-              "format": "int32",
-              "minimum": 0,
-              "type": "integer"
-            }
-          },
-          {
-            "description": "The worker's own id, drawn once when it starts (a UUID) and sent again on every\nreconnection: a stream opened again with it within the grace keeps the tasks handed on the\none that closed, and they are not handed again. 1 to 128 visible ASCII characters. Without\nit, the tasks of a closed stream go to another worker once the grace has passed.",
-            "in": "query",
-            "name": "worker",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`.",
-            "in": "header",
-            "name": "Rewind-Namespace",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
-            "in": "header",
-            "name": "Rewind-Organization",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "text/event-stream": {
-                "schema": {
-                  "$ref": "#/components/schemas/TaskStreamEvent"
-                }
-              }
-            },
-            "description": "A stream of server-sent events `task` and `gone`; each `data` is a `TaskStreamEvent`."
-          },
-          "400": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "The request is malformed (`invalid-request`)."
-          },
-          "401": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
-          },
-          "403": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
-          },
-          "404": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "No such action set."
-          },
-          "500": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "A fault of the platform (`internal`)."
-          },
-          "503": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "The server cannot serve the request now (`unavailable`)."
-          }
-        },
-        "summary": "Follow the harness tasks handed to this worker (server-sent events)",
-        "tags": [
-          "tasks"
-        ]
-      }
-    },
-    "/v1/tasks/{id}/approve": {
-      "post": {
-        "description": "A task under the `approval` policy is sent; a task parked by a schema change continues\nagainst the new schema.",
-        "operationId": "approveTask",
-        "parameters": [
-          {
-            "description": "The task's id, from the run's state or the webhook.",
-            "in": "path",
-            "name": "id",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`.",
-            "in": "header",
-            "name": "Rewind-Namespace",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
-            "in": "header",
-            "name": "Rewind-Organization",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "204": {
-            "description": "The task is ready."
-          },
-          "400": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "The request is malformed (`invalid-request`)."
-          },
-          "401": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
-          },
-          "403": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
-          },
-          "404": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "No such task."
-          },
-          "409": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "The task does not wait for the harness (`task-not-waiting`)."
-          },
-          "500": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "A fault of the platform (`internal`)."
-          },
-          "503": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "The server cannot serve the request now (`unavailable`)."
-          }
-        },
-        "summary": "Approve a task that waits for the harness",
-        "tags": [
-          "tasks"
-        ]
-      }
-    },
-    "/v1/tasks/{id}/reject": {
-      "post": {
-        "description": "The call fails with an `ActionError`.",
-        "operationId": "rejectTask",
-        "parameters": [
-          {
-            "description": "The task's id.",
-            "in": "path",
-            "name": "id",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`.",
-            "in": "header",
-            "name": "Rewind-Namespace",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
-            "in": "header",
-            "name": "Rewind-Organization",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "oneOf": [
-                  {
-                    "$ref": "#/components/schemas/RejectTask"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              }
-            }
-          },
-          "description": "Optional."
-        },
-        "responses": {
-          "204": {
-            "description": "The call failed."
-          },
-          "400": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "The request is malformed (`invalid-request`)."
-          },
-          "401": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
-          },
-          "403": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
-          },
-          "404": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "No such task."
-          },
-          "409": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "The task does not wait for the harness (`task-not-waiting`)."
-          },
-          "500": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "A fault of the platform (`internal`)."
-          },
-          "503": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "The server cannot serve the request now (`unavailable`)."
-          }
-        },
-        "summary": "Reject a task that waits for the harness",
-        "tags": [
-          "tasks"
-        ]
-      }
-    },
-    "/v1/tasks/{token}/complete": {
-      "post": {
-        "operationId": "completeTask",
-        "parameters": [
-          {
-            "description": "The claim's token.",
-            "in": "path",
-            "name": "token",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`.",
-            "in": "header",
-            "name": "Rewind-Namespace",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
-            "in": "header",
-            "name": "Rewind-Organization",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CompleteTask"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "204": {
-            "description": "Delivered to the run."
-          },
-          "400": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "The request is malformed (`invalid-request`)."
-          },
-          "401": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
-          },
-          "403": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
-          },
-          "410": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "The task no longer exists; the result is dropped (`task-gone`)."
-          },
-          "413": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "The result is too large (`payload-too-large`)."
-          },
-          "500": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "A fault of the platform (`internal`)."
-          },
-          "503": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "The server cannot serve the request now (`unavailable`)."
-          }
-        },
-        "summary": "Complete a task with its result",
-        "tags": [
-          "tasks"
-        ]
-      }
-    },
-    "/v1/tasks/{token}/defer": {
-      "post": {
-        "description": "The task waits for `/complete` or `/fail` with the same token, whether the stream it was\nhanded on stays open or not, up to its timeout.",
-        "operationId": "deferTask",
-        "parameters": [
-          {
-            "description": "The claim's token.",
-            "in": "path",
-            "name": "token",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`.",
-            "in": "header",
-            "name": "Rewind-Namespace",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
-            "in": "header",
-            "name": "Rewind-Organization",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "oneOf": [
-                  {
-                    "$ref": "#/components/schemas/DeferTask"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              }
-            }
-          },
-          "description": "Optional."
-        },
-        "responses": {
-          "204": {
-            "description": "Deferred."
-          },
-          "400": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "The request is malformed (`invalid-request`)."
-          },
-          "401": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
-          },
-          "403": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
-          },
-          "410": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "The task no longer exists (`task-gone`)."
-          },
-          "500": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "A fault of the platform (`internal`)."
-          },
-          "503": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "The server cannot serve the request now (`unavailable`)."
-          }
-        },
-        "summary": "Answer later",
-        "tags": [
-          "tasks"
-        ]
-      }
-    },
-    "/v1/tasks/{token}/fail": {
-      "post": {
-        "operationId": "failTask",
-        "parameters": [
-          {
-            "description": "The claim's token.",
-            "in": "path",
-            "name": "token",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`.",
-            "in": "header",
-            "name": "Rewind-Namespace",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
-            "in": "header",
-            "name": "Rewind-Organization",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/FailTask"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "204": {
-            "description": "Recorded: delivered as an `ActionError`, or retried."
-          },
-          "400": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "The request is malformed (`invalid-request`)."
-          },
-          "401": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
-          },
-          "403": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
-          },
-          "410": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "The task no longer exists (`task-gone`)."
-          },
-          "500": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "A fault of the platform (`internal`)."
-          },
-          "503": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "The server cannot serve the request now (`unavailable`)."
-          }
-        },
-        "summary": "Fail a task",
-        "tags": [
-          "tasks"
-        ]
-      }
-    },
     "/v1/test": {
       "post": {
         "description": "In virtual time, each test against its world: rules, mock handlers and a cassette. No\naction is really called. With `workflow`, the suite of that version runs too, against the\ngiven script or action set. Served by a server with the worker role.",
@@ -20443,8 +20443,8 @@
       "name": "runs"
     },
     {
-      "description": "Harness tasks: handed to the harness's SDK worker on its task stream, answered by their token, approved or rejected by the harness.",
-      "name": "tasks"
+      "description": "Harness calls: handed to the harness's SDK worker on its call stream, answered by their token, approved or rejected by the harness.",
+      "name": "calls"
     },
     {
       "description": "Inbound webhooks that become signals, and subscriptions to signed lifecycle events.",

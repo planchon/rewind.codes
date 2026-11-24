@@ -666,7 +666,7 @@ fn answerable(response: &Value) -> bool {
     }
 }
 
-/// The harness's worker: claims the harness tasks of `action_set` and answers them from the
+/// The harness's worker: claims the harness calls of `action_set` and answers them from the
 /// case's responses, until the `rewind run` in `child` ends.
 fn work(
     project: &Project,
@@ -724,7 +724,7 @@ fn work(
                     ("complete", json!({ "result": response }))
                 };
                 let answer = client
-                    .post(format!("http://localhost/v1/tasks/{token}/{path}"))
+                    .post(format!("http://localhost/v1/calls/{token}/{path}"))
                     .json(&body)
                     .send()
                     .await
@@ -835,8 +835,8 @@ fn a_recorded_run_is_tested_and_its_failure_forked() {
     assert_eq!(fork["parent"]["run"], id.as_str());
 }
 
-/// The task stream of an action set over the embedded server's socket, as an SDK worker holds it:
-/// each `task` event's data.
+/// The call stream of an action set over the embedded server's socket, as an SDK worker holds it:
+/// each `call` event's data.
 struct Tasks {
     response: reqwest::Response,
     buffer: String,
@@ -846,7 +846,7 @@ impl Tasks {
     async fn open(client: &reqwest::Client, action_set: &str) -> Self {
         let response = client
             .get(format!(
-                "http://localhost/v1/tasks/stream?actionSet={action_set}&slots=100"
+                "http://localhost/v1/calls/stream?actionSet={action_set}&slots=100"
             ))
             .send()
             .await
@@ -873,7 +873,7 @@ impl Tasks {
                         data.push_str(value.trim_start());
                     }
                 }
-                if name.as_deref() == Some("task") {
+                if name.as_deref() == Some("call") {
                     return serde_json::from_str(&data).ok();
                 }
                 continue;
@@ -906,7 +906,7 @@ fn complete_harness_task(project: &Project, action_set: &str, result: Value) {
             .expect("a task");
         let token = task["token"].as_str().expect("a task's token").to_owned();
         let response = client
-            .post(format!("http://localhost/v1/tasks/{token}/complete"))
+            .post(format!("http://localhost/v1/calls/{token}/complete"))
             .json(&json!({ "result": result }))
             .send()
             .await

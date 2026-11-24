@@ -93,7 +93,7 @@ fn waiting(waiting: &Waiting) -> String {
             parked,
             attempt,
             callsite,
-            task_id,
+            call_id,
         } => {
             let state = snake_case(&format!("{state:?}"));
             let mut text = format!(
@@ -106,7 +106,7 @@ fn waiting(waiting: &Waiting) -> String {
             if let Some(callsite) = callsite {
                 let _ = write!(text, " at {callsite}");
             }
-            let _ = write!(text, " [task {task_id}]");
+            let _ = write!(text, " [call {call_id}]");
             text
         }
         Waiting::Timer {

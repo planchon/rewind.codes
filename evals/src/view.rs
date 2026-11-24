@@ -10,6 +10,7 @@
 
 use std::collections::BTreeMap;
 
+use rewind_api::calls::{CallState, ParkedReason};
 use rewind_api::common::{
     AbortReason, ActionFailure, Callsite, Labels, LogLevel, PAYLOAD_VALUE_LIMIT, Payload,
     RunStatus, timestamp,
@@ -19,7 +20,6 @@ use rewind_api::runs::{
     RunWait, WaitKind, Waiting,
 };
 use rewind_api::scripts::{CheckResult, Diagnostic, Location, Severity, TitleSource};
-use rewind_api::tasks::{ParkedReason, TaskState};
 use rewind_core::{
     Annotation, Command, Completion, Event, HistoryEntry, Lifecycle, RunOutcome, RunState, Seq,
 };
@@ -231,13 +231,13 @@ async fn waiting(
         });
         let task = tasks.get(seq);
         let (task_state, parked) = match task.map(|task| &task.state) {
-            None => (TaskState::Done, None),
-            Some(rewind_engine::ports::TaskState::Approval) => (TaskState::Approval, None),
-            Some(rewind_engine::ports::TaskState::Ready { .. }) => (TaskState::Ready, None),
-            Some(rewind_engine::ports::TaskState::Claimed { .. }) => (TaskState::Claimed, None),
-            Some(rewind_engine::ports::TaskState::Deferred { .. }) => (TaskState::Deferred, None),
+            None => (CallState::Done, None),
+            Some(rewind_engine::ports::TaskState::Approval) => (CallState::Approval, None),
+            Some(rewind_engine::ports::TaskState::Ready { .. }) => (CallState::Ready, None),
+            Some(rewind_engine::ports::TaskState::Claimed { .. }) => (CallState::Claimed, None),
+            Some(rewind_engine::ports::TaskState::Deferred { .. }) => (CallState::Deferred, None),
             Some(rewind_engine::ports::TaskState::Parked(reason)) => (
-                TaskState::Parked,
+                CallState::Parked,
                 Some(match reason.kind {
                     ParkKind::SchemaChanged => ParkedReason::SchemaChanged,
                     ParkKind::CredentialsRefused => ParkedReason::CredentialsRefused,
@@ -249,7 +249,7 @@ async fn waiting(
             seq: seq.0,
             action: action.clone(),
             args: args.unwrap_or_else(|| Payload::reference("", 0, "")),
-            task_id: format!("{}/{}", run.id, seq.0),
+            call_id: format!("{}/{}", run.id, seq.0),
             state: task_state,
             parked,
             attempt: task.map_or(1, |task| task.attempt.max(1)),

@@ -8,10 +8,10 @@ use std::collections::BTreeSet;
 
 use rewind_api::access::Permission;
 use rewind_api::action_sets::ActionMatch;
+use rewind_api::calls::{CallState, ParkedReason};
 use rewind_api::common::{Callsite, Payload, RunStatus};
 use rewind_api::runs::{FailedCall, Run, RunError, RunSummary, Waiting};
 use rewind_api::scripts::{CheckResult, Diagnostic, Severity};
-use rewind_api::tasks::{ParkedReason, TaskState};
 use rewind_api::testing::{Test, TestProblem, TestResult};
 use rewind_api::workflows::{RecordedTests, Workflow};
 use serde_json::{Value, json};
@@ -281,7 +281,7 @@ pub fn is_suspended(run: &Run) -> bool {
     run.waiting_for.iter().any(|waiting| match waiting {
         Waiting::Call { state, .. } => !matches!(
             state,
-            TaskState::Ready | TaskState::Claimed | TaskState::Done
+            CallState::Ready | CallState::Claimed | CallState::Done
         ),
         Waiting::Timer { .. } | Waiting::Signal { .. } => true,
     })
@@ -337,8 +337,8 @@ fn describe_waiting(waiting: &Waiting) -> String {
                 String::new()
             };
             match state {
-                TaskState::Approval => format!("{call}: it waits for the harness's approval"),
-                TaskState::Parked => {
+                CallState::Approval => format!("{call}: it waits for the harness's approval"),
+                CallState::Parked => {
                     if *parked == Some(ParkedReason::CredentialsRefused) {
                         format!(
                             "{call}: parked, the server refused the credentials; the harness must renew them"
@@ -353,10 +353,10 @@ fn describe_waiting(waiting: &Waiting) -> String {
                         )
                     }
                 }
-                TaskState::Deferred => format!("{call}: waiting for its answer{attempt}"),
-                TaskState::Claimed => format!("{call}: in progress{attempt}"),
-                TaskState::Ready => format!("{call}: queued{attempt}"),
-                TaskState::Done => format!("{call}: answered, about to be delivered"),
+                CallState::Deferred => format!("{call}: waiting for its answer{attempt}"),
+                CallState::Claimed => format!("{call}: in progress{attempt}"),
+                CallState::Ready => format!("{call}: queued{attempt}"),
+                CallState::Done => format!("{call}: answered, about to be delivered"),
             }
         }
     }

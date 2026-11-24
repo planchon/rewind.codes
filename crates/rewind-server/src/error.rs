@@ -247,9 +247,9 @@ impl From<Refusal> for ApiError {
                 ProblemType::NamespaceDeleting,
                 "this namespace is being erased: it takes no run",
             ),
-            Refusal::TaskGone => Self::new(ProblemType::TaskGone, refusal.to_string()),
+            Refusal::TaskGone => Self::new(ProblemType::CallGone, refusal.to_string()),
             Refusal::TaskNotWaiting { .. } => {
-                Self::new(ProblemType::TaskNotWaiting, refusal.to_string())
+                Self::new(ProblemType::CallNotWaiting, refusal.to_string())
             }
             Refusal::ResultTooLarge { .. } => Self::new(
                 ProblemType::PayloadTooLarge,

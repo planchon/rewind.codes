@@ -1,13 +1,13 @@
-//! Harness tasks: the harness's SDK worker holds a task stream open and is handed the tasks as
-//! they become ready, and the harness answers the tasks that wait for it (`archi/04-tools.md`,
-//! "Call lifecycle").
+//! Harness calls: the harness's SDK worker holds a call stream open and is handed the calls of its
+//! harness actions as they become ready, and the harness answers the calls that wait for it
+//! (`archi/04-tools.md`, "Call lifecycle").
 //!
-//! Two identifiers: a task handed to a worker has a **token**, which only that worker knows
-//! (`/v1/tasks/{token}/defer`, `/complete`, `/fail`); every task has an **id**, listed in the
-//! run's state, for the harness's decisions (`/v1/tasks/{id}/approve`, `/reject`).
+//! Two identifiers: a call handed to a worker has a **token**, which only that worker knows
+//! (`/v1/calls/{token}/defer`, `/complete`, `/fail`); every call has an **id**, listed in the
+//! run's state, for the harness's decisions (`/v1/calls/{id}/approve`, `/reject`).
 //!
-//! The task stream (`GET /v1/tasks/stream`: [`TaskStreamQuery`], [`TaskStreamEvent`]) hands the
-//! tasks, and the open stream is the liveness of every task handed on it.
+//! The call stream (`GET /v1/calls/stream`: [`CallStreamQuery`], [`CallStreamMessage`]) hands the
+//! calls, and the open stream is the liveness of every call handed on it.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -16,25 +16,25 @@ use utoipa::{IntoParams, ToSchema};
 use crate::common::{Duration, Labels};
 use crate::namespaces::NamespaceName;
 
-/// `GET /v1/tasks/stream`: the harness tasks handed to this worker as they become ready, as
-/// server-sent events ([`TaskStreamEvent`]). A worker is handed only the tasks of the runs its
+/// `GET /v1/calls/stream`: the harness calls handed to this worker as they become ready, as
+/// server-sent events ([`CallStreamMessage`]). A worker is handed only the calls of the runs its
 /// key or token sees: an end user's namespace, a grant's labels.
 ///
-/// The open stream is the liveness of every task handed on it: nothing is written or asked
-/// while a task is in flight. When the stream closes, its tasks wait for the worker to open a
+/// The open stream is the liveness of every call handed on it: nothing is written or asked
+/// while a call is in flight. When the stream closes, its calls wait for the worker to open a
 /// stream again with the same `worker`, for the action's grace (60 s by default); after it, each is
 /// handed to another worker with its attempt + 1, or fails with `outcomeUnknown` under
 /// `at_most_once` (`archi/04-tools.md`, "Call lifecycle").
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, IntoParams)]
 #[into_params(parameter_in = Query)]
 #[serde(rename_all = "camelCase")]
-pub struct TaskStreamQuery {
-    /// The action set whose harness actions this worker executes: only the tasks of runs of this action set.
-    /// Without it, the tasks of the actions named in `actions`, whatever the action set of their run (an
+pub struct CallStreamQuery {
+    /// The action set whose harness actions this worker executes: only the calls of runs of this action set.
+    /// Without it, the calls of the actions named in `actions`, whatever the action set of their run (an
     /// action set derived from another, as saving a workflow does, keeps its harness actions' names).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub action_set: Option<String>,
-    /// Only the tasks of runs of this namespace. An end user's token is limited to its own: it
+    /// Only the calls of runs of this namespace. An end user's token is limited to its own: it
     /// may name it, and naming another is `forbidden`. The header `Rewind-Namespace` narrows the
     /// same way.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -44,30 +44,30 @@ pub struct TaskStreamQuery {
     /// harness action without `actionSet` either.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub actions: Vec<String>,
-    /// At most this many tasks in flight on this stream: handed, and neither completed, failed,
+    /// At most this many calls in flight on this stream: handed, and neither completed, failed,
     /// deferred (by whichever process answers) nor gone. 1 by default, 100 at most. With 0, none
     /// is handed: a worker that stops opens its stream again with 0 slots and its `worker`, which
-    /// keeps alive the tasks handed to it before while its handlers finish them.
+    /// keeps alive the calls handed to it before while its handlers finish them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub slots: Option<u32>,
     /// The worker's own id, drawn once when it starts (a UUID) and sent again on every
-    /// reconnection: a stream opened again with it within the grace keeps the tasks handed on the
+    /// reconnection: a stream opened again with it within the grace keeps the calls handed on the
     /// one that closed, and they are not handed again. 1 to 128 visible ASCII characters. Without
-    /// it, the tasks of a closed stream go to another worker once the grace has passed.
+    /// it, the calls of a closed stream go to another worker once the grace has passed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worker: Option<String>,
 }
 
-/// A harness call handed to a worker on its task stream. The worker answers it by its token,
+/// A harness call handed to a worker on its call stream. The worker answers it by its token,
 /// with `/complete` or `/fail`, or `/defer` to answer later; nothing else is asked of it while it
 /// works.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct HandedTask {
-    /// The hand-out's secret token: `/v1/tasks/{token}/…`. A new one at each hand-out. It names
+pub struct HandedCall {
+    /// The hand-out's secret token: `/v1/calls/{token}/…`. A new one at each hand-out. It names
     /// the run, so an answer reaches the run's owner from whichever process receives it.
     pub token: String,
-    /// The task's id, as listed in the run's state.
+    /// The call's id, as listed in the run's state.
     pub id: String,
     pub run_id: String,
     /// The namespace of the run: the end user the handler acts for.
@@ -95,76 +95,78 @@ pub struct HandedTask {
     pub tracestate: Option<String>,
 }
 
-/// The data of a `gone` event: a task handed on this stream no longer waits for its answer. Its
-/// run ended, or its call timed out; an answer sent now is dropped (`task-gone`), and its slot is
+/// The data of a `gone` message: a call handed on this stream no longer waits for its answer. Its
+/// run ended, or its call timed out; an answer sent now is dropped (`call-gone`), and its slot is
 /// free.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct TaskGone {
-    /// The token the task was handed with.
+pub struct CallGone {
+    /// The token the call was handed with.
     pub token: String,
 }
 
-/// One event of the task stream (`GET /v1/tasks/stream`). On the wire, each is a server-sent
-/// event whose `event` field is `task` or `gone` and whose `data` is this JSON object; events
+/// One message of the call stream (`GET /v1/calls/stream`). On the wire, each is a server-sent
+/// event whose `event` field is `call` or `gone` and whose `data` is this JSON object; events
 /// have no `id`. While it sends nothing else, the server writes a comment line (`:`) at least
 /// every 15 seconds, so that proxies keep the stream open: a client skips comments, and may take
 /// a stream silent for longer as broken. The stream closes once the caller stops authenticating
-/// or no longer holds `tasks:work`, as the change stream does.
+/// or no longer holds `calls:work`, as the change stream does.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(untagged)]
-pub enum TaskStreamEvent {
-    /// `task`: a task handed to this worker, with its token.
-    Task(Box<HandedTask>),
-    /// `gone`: a task handed on this stream no longer waits for its answer.
-    Gone(TaskGone),
+pub enum CallStreamMessage {
+    /// `call`: a call handed to this worker, with its token.
+    Call(Box<HandedCall>),
+    /// `gone`: a call handed on this stream no longer waits for its answer.
+    Gone(CallGone),
 }
 
-impl TaskStreamEvent {
-    /// The SSE `event` field: `task` or `gone`.
+impl CallStreamMessage {
+    /// The SSE `event` field: `call` or `gone`.
     pub fn sse_event(&self) -> &'static str {
         match self {
-            TaskStreamEvent::Task(_) => "task",
-            TaskStreamEvent::Gone(_) => "gone",
+            CallStreamMessage::Call(_) => "call",
+            CallStreamMessage::Gone(_) => "gone",
         }
     }
 
-    /// An event from its SSE `event` field and its `data`; `None` for an event this version
-    /// does not know, which a client skips.
+    /// A message from its SSE `event` field and its `data`; `None` for one this version does not
+    /// know, which a client skips.
     pub fn from_sse(event: &str, data: &str) -> Result<Option<Self>, serde_json::Error> {
         Ok(match event {
-            "task" => Some(TaskStreamEvent::Task(Box::new(serde_json::from_str(data)?))),
-            "gone" => Some(TaskStreamEvent::Gone(serde_json::from_str(data)?)),
+            "call" => Some(CallStreamMessage::Call(Box::new(serde_json::from_str(
+                data,
+            )?))),
+            "gone" => Some(CallStreamMessage::Gone(serde_json::from_str(data)?)),
             _ => None,
         })
     }
 }
 
-/// `POST /v1/tasks/{token}/defer`: the handler will answer later, possibly days later, with
-/// `/complete` or `/fail` and the same token, whether the task stream it was handed on stays open
+/// `POST /v1/calls/{token}/defer`: the handler will answer later, possibly days later, with
+/// `/complete` or `/fail` and the same token, whether the call stream it was handed on stays open
 /// or not: its slot on the stream is free.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct DeferTask {
+pub struct DeferCall {
     /// Fail the call with `timeout` if no answer comes within this time. Bounded by the run's
     /// TTL, which is the default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout: Option<Duration>,
 }
 
-/// `POST /v1/tasks/{token}/complete`: the action's result, delivered to the script.
+/// `POST /v1/calls/{token}/complete`: the action's result, delivered to the script.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct CompleteTask {
+pub struct CompleteCall {
     pub result: Value,
 }
 
-/// `POST /v1/tasks/{token}/fail`: the action failed. The script gets an `ActionError`, unless the
+/// `POST /v1/calls/{token}/fail`: the action failed. The script gets an `ActionError`, unless the
 /// failure is retryable and the action's policy is `retry`: the call is then made again, with
 /// backoff.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct FailTask {
+pub struct FailCall {
     /// The message of the `ActionError`, written for the model.
     pub message: String,
     /// `ActionError.data`.
@@ -175,19 +177,19 @@ pub struct FailTask {
     pub retryable: bool,
 }
 
-/// `POST /v1/tasks/{id}/reject`: the call fails with an `ActionError` carrying this message.
+/// `POST /v1/calls/{id}/reject`: the call fails with an `ActionError` carrying this message.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct RejectTask {
+pub struct RejectCall {
     /// Why, written for the model. "rejected by the harness" when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
 }
 
-/// The state of a call's task.
+/// The state of a call.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
-pub enum TaskState {
+pub enum CallState {
     /// Waits for the harness's approval (`approval` policy).
     Approval,
     /// Waits to be sent: its next attempt, or a concurrency slot.
@@ -203,7 +205,7 @@ pub enum TaskState {
     Done,
 }
 
-/// Why a task is parked.
+/// Why a call is parked.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ParkedReason {
@@ -226,7 +228,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_task_event_is_the_handed_task_itself() {
+    fn a_call_message_is_the_handed_call_itself() {
         let data = json!({
             "token": "tk_1",
             "id": "task_1",
@@ -239,42 +241,42 @@ mod tests {
             "attempt": 1,
             "labels": { "agent": "triage" }
         });
-        let event = TaskStreamEvent::from_sse("task", &data.to_string())
+        let event = CallStreamMessage::from_sse("call", &data.to_string())
             .unwrap()
             .unwrap();
-        assert_eq!(event.sse_event(), "task");
-        let TaskStreamEvent::Task(task) = &event else {
-            panic!("expected a task: {event:?}");
+        assert_eq!(event.sse_event(), "call");
+        let CallStreamMessage::Call(task) = &event else {
+            panic!("expected a call: {event:?}");
         };
         assert_eq!(task.token, "tk_1");
         assert_eq!(task.timeout_ms, None);
         assert_eq!(
             serde_json::to_value(&event).unwrap(),
             data,
-            "the data is the task, untagged"
+            "the data is the call, untagged"
         );
     }
 
     #[test]
     fn a_gone_event_names_the_token_and_unknown_events_are_skipped() {
-        let gone = TaskStreamEvent::from_sse("gone", r#"{"token":"tk_1"}"#)
+        let gone = CallStreamMessage::from_sse("gone", r#"{"token":"tk_1"}"#)
             .unwrap()
             .unwrap();
         assert_eq!(
             gone,
-            TaskStreamEvent::Gone(TaskGone {
+            CallStreamMessage::Gone(CallGone {
                 token: "tk_1".into()
             })
         );
         assert_eq!(gone.sse_event(), "gone");
-        assert_eq!(TaskStreamEvent::from_sse("later", "{}").unwrap(), None);
-        assert!(TaskStreamEvent::from_sse("task", "{}").is_err());
-        assert!(TaskStreamEvent::from_sse("gone", "{}").is_err());
+        assert_eq!(CallStreamMessage::from_sse("later", "{}").unwrap(), None);
+        assert!(CallStreamMessage::from_sse("call", "{}").is_err());
+        assert!(CallStreamMessage::from_sse("gone", "{}").is_err());
     }
 
     #[test]
     fn the_stream_query_names_its_actions_and_slots() {
-        let query: TaskStreamQuery = serde_json::from_value(json!({
+        let query: CallStreamQuery = serde_json::from_value(json!({
             "actionSet": "ab",
             "actions": ["ask_user"],
             "slots": 4,
@@ -285,8 +287,8 @@ mod tests {
         assert_eq!(query.actions, ["ask_user"]);
         assert_eq!(query.slots, Some(4));
         assert_eq!(
-            serde_json::from_value::<TaskStreamQuery>(json!({})).unwrap(),
-            TaskStreamQuery::default()
+            serde_json::from_value::<CallStreamQuery>(json!({})).unwrap(),
+            CallStreamQuery::default()
         );
     }
 }

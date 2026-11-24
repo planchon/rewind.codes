@@ -111,11 +111,11 @@ fn api_exit(error: &rewind_api::Error) -> Exit {
                 ProblemType::NotFound
                 | ProblemType::RunEnded
                 | ProblemType::NotQuarantined
-                | ProblemType::TaskNotWaiting
+                | ProblemType::CallNotWaiting
                 | ProblemType::RoleInUse
                 | ProblemType::LastOwner
                 | ProblemType::NamespaceDeleting
-                | ProblemType::TaskGone
+                | ProblemType::CallGone
                 | ProblemType::QuotaExceeded
                 | ProblemType::Unauthorized
                 | ProblemType::Forbidden,

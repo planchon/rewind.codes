@@ -1,6 +1,6 @@
 //! Several nodes of one deployment, each a server in this process, on Postgres and MinIO in
 //! Docker, linked over HTTP/2 (`archi/07-code-architecture.md`, "Tests", `rewind-server`'s row):
-//! runs started at one node and read, signalled and answered at another; the task stream and
+//! runs started at one node and read, signalled and answered at another; the call stream and
 //! the change stream across nodes; a node that joins and one that leaves; a tenant's pool of
 //! executors-only nodes; a node killed while its runs are activated. Skipped, with a message, when Docker is absent, unless
 //! `REWIND_REQUIRE_DOCKER` is set (CI): they fail then.
@@ -20,10 +20,10 @@ use futures_util::StreamExt;
 use rewind_api::Client;
 use rewind_api::access::{BuiltInRole, CreateApiKey};
 use rewind_api::action_sets::{CreateActionSet, HarnessAction};
+use rewind_api::calls::{CallStreamQuery, CompleteCall};
 use rewind_api::common::{Labels, RunStatus};
 use rewind_api::events::ChangeEvent;
 use rewind_api::runs::StartRun;
-use rewind_api::tasks::{CompleteTask, TaskStreamQuery};
 use rewind_server::{Running, ServerArgs};
 use serde_json::json;
 use support::{ADMIN_KEY, Postgres, TaskWorker, eventually, wait};
@@ -263,10 +263,10 @@ async fn runs_tasks_and_changes_reach_their_owners_across_nodes() {
         .unwrap();
     let mut stream = TaskWorker::open(
         &Client::remote(&b.url, Some(&worker)).unwrap(),
-        &TaskStreamQuery {
+        &CallStreamQuery {
             action_set: Some(action_set.id.clone()),
             worker: Some("worker-at-b".into()),
-            ..TaskStreamQuery::default()
+            ..CallStreamQuery::default()
         },
     )
     .await;
@@ -286,9 +286,9 @@ async fn runs_tasks_and_changes_reach_their_owners_across_nodes() {
         let task = stream.task().await;
         assert_eq!(task.run_id, run.id);
         a.client(&key, namespace)
-            .complete_task(
+            .complete_call(
                 &task.token,
-                &CompleteTask {
+                &CompleteCall {
                     result: json!("yes"),
                 },
             )

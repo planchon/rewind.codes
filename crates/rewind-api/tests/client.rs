@@ -13,12 +13,12 @@ use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use futures_util::StreamExt;
+use rewind_api::calls::{CallGone, CallStreamMessage, CallStreamQuery, CompleteCall};
 use rewind_api::common::{Labels, Payload, RunMode, RunStatus, Timestamp};
 use rewind_api::events::{EventsQuery, StreamEvent};
 use rewind_api::headers::IdempotencyKey;
 use rewind_api::problem::{self, Problem, ProblemType};
 use rewind_api::runs::{Run, RunFilter, StartRun};
-use rewind_api::tasks::{CompleteTask, TaskGone, TaskStreamEvent, TaskStreamQuery};
 use rewind_api::{Client, Error, routes};
 use serde_json::{Value, json};
 
@@ -155,7 +155,7 @@ fn app(log: Log) -> Router {
             }),
         )
         .route(
-            routes::TASK_COMPLETE,
+            routes::CALL_COMPLETE,
             post(|state: State<Log>, request: Request| async move {
                 record(state, request).await;
                 StatusCode::NO_CONTENT
@@ -178,7 +178,7 @@ fn app(log: Log) -> Router {
             }),
         )
         .route(
-            routes::TASK_STREAM,
+            routes::CALL_STREAM,
             get(|headers: HeaderMap, RawQuery(query): RawQuery| async move {
                 assert_eq!(headers.get(header::ACCEPT).unwrap(), "text/event-stream");
                 assert_eq!(
@@ -191,7 +191,7 @@ fn app(log: Log) -> Router {
                     "idempotencyKey": "r1/3", "attempt": 1, "labels": {}
                 });
                 let body = format!(
-                    ":\n\nevent: task\ndata: {task}\n\nevent: later\ndata: {{}}\n\n:\n\n\
+                    ":\n\nevent: call\ndata: {task}\n\nevent: later\ndata: {{}}\n\n:\n\n\
                      event: gone\ndata: {}\n\n",
                     json!({ "token": "tk_1" })
                 );
@@ -356,15 +356,15 @@ async fn the_event_stream_skips_keep_alives_and_reads_each_event() {
 #[tokio::test]
 async fn the_task_stream_hands_tasks_and_skips_comments_and_unknown_events() {
     let (client, _) = serve_tcp().await;
-    let query = TaskStreamQuery {
+    let query = CallStreamQuery {
         action_set: Some("ab".into()),
         actions: vec!["ask_user".into(), "approve".into()],
         slots: Some(4),
         worker: Some("w-1".into()),
-        ..TaskStreamQuery::default()
+        ..CallStreamQuery::default()
     };
-    let events: Vec<TaskStreamEvent> = client
-        .task_stream(&query)
+    let events: Vec<CallStreamMessage> = client
+        .call_stream(&query)
         .await
         .unwrap()
         .map(Result::unwrap)
@@ -372,7 +372,7 @@ async fn the_task_stream_hands_tasks_and_skips_comments_and_unknown_events() {
         .await;
     assert_eq!(events.len(), 2);
     match &events[0] {
-        TaskStreamEvent::Task(task) => {
+        CallStreamMessage::Call(task) => {
             assert_eq!(task.token, "tk_1");
             assert_eq!(task.action, "ask_user");
             assert_eq!(task.args, json!({ "question": "ok?" }));
@@ -381,7 +381,7 @@ async fn the_task_stream_hands_tasks_and_skips_comments_and_unknown_events() {
     }
     assert_eq!(
         events[1],
-        TaskStreamEvent::Gone(TaskGone {
+        CallStreamMessage::Gone(CallGone {
             token: "tk_1".into()
         })
     );
@@ -409,16 +409,16 @@ async fn the_embedded_client_talks_over_the_socket_without_a_key() {
 
     let client = Client::embedded(&socket).unwrap();
     client
-        .complete_task(
+        .complete_call(
             "tok-1",
-            &CompleteTask {
+            &CompleteCall {
                 result: json!([1, 2]),
             },
         )
         .await
         .unwrap();
     let seen = log.lock().unwrap().clone();
-    assert_eq!(seen.path, "/v1/tasks/tok-1/complete");
+    assert_eq!(seen.path, "/v1/calls/tok-1/complete");
     assert_eq!(seen.authorization, None);
     assert_eq!(seen.body, json!({ "result": [1, 2] }));
 
