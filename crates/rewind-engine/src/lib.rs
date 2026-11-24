@@ -19,7 +19,7 @@
 //!
 //! - [`fork`]: following a parent's history with a corrected code, and whether a code is
 //!   compatible with a history; [`replay`]: rebuilding a code from its history.
-//! - [`projector`]: what committed entries project (a run's summary, its lifecycle events);
+//! - [`projector`]: what committed events project (a run's summary, its lifecycle events);
 //!   [`telemetry`]: the spans, logs and run metrics derived from them; [`failures`]: the
 //!   signatures and fingerprints that group failed, cancelled and aborted runs.
 //! - [`attachments`]: the secrets a run attaches, and who may attach them.

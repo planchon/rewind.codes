@@ -17,7 +17,7 @@ pub(crate) fn run(run: &Run) -> String {
     if let Some(parent) = &run.parent {
         let _ = write!(text, " (fork of {}", parent.handle);
         if let Some(at) = parent.at {
-            let _ = write!(text, " at entry {at}");
+            let _ = write!(text, " at event {at}");
         }
         text.push(')');
     }
@@ -142,7 +142,7 @@ pub(crate) fn payload(payload: &Payload) -> String {
     match &payload.value {
         Some(value) => value.to_string(),
         None => format!(
-            "{} ({} bytes, `rewind trace` --entry shows it; digest {})",
+            "{} ({} bytes, `rewind trace` --event shows it; digest {})",
             payload.preview, payload.bytes, payload.digest
         ),
     }
@@ -375,9 +375,9 @@ mod tests {
         let mut quarantined = active_run();
         quarantined.quarantine = Some(Quarantine {
             cause: QuarantineCause::NonDeterminism,
-            reason: "entry 4 differs".into(),
+            reason: "event 4 differs".into(),
         });
-        assert!(run(&quarantined).contains("quarantined (non_determinism): entry 4 differs"));
+        assert!(run(&quarantined).contains("quarantined (non_determinism): event 4 differs"));
     }
 
     #[test]

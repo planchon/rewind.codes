@@ -7,7 +7,7 @@
 //! attachments as JSON objects, booleans as integers, times in milliseconds.
 
 use rewind_core::{
-    Attachments, Digest, Epoch, Event, HistoryEntry, JsonValue, Lifecycle, Payload, RunId,
+    Attachments, Digest, Epoch, Event, HistoryEvent, JsonValue, Lifecycle, Payload, RunId,
     SecretRef, Seq,
 };
 use rewind_engine::ports::legacy::{
@@ -204,7 +204,7 @@ fn run_from_row(row: &Row) -> Result<LegacyRun, Error> {
         ended_at: row.opt_ts(22)?,
         history: match row.opt_digest(23)? {
             Some(document) => LegacyHistory::Archived(document),
-            None => LegacyHistory::Entries(Vec::new()),
+            None => LegacyHistory::Events(Vec::new()),
         },
         inbox: Vec::new(),
         signal_keys: Vec::new(),
@@ -258,14 +258,14 @@ async fn fill(connection: &Connection, run: &mut LegacyRun) -> Result<(), Error>
     )
     .await?;
     if !rows.is_empty() {
-        let LegacyHistory::Entries(entries) = &mut run.history else {
+        let LegacyHistory::Events(events) = &mut run.history else {
             return Err(corrupt(format!(
                 "run {} is archived and still has entries",
                 run.run.id
             )));
         };
         for row in rows {
-            entries.push(HistoryEntry {
+            events.push(HistoryEvent {
                 index: row.u64(0)?,
                 recorded_at: row.ts(1)?,
                 event: event(&row.text(2)?)?,

@@ -119,7 +119,7 @@ pub struct WorkflowCase {
 pub struct Fork {
     /// The corrected code, next to `scenario.json`.
     pub code: String,
-    /// Go live from this entry of the parent's history.
+    /// Go live from this event of the parent's history.
     #[serde(default)]
     pub at: Option<u64>,
     /// The fork's input; the parent's when absent.
@@ -259,8 +259,8 @@ pub struct ExpectedAbort {
 pub struct ReplayCheck {
     /// Another code, next to `scenario.json`, replayed against the recorded history.
     pub code: Option<String>,
-    /// Removes this entry from the recorded history before replaying it.
-    pub drop_entry: Option<usize>,
+    /// Removes this event from the recorded history before replaying it.
+    pub drop_event: Option<usize>,
     /// The replay diverges with exactly this message.
     pub diverges: Option<String>,
     /// The replay fails with exactly this message (an invalid history).

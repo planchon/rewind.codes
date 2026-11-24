@@ -23,7 +23,7 @@ use std::time::Duration;
 
 use futures_util::Stream;
 use rewind_core::{
-    Digest, HistoryEntry, JsonValue, PartitionId, RunHandle, RunId, RunStarted, Seq, Shape,
+    Digest, HistoryEvent, JsonValue, PartitionId, RunHandle, RunId, RunStarted, Seq, Shape,
     Timestamp,
 };
 
@@ -205,7 +205,7 @@ pub enum PartitionRequest {
     /// The run of the tenant a handle names, live or sealed: answered `Run`
     /// (`archi/06-storage-and-scale.md`, "Run handles").
     Find { tenant: TenantId, handle: RunHandle },
-    /// The entries of the run's attempt from `from`, from its partition or its sealed attempt:
+    /// The events of the run's attempt from `from`, from its partition or its sealed attempt:
     /// answered `History`. With `values`, every payload up to 64 KiB is inlined as a value, as
     /// the sealed attempt holds it; larger ones stay digests, their values in the run's blobs.
     History {
@@ -267,7 +267,7 @@ pub enum PartitionReply {
     Done(Result<bool, Refusal>),
     Answered(Result<(), Refusal>),
     Run(Result<Option<RunView>, Refusal>),
-    History(Result<Option<Vec<HistoryEntry>>, Refusal>),
+    History(Result<Option<Vec<HistoryEvent>>, Refusal>),
     Tasks(Result<Option<Vec<TaskRecord>>, Refusal>),
     Found(Result<Found, Refusal>),
     Counted(Result<(Vec<Counters>, Gauges), Refusal>),
@@ -557,9 +557,9 @@ pub struct Changed {
     pub namespace: NamespaceName,
     /// Its summary as it is now; `None` once it is erased.
     pub summary: Option<RunSummary>,
-    /// For a subscription to the run: the entries the batch committed, from the index the
+    /// For a subscription to the run: the events the batch committed, from the index the
     /// subscriber has.
-    pub entries: Vec<HistoryEntry>,
+    pub events: Vec<HistoryEvent>,
 }
 
 // -------------------------------------------------------------------------------------------
@@ -576,7 +576,7 @@ pub struct ActivationRequest {
     /// The attempt's history. `None` when the owner expects the executor's instance cache to
     /// hold the run at its history length: a miss answers [`ActivationResult::Miss`], and the
     /// owner sends it again with the history.
-    pub history: Option<Vec<HistoryEntry>>,
+    pub history: Option<Vec<HistoryEvent>>,
     /// The payload records of the history and the inbox held by their digest.
     pub payloads: Vec<PayloadRecord>,
     /// For a fork's first activation: its parent's history and payloads.
@@ -592,7 +592,7 @@ pub struct ActivationRequest {
 #[derive(Clone, Debug, PartialEq)]
 pub struct ParentHistory {
     pub run: RunId,
-    pub entries: Vec<HistoryEntry>,
+    pub events: Vec<HistoryEvent>,
     pub payloads: Vec<PayloadRecord>,
     /// The parent's sealed attempt, when it was read from the archive.
     pub sealed: Option<Box<SealedAttempt>>,
@@ -649,6 +649,6 @@ pub struct Committed {
     pub cpu: Duration,
     /// The run's mode, from its `run_started`.
     pub mode: Option<rewind_core::RunMode>,
-    /// The run metrics of the new entries, recorded once the batch is durable.
+    /// The run metrics of the new events, recorded once the batch is durable.
     pub measurements: Vec<crate::metrics::RunMeasurement>,
 }

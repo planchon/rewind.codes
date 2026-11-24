@@ -216,7 +216,7 @@ impl<S: PartitionStore<Log: 'static> + 'static> World<S> {
         self.edge.get_run(&mut gateway, run).await.unwrap().unwrap()
     }
 
-    pub async fn history(&mut self, run: &RunRef) -> Vec<rewind_core::HistoryEntry> {
+    pub async fn history(&mut self, run: &RunRef) -> Vec<rewind_core::HistoryEvent> {
         let mut gateway = self.driver.gateway(&self.at);
         self.edge
             .history(&mut gateway, run, 0, true)

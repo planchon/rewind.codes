@@ -1,8 +1,8 @@
 //! The LLM trace of a run (`archi/05-testing-and-observability.md`, "LLM trace and metrics"):
-//! `GET /v1/runs/{id}/trace?format=llm`, `rewind trace <run> [--entry n]`, and the trace of a
+//! `GET /v1/runs/{id}/trace?format=llm`, `rewind trace <run> [--event n]`, and the trace of a
 //! scenario's report. It is rendered from the history alone, to be read by a model: one line per
 //! call, timer, signal and log, with its line in `workflow.ts` and its outcome folded in;
-//! payloads are truncated, and any entry can be shown in full.
+//! payloads are truncated, and any event can be shown in full.
 //!
 //! ```text
 //! run 0198…0001  suspended · waiting for signal "approval" (timeout in 2d 23h)
@@ -17,7 +17,7 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use rewind_core::{
-    Annotation, Command, Completion, Digest, Event, HistoryEntry, JsonValue, Lifecycle, Payload,
+    Annotation, Command, Completion, Digest, Event, HistoryEvent, JsonValue, Lifecycle, Payload,
     RunId, RunState, RunStatus, Seq, Timestamp, canonical_json,
 };
 
@@ -35,7 +35,7 @@ const EVENT_WIDTH: usize = 58;
 pub struct TraceInput<'a> {
     pub head: &'a RunHead,
     /// The history of the run's attempt.
-    pub history: &'a [HistoryEntry],
+    pub history: &'a [HistoryEvent],
     /// The records of the payloads the history holds by digest: their size and preview.
     pub payloads: &'a BTreeMap<Digest, PayloadRecord>,
     /// For the time left before a deadline.
@@ -73,7 +73,7 @@ struct Shown<'a> {
 
 fn render(
     record: &Shown<'_>,
-    history: &[HistoryEntry],
+    history: &[HistoryEvent],
     payloads: &BTreeMap<Digest, PayloadRecord>,
     now: Timestamp,
 ) -> String {
@@ -100,7 +100,7 @@ fn render(
     if let Some(parent) = record.parent {
         let _ = write!(second, " · forked from {}", parent.run);
         if let Some(at) = parent.at {
-            let _ = write!(second, " (live from entry {at})");
+            let _ = write!(second, " (live from event {at})");
         }
     }
     let _ = writeln!(out, "{second}");
@@ -137,14 +137,14 @@ fn render(
         + "\n"
 }
 
-/// One entry in full, with its payload's value when it has one.
-pub fn render_entry(
-    entry: &HistoryEntry,
+/// One event in full, with its payload's value when it has one.
+pub fn render_event(
+    entry: &HistoryEvent,
     value: Option<&JsonValue>,
     started_at: Timestamp,
 ) -> String {
     let mut out = format!(
-        "entry {} · {} · {} ({})\n",
+        "event {} · {} · {} ({})\n",
         entry.index,
         entry.event.name(),
         elapsed(entry.recorded_at, started_at),
@@ -187,7 +187,7 @@ fn pretty(value: &JsonValue) -> String {
 fn headline(
     record: &Shown<'_>,
     state: Option<&RunState>,
-    history: &[HistoryEntry],
+    history: &[HistoryEvent],
     now: Timestamp,
 ) -> String {
     let mut headline = match state.map(RunState::outcome) {
@@ -263,17 +263,17 @@ fn left(at: Timestamp, now: Timestamp) -> String {
 
 /// How each command ended, by `seq`, and how each signal wait ended, by index.
 struct Outcomes<'h> {
-    calls: BTreeMap<Seq, &'h HistoryEntry>,
-    timers: BTreeMap<Seq, &'h HistoryEntry>,
+    calls: BTreeMap<Seq, &'h HistoryEvent>,
+    timers: BTreeMap<Seq, &'h HistoryEvent>,
     /// Timers that implement the timeout of a signal wait: seq → signal name.
     timeouts: BTreeMap<Seq, &'h str>,
-    waits: BTreeMap<u64, &'h HistoryEntry>,
+    waits: BTreeMap<u64, &'h HistoryEvent>,
     /// The run has ended: what is still pending was dropped with it.
     ended: bool,
 }
 
 impl<'h> Outcomes<'h> {
-    fn of(history: &'h [HistoryEntry]) -> Self {
+    fn of(history: &'h [HistoryEvent]) -> Self {
         let mut outcomes = Self {
             calls: BTreeMap::new(),
             timers: BTreeMap::new(),
@@ -328,9 +328,9 @@ struct Line {
     outcome: Option<String>,
 }
 
-/// The line of an entry, or `None` for an entry folded into another one's line.
+/// The line of an event, or `None` for an event folded into another one's line.
 fn describe(
-    entry: &HistoryEntry,
+    entry: &HistoryEvent,
     outcomes: &Outcomes<'_>,
     payloads: &BTreeMap<Digest, PayloadRecord>,
 ) -> Option<Line> {
@@ -342,7 +342,7 @@ fn describe(
         })
     };
     let since =
-        |end: &HistoryEntry| duration(end.recorded_at.0.saturating_sub(entry.recorded_at.0));
+        |end: &HistoryEvent| duration(end.recorded_at.0.saturating_sub(entry.recorded_at.0));
     match &entry.event {
         Event::Lifecycle(Lifecycle::RunStarted(started)) => line(
             format!("run started · input {}", payload(&started.input, payloads)),
@@ -361,13 +361,13 @@ fn describe(
             let outcome = match outcomes.calls.get(seq) {
                 Some(end) => match &end.event {
                     Event::Completion(Completion::CallCompleted { result, .. }) => format!(
-                        "→ {} · {} · entry {}",
+                        "→ {} · {} · event {}",
                         summary(result, payloads),
                         since(end),
                         end.index
                     ),
                     Event::Completion(Completion::CallFailed { error, .. }) => format!(
-                        "→ ActionError {}: {} · {} · entry {}",
+                        "→ ActionError {}: {} · {} · event {}",
                         error.kind.as_str(),
                         truncate(&error.message, PREVIEW_CHARS),
                         since(end),
@@ -405,7 +405,7 @@ fn describe(
             let outcome = match outcomes.waits.get(&entry.index) {
                 Some(end) => match &end.event {
                     Event::Completion(Completion::SignalReceived { .. }) => {
-                        format!("→ received after {} · entry {}", since(end), end.index)
+                        format!("→ received after {} · event {}", since(end), end.index)
                     }
                     _ => format!("→ timed out after {}", since(end)),
                 },

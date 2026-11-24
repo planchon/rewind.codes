@@ -757,7 +757,7 @@ mod tests {
             activation.record("span_id", tracing::field::display(own));
             activation.record("parent_span_id", tracing::field::display(run_span));
             drop(early);
-            tracing::info_span!("replay", entries = 12_u64).in_scope(|| {
+            tracing::info_span!("replay", events = 12_u64).in_scope(|| {
                 tracing::info!(cached = false, "instance rebuilt");
             });
             tracing::info_span!("same_trace", trace_id = %trace).in_scope(|| {});

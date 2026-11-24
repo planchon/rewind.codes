@@ -6,7 +6,7 @@
 use crate::action_set::ActionSet;
 use crate::artifacts::Code;
 use crate::digest::Digest;
-use crate::event::HistoryEntry;
+use crate::event::HistoryEvent;
 use crate::history::{HistoryError, validate_history};
 use crate::ids::RunId;
 
@@ -18,7 +18,7 @@ pub struct RunExport {
     pub code: Code,
     /// The pinned action set the run started with: its digest is `run_started.action_set`.
     pub action_set: ActionSet,
-    pub entries: Vec<HistoryEntry>,
+    pub events: Vec<HistoryEvent>,
 }
 
 /// A run export whose parts do not belong together.
@@ -36,7 +36,7 @@ impl RunExport {
     /// Checks that the history is well formed and that the code and the action set are the ones
     /// its `run_started` records.
     pub fn check(&self) -> Result<(), RunExportError> {
-        let started = validate_history(&self.entries)?;
+        let started = validate_history(&self.events)?;
         let code = self.code.digest();
         if code != started.code {
             return Err(RunExportError::CodeMismatch {
@@ -69,7 +69,7 @@ mod tests {
             run: RunId::from_u128(7),
             code: code.clone(),
             action_set: action_set.clone(),
-            entries: vec![HistoryEntry {
+            events: vec![HistoryEvent {
                 index: 0,
                 recorded_at: Timestamp(1_000),
                 event: Event::Lifecycle(Lifecycle::RunStarted(RunStarted {
@@ -106,7 +106,7 @@ mod tests {
         ));
 
         let mut empty = document(&code, &action_set);
-        empty.entries.clear();
+        empty.events.clear();
         assert_eq!(
             empty.check(),
             Err(RunExportError::History(HistoryError::Empty))

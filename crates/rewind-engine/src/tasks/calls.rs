@@ -434,7 +434,7 @@ pub(crate) async fn call_key<P: Plane>(
                 .await
                 .map_err(|error| read(error.to_string()))?
             {
-                Some(sealed) => sealed.entries,
+                Some(sealed) => sealed.events,
                 None => break,
             }
         } else {

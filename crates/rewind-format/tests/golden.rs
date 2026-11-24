@@ -36,7 +36,7 @@ fn every_fixture_decodes_to_a_valid_run_export_and_re_encodes_to_the_same_bytes(
         // The history is valid, and the code and action set are those of its run_started.
         export.check().unwrap_or_else(|err| panic!("{name}: {err}"));
         assert_eq!(encode_run_export(&export), fixture, "{name}");
-        for entry in &export.entries {
+        for entry in &export.events {
             let event = encode_event(&entry.event);
             assert_eq!(
                 decode_event(&event).unwrap(),
@@ -63,7 +63,7 @@ fn decodes_to_the_expected_domain_values() {
             .starts_with("import { github } from \"rewind:tools\";")
     );
     assert_eq!(export.action_set.actions().len(), 7);
-    let history = export.entries;
+    let history = export.events;
     assert_eq!(history.len(), 16);
     assert_eq!(
         history[0].event,
@@ -135,7 +135,7 @@ fn decodes_to_the_expected_domain_values() {
         RunStatus::Cancelled
     );
 
-    let ttl = decode_run_export(FIXTURES[1].1).unwrap().entries;
+    let ttl = decode_run_export(FIXTURES[1].1).unwrap().events;
     assert_eq!(
         ttl[9].event,
         Event::Completion(Completion::CancelRequested {
@@ -147,7 +147,7 @@ fn decodes_to_the_expected_domain_values() {
         RunStatus::Completed
     );
 
-    let aborted = decode_run_export(FIXTURES[2].1).unwrap().entries;
+    let aborted = decode_run_export(FIXTURES[2].1).unwrap().events;
     assert_eq!(
         aborted[1].event,
         Event::Lifecycle(Lifecycle::RunAborted(AbortReason {
@@ -331,26 +331,26 @@ fn rejects_what_v1_does_not_define() {
     let action_set = r#"{"actions":[],"servers":[],"v":1}"#;
     let document = |fields: &str| format!(r#"{{"v":1,{fields}}}"#);
     let valid = document(&format!(
-        r#""run":"019b7a3c-8f00-7000-8000-000000000003","code":"s","action_set":{action_set},"entries":[]"#
+        r#""run":"019b7a3c-8f00-7000-8000-000000000003","code":"s","action_set":{action_set},"events":[]"#
     ));
-    assert_eq!(decode_run_export(&valid).unwrap().entries, vec![]);
+    assert_eq!(decode_run_export(&valid).unwrap().events, vec![]);
     let invalid_documents = [
         // An unknown field.
         format!(
-            r#""run":"019b7a3c-8f00-7000-8000-000000000003","code":"s","action_set":{action_set},"entries":[],"x":1"#
+            r#""run":"019b7a3c-8f00-7000-8000-000000000003","code":"s","action_set":{action_set},"events":[],"x":1"#
         ),
         // A missing field.
-        r#""entries":[]"#.to_owned(),
-        format!(r#""code":"s","action_set":{action_set},"entries":[]"#),
+        r#""events":[]"#.to_owned(),
+        format!(r#""code":"s","action_set":{action_set},"events":[]"#),
         format!(
-            r#""run":"019b7a3c-8f00-7000-8000-000000000003","action_set":{action_set},"entries":[]"#
+            r#""run":"019b7a3c-8f00-7000-8000-000000000003","action_set":{action_set},"events":[]"#
         ),
-        r#""run":"019b7a3c-8f00-7000-8000-000000000003","code":"s","entries":[]"#.to_owned(),
+        r#""run":"019b7a3c-8f00-7000-8000-000000000003","code":"s","events":[]"#.to_owned(),
         // A run that is not a run id.
-        format!(r#""run":"x","code":"s","action_set":{action_set},"entries":[]"#),
+        format!(r#""run":"x","code":"s","action_set":{action_set},"events":[]"#),
         // A code that is not a source.
         format!(
-            r#""run":"019b7a3c-8f00-7000-8000-000000000003","code":1,"action_set":{action_set},"entries":[]"#
+            r#""run":"019b7a3c-8f00-7000-8000-000000000003","code":1,"action_set":{action_set},"events":[]"#
         ),
     ];
     for json in invalid_documents {
@@ -366,14 +366,14 @@ fn rejects_what_v1_does_not_define() {
     }
     assert!(matches!(
         decode_run_export(&document(
-            r#""run":"019b7a3c-8f00-7000-8000-000000000003","code":"s","action_set":{"servers":[],"v":1},"entries":[]"#
+            r#""run":"019b7a3c-8f00-7000-8000-000000000003","code":"s","action_set":{"servers":[],"v":1},"events":[]"#
         )),
         Err(FormatError::InvalidActionSet(_))
     ));
     assert!(matches!(
         decode_run_export(&document(&format!(
-            r#""run":"019b7a3c-8f00-7000-8000-000000000003","code":"s","action_set":{action_set},"entries":[{{"index":0,"recorded_at":0}}]"#
+            r#""run":"019b7a3c-8f00-7000-8000-000000000003","code":"s","action_set":{action_set},"events":[{{"index":0,"recorded_at":0}}]"#
         ))),
-        Err(FormatError::InvalidEntry { position: 0, .. })
+        Err(FormatError::InvalidHistoryEvent { position: 0, .. })
     ));
 }

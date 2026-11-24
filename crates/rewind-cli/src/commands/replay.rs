@@ -12,7 +12,7 @@
 use std::path::Path;
 
 use rewind_api::runs::ExportAs;
-use rewind_core::{Code, Command, Completion, Event, HistoryEntry, NonDeterminism, RunExport, Seq};
+use rewind_core::{Code, Command, Completion, Event, HistoryEvent, NonDeterminism, RunExport, Seq};
 use rewind_engine::ports::{CodeExecutor, RunRef, TenantId};
 use rewind_engine::replay::{self, ReplayEnd, ReplayError, ReplayInput};
 use rewind_engine::{Compatibility, ForkError, ForkPoint, Limits};
@@ -31,7 +31,7 @@ use crate::output::Console;
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ReplayReport {
     pub(crate) run: String,
-    pub(crate) entries: u64,
+    pub(crate) events: u64,
     /// The code reproduces the history: its own code, or the corrected one up to the end
     /// of the run (or its cancellation or abort).
     pub(crate) matches: bool,
@@ -145,10 +145,10 @@ fn executor() -> Result<V8Executor, CliError> {
 
 /// Replays a history with its own code.
 pub(crate) async fn replay_export(export: &RunExport) -> Result<ReplayReport, CliError> {
-    let entries = export.entries.len() as u64;
+    let events = export.events.len() as u64;
     let mut report = ReplayReport {
         run: export.run.to_string(),
-        entries,
+        events,
         matches: false,
         verdict: String::new(),
         fork: None,
@@ -164,18 +164,18 @@ pub(crate) async fn replay_export(export: &RunExport) -> Result<ReplayReport, Cl
         run: &run,
         compiled: compiled.as_ref(),
         action_set: &export.action_set,
-        history: &export.entries,
+        history: &export.events,
     };
     match replay::replay(&executor, &replay::InExport, input).await {
         Ok(rebuilt) => {
             report.matches = true;
             report.verdict = match rebuilt.end {
                 ReplayEnd::EndOfHistory => format!(
-                    "the code replays the {entries} entries of the history of run {}",
+                    "the code replays the {events} events of the history of run {}",
                     export.run
                 ),
                 ReplayEnd::Aborted(reason) => format!(
-                    "the code replays the {entries} entries of the history of run {}, up to its abort ({reason})",
+                    "the code replays the {events} events of the history of run {}, up to its abort ({reason})",
                     export.run
                 ),
             };
@@ -196,10 +196,10 @@ pub(crate) async fn compatibility(
     code: &Code,
     at: Option<u64>,
 ) -> Result<ReplayReport, CliError> {
-    let entries = export.entries.len() as u64;
+    let events = export.events.len() as u64;
     let mut report = ReplayReport {
         run: export.run.to_string(),
-        entries,
+        events,
         matches: false,
         verdict: String::new(),
         fork: None,
@@ -232,7 +232,7 @@ pub(crate) async fn compatibility(
             format!("the code diverges from the history: {mismatch}")
         }
         ForkPoint::At(index) => format!(
-            "the code follows the history of run {} up to entry {index}, where a fork goes live",
+            "the code follows the history of run {} up to event {index}, where a fork goes live",
             export.run
         ),
         ForkPoint::Stopped => {
@@ -241,14 +241,14 @@ pub(crate) async fn compatibility(
         point @ (ForkPoint::EndOfParent
         | ForkPoint::ParentCancelled(_)
         | ForkPoint::ParentAborted(_)) => format!(
-            "the code is compatible with the history of run {} ({entries} entries): {point}",
+            "the code is compatible with the history of run {} ({events} events): {point}",
             export.run
         ),
     };
-    let actions = actions_by_seq(&export.entries);
+    let actions = actions_by_seq(&export.events);
     // What a fork reuses: the calls it copies with their outcomes while it follows the run,
     // and the calls it inherits still pending, whose recorded outcomes it delivers.
-    let mut reused = completed_before(&export.entries, live_from(&found.point, entries));
+    let mut reused = completed_before(&export.events, live_from(&found.point, events));
     reused.extend(found.reused.iter().copied());
     reused.sort();
     reused.dedup();
@@ -273,10 +273,10 @@ pub(crate) async fn compatibility(
     Ok(report)
 }
 
-/// The entry where a fork stops following the run.
-fn live_from(point: &ForkPoint, entries: u64) -> u64 {
+/// The event where a fork stops following the run.
+fn live_from(point: &ForkPoint, events: u64) -> u64 {
     match point {
-        ForkPoint::EndOfParent => entries,
+        ForkPoint::EndOfParent => events,
         ForkPoint::At(index)
         | ForkPoint::ParentCancelled(index)
         | ForkPoint::ParentAborted(index) => *index,
@@ -289,9 +289,9 @@ fn live_from(point: &ForkPoint, entries: u64) -> u64 {
     }
 }
 
-/// The calls scheduled and completed before entry `end`.
-fn completed_before(entries: &[HistoryEntry], end: u64) -> Vec<Seq> {
-    let before = entries.iter().filter(|entry| entry.index < end);
+/// The calls scheduled and completed before event `end`.
+fn completed_before(events: &[HistoryEvent], end: u64) -> Vec<Seq> {
+    let before = events.iter().filter(|entry| entry.index < end);
     let scheduled: Vec<Seq> = before
         .clone()
         .filter_map(|entry| match &entry.event {
@@ -310,8 +310,8 @@ fn completed_before(entries: &[HistoryEntry], end: u64) -> Vec<Seq> {
 }
 
 /// The action of each call the history schedules.
-fn actions_by_seq(entries: &[HistoryEntry]) -> Vec<(Seq, String)> {
-    entries
+fn actions_by_seq(events: &[HistoryEvent]) -> Vec<(Seq, String)> {
+    events
         .iter()
         .filter_map(|entry| match &entry.event {
             Event::Command(Command::ScheduleCall { seq, action, .. }) => {

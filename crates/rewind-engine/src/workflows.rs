@@ -19,7 +19,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use rewind_core::{
-    Attachments, Code, Command, Completion, Digest, Event, HistoryEntry, InvalidWorkflow,
+    Attachments, Code, Command, Completion, Digest, Event, HistoryEvent, InvalidWorkflow,
     JsonValue, Payload, RunId, Seq, Workflow, WorkflowOp, WorkflowSchemas, ended_run,
     parse_duration,
 };
@@ -150,13 +150,13 @@ pub struct StartWorkflow {
     pub idempotency_key: Option<String>,
 }
 
-/// The runs started by the calls of `entries` whose end `entries` does not hold, with the `seq`
+/// The runs started by the calls of `events` whose end `events` does not hold, with the `seq`
 /// of their call.
-pub(crate) fn started_runs(entries: &[HistoryEntry]) -> Vec<(Seq, RunId)> {
+pub(crate) fn started_runs(events: &[HistoryEvent]) -> Vec<(Seq, RunId)> {
     let mut starts = BTreeSet::new();
     let mut ended = BTreeSet::new();
     let mut runs = Vec::new();
-    for entry in entries {
+    for entry in events {
         match &entry.event {
             Event::Command(Command::ScheduleCall { seq, action, .. })
                 if matches!(WorkflowOp::of_action(action), Some((_, WorkflowOp::Start))) =>
@@ -301,8 +301,8 @@ mod tests {
 
     use super::*;
 
-    fn entry(index: u64, event: Event) -> HistoryEntry {
-        HistoryEntry {
+    fn entry(index: u64, event: Event) -> HistoryEvent {
+        HistoryEvent {
             index,
             recorded_at: Timestamp(0),
             event,
@@ -327,7 +327,7 @@ mod tests {
                     .into_completion(Seq(seq)),
             )
         };
-        let entries = [
+        let events = [
             entry(1, start(1)),
             entry(2, start(2)),
             entry(3, started(1, a)),
@@ -340,7 +340,7 @@ mod tests {
                 }),
             ),
         ];
-        assert_eq!(started_runs(&entries), [(Seq(2), b)]);
+        assert_eq!(started_runs(&events), [(Seq(2), b)]);
     }
 
     #[test]

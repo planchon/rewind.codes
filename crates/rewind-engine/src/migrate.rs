@@ -36,7 +36,7 @@ use std::num::NonZeroU16;
 use std::time::Duration;
 
 use rewind_core::{
-    ActionSet, Digest, HistoryEntry, JsonValue, PartitionId, Payload, RunState, Timestamp,
+    ActionSet, Digest, HistoryEvent, JsonValue, PartitionId, Payload, RunState, Timestamp,
 };
 
 use crate::executors::derive;
@@ -243,7 +243,7 @@ where
         let run = legacy.run.clone();
         let tenant = &run.tenant;
         let history = match &legacy.history {
-            LegacyHistory::Entries(entries) => entries.clone(),
+            LegacyHistory::Events(events) => events.clone(),
             LegacyHistory::Archived(document) => self
                 .legacy_blobs
                 .export(tenant, *document)
@@ -353,7 +353,7 @@ where
 
         let mut inlined = history.clone();
         inline(&mut inlined, &values);
-        // Every entry is new: the state before them is a run's that has none.
+        // Every event is new: the state before them is a run's that has none.
         let none = RunState::new();
         let openings = derive::Openings::new(&inlined, 0, &none);
         let mut counters = vec![derive::created_counters(&head)];
@@ -373,7 +373,7 @@ where
             run: run.clone(),
             head: head.clone(),
             start_key: legacy.idempotency_key.clone(),
-            entries: history.clone(),
+            events: history.clone(),
             payloads: legacy.payloads.clone(),
             summary,
         });
@@ -387,7 +387,7 @@ where
                     attempt: Attempt::FIRST,
                     code,
                     action_set,
-                    entries: sealed,
+                    events: sealed,
                 })
                 .await?;
             let retention = self
@@ -538,9 +538,9 @@ fn table_values(records: &[PayloadRecord]) -> BTreeMap<Digest, JsonValue> {
         .collect()
 }
 
-/// Puts the known values back in the entries' payloads.
-fn inline(entries: &mut [HistoryEntry], values: &BTreeMap<Digest, JsonValue>) {
-    for entry in entries {
+/// Puts the known values back in the events' payloads.
+fn inline(events: &mut [HistoryEvent], values: &BTreeMap<Digest, JsonValue>) {
+    for entry in events {
         if let Some(payload) = payload_mut(&mut entry.event)
             && let Payload::Digest(digest) = payload
             && let Some(value) = values.get(digest)

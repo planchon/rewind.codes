@@ -34,7 +34,7 @@ use crate::render::{
     describe_check, describe_matches, describe_page, describe_recorded, describe_refusal,
     describe_retry_refused, describe_run, describe_runs, describe_save_refused, describe_secrets,
     describe_test_results, describe_workflow, describe_workflow_details, describe_workflow_refusal,
-    entry_text, json, quoted, truncate_end, truncate_middle, workflow_ref,
+    event_text, json, quoted, truncate_end, truncate_middle, workflow_ref,
 };
 
 /// What a tool call returns to the model, and to the harness.
@@ -292,7 +292,7 @@ impl<A: Api> Session<'_, A> {
 
     pub(crate) async fn get_run(&self, input: &Values) -> Handled {
         let run_id = require_string(input, "run_id")?;
-        let entry = optional_index(input, "entry")?;
+        let entry = optional_index(input, "event")?;
         let offset = optional_index(input, "offset")?;
         let wait = match input.get("wait") {
             None => None,
@@ -305,9 +305,9 @@ impl<A: Api> Session<'_, A> {
         // The run is named by its handle from here on, whatever the model gave.
         let handle = run.handle.clone();
         if let Some(index) = entry {
-            let text = entry_text(&self.api.run_entry(&run_id, index).await?);
+            let text = event_text(&self.api.run_event(&run_id, index).await?);
             let content = describe_page(
-                &format!("Entry {index} of run {handle}"),
+                &format!("Event {index} of run {handle}"),
                 &text,
                 usize::try_from(offset.unwrap_or(0)).unwrap_or(usize::MAX),
                 self.limits.output,
@@ -316,7 +316,7 @@ impl<A: Api> Session<'_, A> {
                         "get_run({})",
                         args(&[
                             ("run_id", json!(handle)),
-                            ("entry", json!(index)),
+                            ("event", json!(index)),
                             ("offset", json!(next)),
                         ])
                     )

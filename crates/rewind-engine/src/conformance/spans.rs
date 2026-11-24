@@ -321,7 +321,7 @@ pub async fn statuses_kinds_and_times_are_kept<E: SpanExporter + Collector>(expo
         message: "TypeError: x is not a function".into(),
     };
     let mut wait = timer_span();
-    wait.span_id = span_id(run(), SpanKey::Entry(9));
+    wait.span_id = span_id(run(), SpanKey::Event(9));
     wait.trace_id = trace();
     wait.name = "signal approval".into();
     wait.start = at(86_400_000 * 3);

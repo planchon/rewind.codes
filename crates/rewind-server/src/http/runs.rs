@@ -1,4 +1,4 @@
-//! Runs: start, list, state, trace, entries, signals, cancellation, forks, export, quarantine,
+//! Runs: start, list, state, trace, events, signals, cancellation, forks, export, quarantine,
 //! the secrets they attach and erasure (`archi/03-execution.md`, `archi/07-code-architecture.md`).
 //! Each goes through the edge to the owner of the run's partition.
 
@@ -11,7 +11,7 @@ use axum::response::{IntoResponse, Response};
 use rewind_api::ProblemType;
 use rewind_api::access::Permission;
 use rewind_api::common::Payload;
-use rewind_api::events::Entry;
+use rewind_api::events::HistoryEvent as EventView;
 use rewind_api::runs::{
     CancelRun, ExportAs, ExportQuery, ForkRun, GetRunQuery, Run, RunFilter, RunPage,
     SignalAccepted, StartRun, Trace, TraceFormat, TraceQuery,
@@ -258,17 +258,17 @@ pub(super) async fn trace(
     }))
 }
 
-/// `GET /v1/runs/{id}/entries/{idx}`: the entry in full, its payload's value included.
+/// `GET /v1/runs/{id}/events/{idx}`: the event in full, its payload's value included.
 pub(super) async fn entry(
     State(app): State<Arc<App>>,
     caller: Caller,
     Path((id, idx)): Path<(String, String)>,
-) -> Result<Json<Entry>, ApiError> {
+) -> Result<Json<EventView>, ApiError> {
     caller.require(Permission::RunsRead)?;
     let view = app.run(&caller, &id).await?;
     let missing = || {
         ApiError::not_found(format!(
-            "run {id} has no entry {idx}: its entries are numbered from 0 to {}",
+            "run {id} has no event {idx}: its events are numbered from 0 to {}",
             view.head.history_len.saturating_sub(1)
         ))
     };
@@ -279,10 +279,10 @@ pub(super) async fn entry(
         .into_iter()
         .find(|entry| entry.index == index)
         .ok_or_else(missing)?;
-    let mut entries = views
-        .entries(&view.head.run, std::slice::from_ref(&entry), u64::MAX)
+    let mut events = views
+        .events(&view.head.run, std::slice::from_ref(&entry), u64::MAX)
         .await?;
-    entries.pop().map(Json).ok_or_else(missing)
+    events.pop().map(Json).ok_or_else(missing)
 }
 
 /// `POST /v1/runs/{id}/signals/{name}`.
@@ -459,7 +459,7 @@ pub(super) async fn export(
         .edge
         .export_run(&mut app.gateway(), &view.head.run)
         .await?;
-    if document.entries.is_empty() {
+    if document.events.is_empty() {
         return Err(ApiError::invalid(format!(
             "run {id} has not started yet: its history is empty"
         )));
@@ -468,7 +468,7 @@ pub(super) async fn export(
         ExportAs::Run => rewind_format::encode_run_export(&document),
         ExportAs::Cassette => {
             let cassette =
-                rewind_core::Cassette::from_history(&document.entries, Matching::Sequential)
+                rewind_core::Cassette::from_history(&document.events, Matching::Sequential)
                     .map_err(ApiError::internal)?;
             rewind_format::encode_cassette(&cassette)
         }

@@ -1,8 +1,8 @@
-//! Events and history entries, v1.
+//! Events and events, v1.
 
 use rewind_core::{
     AbortKind, AbortReason, ActionFailure, ActionFailureKind, Annotation, Callsite, CancelReason,
-    Command, Completion, Digest, Epoch, Event, HistoryEntry, Lifecycle, LogLevel, Payload, RunMode,
+    Command, Completion, Digest, Epoch, Event, HistoryEvent, Lifecycle, LogLevel, Payload, RunMode,
     RunStarted, ScriptError, Seed, Seq, Timestamp, canonical_json,
 };
 use serde::de::Deserializer;
@@ -16,7 +16,7 @@ use serde_json::value::RawValue;
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct EntryV1 {
+pub(crate) struct HistoryEventV1 {
     index: u64,
     recorded_at: u64,
     event: EventV1,
@@ -212,9 +212,9 @@ pub(crate) fn decode_event(value: Value) -> Result<Event, String> {
     dto.try_into()
 }
 
-pub(crate) fn decode_entry(value: Value) -> Result<HistoryEntry, String> {
-    let dto: EntryV1 = serde_json::from_value(value).map_err(|err| err.to_string())?;
-    Ok(HistoryEntry {
+pub(crate) fn decode_history_event(value: Value) -> Result<HistoryEvent, String> {
+    let dto: HistoryEventV1 = serde_json::from_value(value).map_err(|err| err.to_string())?;
+    Ok(HistoryEvent {
         index: dto.index,
         recorded_at: Timestamp(dto.recorded_at),
         event: dto.event.try_into()?,
@@ -224,8 +224,8 @@ pub(crate) fn decode_entry(value: Value) -> Result<HistoryEntry, String> {
 // -------------------------------------------------------------------------------------------
 // Domain → DTO
 
-impl From<&HistoryEntry> for EntryV1 {
-    fn from(entry: &HistoryEntry) -> Self {
+impl From<&HistoryEvent> for HistoryEventV1 {
+    fn from(entry: &HistoryEvent) -> Self {
         Self {
             index: entry.index,
             recorded_at: entry.recorded_at.as_millis(),

@@ -10,7 +10,7 @@
 //! mailbox ─► handle ─► units (changes + what follows once durable) ─► committer: one batch
 //!                                                                      of every unit pending
 //!   Durable ─► fan-out: replies, runs to the ready queue, tasks on their way, timers to the
-//!              wheel, ended attempts to the sealer, entries to the projections, counts to the
+//!              wheel, ended attempts to the sealer, events to the projections, counts to the
 //!              organization actors, Changed to the subscribed edges
 //! ```
 //!

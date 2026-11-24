@@ -12,7 +12,7 @@
 //! | --- | --- | --- |
 //! | `h r` | run head | `run`, `runs_in_range` (a range of ids); run ids are unique across tenants, so a creation checks it |
 //! | `m t r` | run summary | `summary` |
-//! | `e t r attempt:u32 index:u64` | history entry | `history` (a range from `index`) |
+//! | `e t r attempt:u32 index:u64` | event | `history` (a range from `index`) |
 //! | `i t r id:u64` | inbox item | `inbox` (a range); the recovery's runnable runs (the family) |
 //! | `k t r key` | signal key | `signal_key` |
 //! | `j t r seq:u32` | call task | `tasks` (a range); the recovery's tasks (the family) |
@@ -371,7 +371,7 @@ pub(crate) fn index_of(tenant: &TenantId, namespace: Option<&NamespaceName>) -> 
     }
 }
 
-/// The prefix of an order's entries in an index.
+/// The prefix of an order's events in an index.
 pub(crate) fn index_family(index: Key, order: RunOrder) -> Key {
     index.byte(family(order))
 }

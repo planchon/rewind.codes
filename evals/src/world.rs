@@ -20,7 +20,7 @@ use std::time::Duration;
 use rewind_check::TsgoChecker;
 use rewind_core::{
     Action, ActionRoute, ActionSet, Builtin, Code, Command, Completion, Digest, Event,
-    HistoryEntry, McpServer, McpTransport, RetiredTest, RunId, RunOutcome, RunState, RunStatus,
+    HistoryEvent, McpServer, McpTransport, RetiredTest, RunId, RunOutcome, RunState, RunStatus,
     Seq, Timestamp, UpdatedTest,
 };
 use rewind_engine::adapters::{
@@ -445,10 +445,10 @@ impl World {
     }
 
     /// The run's history, every payload loaded.
-    pub async fn history(&self, run: &RunRef) -> Result<Vec<HistoryEntry>, EdgeError> {
+    pub async fn history(&self, run: &RunRef) -> Result<Vec<HistoryEvent>, EdgeError> {
         let mut driver = self.driver.lock().await;
         let mut gateway = driver.gateway(&self.at);
-        Ok(self.edge.export_run(&mut gateway, run).await?.entries)
+        Ok(self.edge.export_run(&mut gateway, run).await?.events)
     }
 
     /// The run's call tasks.
@@ -913,7 +913,7 @@ impl World {
 
 /// The name a run gave the webhook whose URL is `url`: the argument of its call of `webhook`
 /// that answered it.
-fn webhook_name(history: &[HistoryEntry], url: &str) -> Option<String> {
+fn webhook_name(history: &[HistoryEvent], url: &str) -> Option<String> {
     let answered: Option<Seq> = history.iter().find_map(|entry| match &entry.event {
         Event::Completion(Completion::CallCompleted { seq, result, .. })
             if result
@@ -957,7 +957,7 @@ pub struct RunReport {
     /// With `failed`, `cancelled` or `aborted`: `Name: message`.
     pub error: Option<String>,
     /// Every payload loaded.
-    pub history: Vec<HistoryEntry>,
+    pub history: Vec<HistoryEvent>,
 }
 
 /// A workflow version at the end of an episode.

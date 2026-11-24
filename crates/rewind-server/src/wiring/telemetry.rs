@@ -3,7 +3,7 @@
 //! - service telemetry: the process's `tracing` subscriber, logs on standard error filtered by
 //!   `--log`, and spans and logs over OTLP when an endpoint is configured;
 //! - run telemetry: the `SpanExporter` the outbox hands the spans and log records the owners
-//!   derive from committed entries, over OTLP when an endpoint is configured, dropped otherwise.
+//!   derive from committed events, over OTLP when an endpoint is configured, dropped otherwise.
 //!
 //! OTLP is on when `--otlp-endpoint` is given, or when the standard
 //! `OTEL_EXPORTER_OTLP_ENDPOINT` (or `…_TRACES_ENDPOINT`) is set; the other `OTEL_*` variables

@@ -670,7 +670,7 @@ impl<P: Plane> Owner<P> {
             run: run.clone(),
             head: head.clone(),
             start_key,
-            entries: Vec::new(),
+            events: Vec::new(),
             payloads: Vec::new(),
             summary: summary.clone(),
         });
@@ -1331,7 +1331,7 @@ impl<P: Plane> Owner<P> {
             activation.outbox.push(entry.clone());
             unit.then(After::Project(entry));
         }
-        let entries = activation.entries.len() as u64;
+        let events = activation.events.len() as u64;
         let new_tasks: Vec<crate::ports::TaskRef> = activation
             .tasks
             .iter()
@@ -1343,7 +1343,7 @@ impl<P: Plane> Owner<P> {
         let consumed = activation.consumed.clone();
         let tasks = activation.tasks.clone();
         let namespace = head.namespace.clone();
-        let started = previous_len == 0 && entries > 0;
+        let started = previous_len == 0 && events > 0;
         unit.change(Change::Activation(Box::new(activation)));
         // The runs it reaches, in the same batch.
         if terminal && let Some(end) = &end {
@@ -1937,7 +1937,7 @@ pub(crate) async fn end_value<P: Plane>(
     else {
         return Ok(None);
     };
-    let history = read.into_entries(0);
+    let history = read.into_events(0);
     let state = rewind_core::RunState::from_history(&history).map_err(|error| error.to_string())?;
     let Some(outcome) = state.outcome() else {
         return Ok(None);
@@ -1973,12 +1973,12 @@ async fn seal_attempt<P: Plane>(
     head: &RunHead,
 ) -> Result<Duration, String> {
     let run = &head.run;
-    let mut entries = log
+    let mut events = log
         .history(run, head.attempt, 0)
         .await
         .map_err(|error| error.to_string())?;
     let mut values: BTreeMap<Digest, Option<JsonValue>> = BTreeMap::new();
-    for entry in &mut entries {
+    for entry in &mut events {
         if let Some(payload) = crate::payloads::payload_mut(&mut entry.event)
             && let Payload::Digest(digest) = payload
         {
@@ -2019,7 +2019,7 @@ async fn seal_attempt<P: Plane>(
             attempt: head.attempt,
             code: code.code,
             action_set: action_set.action_set,
-            entries,
+            events,
         })
         .await
         .map_err(|error| error.to_string())?;

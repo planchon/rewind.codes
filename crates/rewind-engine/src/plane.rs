@@ -152,7 +152,7 @@ pub enum HarnessActions {
 /// time and heap size are enforced by the executor.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Limits {
-    /// Entries in a run's history.
+    /// Events in a run's history.
     pub max_history_len: u64,
     /// Commands the code may emit in one activation.
     pub max_commands_per_activation: usize,

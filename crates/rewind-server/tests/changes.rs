@@ -120,7 +120,7 @@ async fn a_member_follows_a_run_from_its_start_to_its_end() {
         .into_iter()
         .find(|listed| listed.id == run.id)
         .unwrap();
-    // What moves while the run's last entries are projected aside, the same object.
+    // What moves while the run's last events are projected aside, the same object.
     let stable = |run: &RunSummary| {
         let mut value = serde_json::to_value(run).unwrap();
         for moving in ["historyLen", "lastActivityAt", "calls", "errors"] {

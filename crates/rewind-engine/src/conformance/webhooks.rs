@@ -137,7 +137,7 @@ pub async fn every_kind_of_event_is_delivered<S: WebhookSender, R: Receiver>(
             waiting_for: vec!["action ask_user #1".into()],
         },
         WebhookEventKind::RunQuarantined {
-            reason: "history entry 1 is call #1 a({}), but the code emitted b({})".into(),
+            reason: "event 1 is call #1 a({}), but the code emitted b({})".into(),
         },
         WebhookEventKind::ActionSchemaChanged {
             seq: Seq(2),

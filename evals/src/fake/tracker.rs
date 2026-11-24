@@ -43,7 +43,7 @@ const SUBJECTS: [&str; 12] = [
     "Rate limit too strict",
     "Search ignores accents",
     "Slow dashboard",
-    "Missing audit entries",
+    "Missing audit events",
     "CSV import drops rows",
     "Password reset email late",
     "API returns 500 on empty body",

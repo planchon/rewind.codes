@@ -187,10 +187,10 @@ pub struct Callsite {
     pub column: u32,
 }
 
-/// An entry of an attempt's history: the event in the stored format v1.
+/// An event of an attempt's history: the event in the stored format v1.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Entry {
+pub struct HistoryEvent {
     pub index: u64,
     pub recorded_at: u64,
     #[serde(with = "with::event")]

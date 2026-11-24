@@ -408,7 +408,7 @@ impl PinnedWorkflow {
         format!("{WORKFLOWS_GROUP}.{}.{}", self.name, op.as_str())
     }
 
-    /// Its entry in the pinned action set document v1.
+    /// Its event in the pinned action set document v1.
     pub(crate) fn document(&self) -> Value {
         let mut object = Map::new();
         object.insert("name".into(), json!(self.name));

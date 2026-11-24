@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use crate::event::{
-    AbortReason, Annotation, Command, Completion, Event, HistoryEntry, Lifecycle, RunMode,
+    AbortReason, Annotation, Command, Completion, Event, HistoryEvent, Lifecycle, RunMode,
     ScriptError,
 };
 use crate::history::{HistoryError, Validator};
@@ -69,7 +69,7 @@ pub struct AwaitedSignal {
     pub name: String,
     /// The timer implementing the timeout, if any.
     pub timeout: Option<Seq>,
-    /// Index of the `signal_awaited` entry.
+    /// Index of the `signal_awaited` event.
     pub since: u64,
 }
 
@@ -85,7 +85,7 @@ pub struct RunState {
     mode: Option<RunMode>,
     pending_calls: BTreeMap<Seq, String>,
     pending_timers: BTreeMap<Seq, Timestamp>,
-    /// The index of the entry that opened each pending call and timer.
+    /// The index of the event that opened each pending call and timer.
     opened: BTreeMap<Seq, u64>,
     awaited_signals: Vec<AwaitedSignal>,
     outcome: Option<RunOutcome>,
@@ -121,7 +121,7 @@ impl RunState {
         }
     }
 
-    pub fn from_history(history: &[HistoryEntry]) -> Result<Self, HistoryError> {
+    pub fn from_history(history: &[HistoryEvent]) -> Result<Self, HistoryError> {
         let mut state = Self::new();
         for entry in history {
             state.apply(entry)?;
@@ -129,9 +129,9 @@ impl RunState {
         Ok(state)
     }
 
-    /// Folds the next entry of the history. The entry is checked against the history so far
+    /// Folds the next event of the history. The event is checked against the history so far
     /// (see [`validate_history`](crate::validate_history)); on error the state is unchanged.
-    pub fn apply(&mut self, entry: &HistoryEntry) -> Result<(), HistoryError> {
+    pub fn apply(&mut self, entry: &HistoryEvent) -> Result<(), HistoryError> {
         self.validator.check(entry)?;
         self.history_len += 1;
         self.started_at.get_or_insert(entry.recorded_at);
@@ -270,9 +270,9 @@ impl RunState {
         &self.pending_timers
     }
 
-    /// The index of the entry that opened the pending call or timer `seq`
+    /// The index of the event that opened the pending call or timer `seq`
     /// (`schedule_call`, `start_timer`): what is derived from a pending call or timer
-    /// reads its opening entry without walking the history.
+    /// reads its opening event without walking the history.
     pub fn opened_by(&self, seq: Seq) -> Option<u64> {
         self.opened.get(&seq).copied()
     }
@@ -290,12 +290,12 @@ impl RunState {
         self.started_at
     }
 
-    /// `recorded_at` of the last entry.
+    /// `recorded_at` of the last event.
     pub fn updated_at(&self) -> Option<Timestamp> {
         self.updated_at
     }
 
-    /// Number of entries folded, which is also the index of the next entry.
+    /// Number of events folded, which is also the index of the next event.
     pub fn history_len(&self) -> u64 {
         self.history_len
     }
@@ -310,11 +310,11 @@ mod tests {
     use crate::event::{AbortKind, CancelReason, RunStarted};
     use crate::ids::Seed;
 
-    fn entries(events: Vec<Event>) -> Vec<HistoryEntry> {
+    fn history_of(events: Vec<Event>) -> Vec<HistoryEvent> {
         events
             .into_iter()
             .enumerate()
-            .map(|(i, event)| HistoryEntry {
+            .map(|(i, event)| HistoryEvent {
                 index: i as u64,
                 recorded_at: Timestamp(1_000 + i as u64),
                 event,
@@ -380,7 +380,7 @@ mod tests {
 
     #[test]
     fn tracks_what_is_pending() {
-        let history = entries(vec![
+        let history = history_of(vec![
             started(),
             call(1),
             call(2),
@@ -412,14 +412,14 @@ mod tests {
         // The timeout of "approval" fires; a "comment" arrives.
         let mut state = state;
         state
-            .apply(&HistoryEntry {
+            .apply(&HistoryEvent {
                 index: 8,
                 recorded_at: Timestamp(6_000),
                 event: Event::Completion(Completion::TimerFired { seq: Seq(4) }),
             })
             .unwrap();
         state
-            .apply(&HistoryEntry {
+            .apply(&HistoryEvent {
                 index: 9,
                 recorded_at: Timestamp(6_001),
                 event: Event::Completion(Completion::SignalReceived {
@@ -437,7 +437,7 @@ mod tests {
 
     #[test]
     fn a_terminal_status_clears_everything_pending() {
-        let history = entries(vec![
+        let history = history_of(vec![
             started(),
             call(1),
             timer(2, 5_000),
@@ -458,7 +458,7 @@ mod tests {
 
     #[test]
     fn a_cancelled_error_means_cancelled() {
-        let cancelled = entries(vec![
+        let cancelled = history_of(vec![
             started(),
             Event::Completion(Completion::CancelRequested {
                 reason: CancelReason::Ttl,
@@ -469,7 +469,7 @@ mod tests {
             RunState::from_history(&cancelled).unwrap().status(),
             RunStatus::Cancelled
         );
-        let failed = entries(vec![started(), fail("TypeError")]);
+        let failed = history_of(vec![started(), fail("TypeError")]);
         assert_eq!(
             RunState::from_history(&failed).unwrap().status(),
             RunStatus::Failed
@@ -478,7 +478,7 @@ mod tests {
 
     #[test]
     fn rejects_malformed_histories() {
-        let err = |events: Vec<Event>| RunState::from_history(&entries(events)).unwrap_err();
+        let err = |events: Vec<Event>| RunState::from_history(&history_of(events)).unwrap_err();
         assert_eq!(err(vec![call(1)]), HistoryError::MissingRunStarted);
         assert_eq!(
             err(vec![started(), started()]),
@@ -486,10 +486,10 @@ mod tests {
         );
         assert_eq!(
             err(vec![started(), fail("Error"), call(1)]),
-            HistoryError::EntriesAfterEnd { index: 2 }
+            HistoryError::EventsAfterEnd { index: 2 }
         );
 
-        let mut gap = entries(vec![started(), call(1)]);
+        let mut gap = history_of(vec![started(), call(1)]);
         gap[1].index = 5;
         assert_eq!(
             RunState::from_history(&gap).unwrap_err(),
@@ -499,7 +499,7 @@ mod tests {
             }
         );
 
-        let mut backwards = entries(vec![started(), call(1)]);
+        let mut backwards = history_of(vec![started(), call(1)]);
         backwards[1].recorded_at = Timestamp(10);
         assert_eq!(
             RunState::from_history(&backwards).unwrap_err(),
@@ -508,10 +508,10 @@ mod tests {
     }
 
     #[test]
-    fn a_rejected_entry_leaves_the_state_unchanged() {
-        let mut state = RunState::from_history(&entries(vec![started()])).unwrap();
+    fn a_rejected_event_leaves_the_state_unchanged() {
+        let mut state = RunState::from_history(&history_of(vec![started()])).unwrap();
         let before = state.clone();
-        let wrong_index = HistoryEntry {
+        let wrong_index = HistoryEvent {
             index: 3,
             recorded_at: Timestamp(2_000),
             event: call(1),

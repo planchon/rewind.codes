@@ -99,7 +99,7 @@ async fn a_miss_reads_the_store_once_and_keeps_the_blob() {
     assert!(store.is_cached(&BlobOwner::Tests(tenant("acme")), digest));
     assert!(
         !store.is_cached(&BlobOwner::Tests(tenant("other")), digest),
-        "entries are per tenant"
+        "events are per tenant"
     );
 }
 

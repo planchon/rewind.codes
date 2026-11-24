@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-use rewind_core::{Digest, HistoryEntry, RunId};
+use rewind_core::{Digest, HistoryEvent, RunId};
 
 use crate::ports::TenantId;
 use crate::ports::legacy::{LegacyBlobs, LegacyError, LegacyRun, LegacyRuns};
@@ -18,7 +18,7 @@ pub struct MemoryLegacy {
 struct State {
     runs: BTreeMap<RunId, LegacyRun>,
     payloads: BTreeMap<(TenantId, Digest), Vec<u8>>,
-    exports: BTreeMap<(TenantId, Digest), Vec<HistoryEntry>>,
+    exports: BTreeMap<(TenantId, Digest), Vec<HistoryEvent>>,
     dropped: bool,
 }
 
@@ -38,10 +38,8 @@ impl MemoryLegacy {
     }
 
     /// Adds an archived run export of the tenant, by its digest.
-    pub fn put_export(&self, tenant: &TenantId, digest: Digest, entries: Vec<HistoryEntry>) {
-        self.lock()
-            .exports
-            .insert((tenant.clone(), digest), entries);
+    pub fn put_export(&self, tenant: &TenantId, digest: Digest, events: Vec<HistoryEvent>) {
+        self.lock().exports.insert((tenant.clone(), digest), events);
     }
 
     /// Whether the tables were dropped.
@@ -94,7 +92,7 @@ impl LegacyBlobs for MemoryLegacy {
         &self,
         tenant: &TenantId,
         digest: Digest,
-    ) -> Result<Option<Vec<HistoryEntry>>, LegacyError> {
+    ) -> Result<Option<Vec<HistoryEvent>>, LegacyError> {
         Ok(self.lock().exports.get(&(tenant.clone(), digest)).cloned())
     }
 }

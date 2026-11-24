@@ -17,7 +17,7 @@ use std::collections::BTreeSet;
 use std::future::Future;
 
 use rewind_core::{
-    ActionFailure, Command, Completion, Digest, Event, HistoryEntry, JsonValue, Lifecycle, Payload,
+    ActionFailure, Command, Completion, Digest, Event, HistoryEvent, JsonValue, Lifecycle, Payload,
     canonical_json, canonicalize,
 };
 
@@ -85,7 +85,7 @@ pub(crate) fn value_size(payload: &Payload) -> Option<usize> {
     payload.value().map(|value| canonical_json(value).len())
 }
 
-/// Moves the values above the inline tier out of the entries of a run, keeping
+/// Moves the values above the inline tier out of the events of a run, keeping
 /// their digests (`archi/06-storage-and-scale.md`, "Payloads"): those up to the table tier go to
 /// the run's payload records, committed with the batch; the larger ones to blobs under the run
 /// (`BlobOwner::Run`), put before the batch. A blob listed in `copied` (a fork's, from its
@@ -94,14 +94,14 @@ pub(crate) fn value_size(payload: &Payload) -> Option<usize> {
 pub(crate) async fn offload_into_run<B: BlobStore>(
     blobs: &B,
     run: &crate::ports::RunRef,
-    entries: &mut [HistoryEntry],
+    events: &mut [HistoryEvent],
     tiers: PayloadTiers,
     copied: &std::collections::BTreeMap<Digest, crate::ports::BlobOwner>,
 ) -> Result<Vec<PayloadRecord>, BlobError> {
     let owner = crate::ports::BlobOwner::Run(run.clone());
     let mut records = Vec::new();
     let mut seen = BTreeSet::new();
-    for entry in entries {
+    for entry in events {
         let Some(payload) = payload_mut(&mut entry.event) else {
             continue;
         };
@@ -169,13 +169,13 @@ pub(crate) async fn load<P: PayloadSource>(
     }
 }
 
-/// Loads every payload of the entries: the history as a self-contained document.
+/// Loads every payload of the events: the history as a self-contained document.
 pub(crate) async fn load_all<P: PayloadSource>(
     source: &P,
     tenant: &TenantId,
-    entries: &mut [HistoryEntry],
+    events: &mut [HistoryEvent],
 ) -> Result<(), BlobError> {
-    for entry in entries {
+    for entry in events {
         if let Some(payload) = payload_mut(&mut entry.event)
             && let Payload::Digest(_) = payload
         {
@@ -226,8 +226,8 @@ mod tests {
     use crate::executors::activation::Carried;
     use crate::ports::{BlobOwner, RunRef};
 
-    fn entry(value: JsonValue) -> HistoryEntry {
-        HistoryEntry {
+    fn entry(value: JsonValue) -> HistoryEvent {
+        HistoryEvent {
             index: 0,
             recorded_at: Timestamp(0),
             event: Event::Completion(Completion::CallCompleted {
@@ -251,18 +251,18 @@ mod tests {
         let small = json!("small");
         let medium = json!("m".repeat(40));
         let large = json!("l".repeat(100));
-        let mut entries = vec![
+        let mut events = vec![
             entry(small.clone()),
             entry(medium.clone()),
             entry(large.clone()),
         ];
-        let records = offload_into_run(&blobs, &run, &mut entries, tiers, &BTreeMap::new())
+        let records = offload_into_run(&blobs, &run, &mut events, tiers, &BTreeMap::new())
             .await
             .unwrap();
 
-        assert_eq!(payload_of(&entries[0].event), Some(&Payload::Value(small)));
+        assert_eq!(payload_of(&events[0].event), Some(&Payload::Value(small)));
         assert_eq!(
-            payload_of(&entries[1].event),
+            payload_of(&events[1].event),
             Some(&Payload::Digest(Payload::digest_of(&medium)))
         );
         assert_eq!(records.len(), 2);
@@ -287,7 +287,7 @@ mod tests {
             blobs: &blobs,
             owners: vec![owner],
         };
-        for (entry, value) in [(&entries[1], medium), (&entries[2], large)] {
+        for (entry, value) in [(&events[1], medium), (&events[2], large)] {
             let held = payload_of(&entry.event).unwrap();
             assert!(matches!(held, Payload::Digest(_)));
             assert_eq!(load(&source, &run.tenant, held).await.unwrap(), value);

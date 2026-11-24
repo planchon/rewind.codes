@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use rewind_core::{
-    ActionFailure, ActionSet, Annotation, Code, Command, Completion, Event, HistoryEntry, RunMode,
+    ActionFailure, ActionSet, Annotation, Code, Command, Completion, Event, HistoryEvent, RunMode,
     RunOutcome, RunState, RunStatus, Workflow, WorkflowSchemas,
 };
 use rewind_engine::ports::{
@@ -135,7 +135,7 @@ async fn harness_with(
 
 struct Run {
     id: RunRef,
-    history: Vec<HistoryEntry>,
+    history: Vec<HistoryEvent>,
     state: RunState,
 }
 

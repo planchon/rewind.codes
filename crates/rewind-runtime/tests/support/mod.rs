@@ -11,7 +11,7 @@ use std::num::NonZeroU16;
 use std::sync::Arc;
 use std::time::Duration;
 
-use rewind_core::{Code, HistoryEntry, JsonValue, Timestamp};
+use rewind_core::{Code, HistoryEvent, JsonValue, Timestamp};
 use rewind_engine::adapters::{
     ControlPlaneChanges, MemoryArchive, MemoryBlobs, MemoryCatalog, MemoryCluster,
     MemoryPartitions, MemorySecrets, MemorySpanExporter, MemoryWebhooks, SeededEntropy,
@@ -144,14 +144,14 @@ impl<D: ActionDispatcher + 'static> World<D> {
     }
 
     /// The run's history, every payload loaded.
-    pub async fn history(&self, run: &RunRef) -> Vec<HistoryEntry> {
+    pub async fn history(&self, run: &RunRef) -> Vec<HistoryEvent> {
         let mut driver = self.driver.lock().await;
         let mut gateway = driver.gateway(&self.at);
         self.edge
             .export_run(&mut gateway, run)
             .await
             .unwrap()
-            .entries
+            .events
     }
 
     /// Replays the run's history with its code, or `code`.

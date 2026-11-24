@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use object_store::ObjectStore;
-use rewind_core::{Digest, HistoryEntry, PartitionId, RunId, Shape, Timestamp};
+use rewind_core::{Digest, HistoryEvent, PartitionId, RunId, Shape, Timestamp};
 use rewind_engine::ports::{
     Attempt, Batch, CountedNamespace, Counters, DueTimer, Found, Gauges, InboxItem, IndexedSummary,
     NamespaceName, NodeId, OrganizationState, Page, PartitionError, PartitionLog, PartitionStore,
@@ -286,7 +286,7 @@ impl SlateLog {
         bytes.map(|bytes| decode(&bytes)).transpose()
     }
 
-    /// The entries under `prefix`, in `order`, after `after` (a suffix of `prefix`).
+    /// The events under `prefix`, in `order`, after `after` (a suffix of `prefix`).
     async fn scan(
         &self,
         prefix: &keys::Key,
@@ -511,7 +511,7 @@ impl PartitionLog for SlateLog {
         run: &RunRef,
         attempt: Attempt,
         from: u64,
-    ) -> Result<Vec<HistoryEntry>, PartitionError> {
+    ) -> Result<Vec<HistoryEvent>, PartitionError> {
         let prefix = keys::history_of(run, attempt);
         let start = if from == 0 {
             Bound::Unbounded
@@ -528,11 +528,11 @@ impl PartitionLog for SlateLog {
             )
             .await
             .map_err(|err| self.error(err))?;
-        let mut entries = Vec::new();
+        let mut events = Vec::new();
         while let Some(entry) = iterator.next().await.map_err(|err| self.error(err))? {
-            entries.push(codec::entry_of(decode(&entry.value)?));
+            events.push(codec::event_of(decode(&entry.value)?));
         }
-        Ok(entries)
+        Ok(events)
     }
 
     async fn inbox(&self, run: &RunRef) -> Result<Vec<InboxItem>, PartitionError> {

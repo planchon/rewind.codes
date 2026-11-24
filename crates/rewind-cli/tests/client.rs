@@ -429,7 +429,7 @@ async fn export(
         )
         .unwrap();
         let cassette =
-            rewind_core::Cassette::from_history(&export.entries, rewind_core::Matching::Sequential)
+            rewind_core::Cassette::from_history(&export.events, rewind_core::Matching::Sequential)
                 .unwrap();
         let text = rewind_format::encode_cassette(&cassette);
         return axum::Json(serde_json::from_str::<Value>(&text).unwrap()).into_response();
@@ -848,7 +848,7 @@ async fn status_runs_trace_fork_and_release() {
         .await;
     assert_eq!(exit, Exit::Success, "{out}");
     assert!(
-        out.contains("run local/script/run-2 completed (fork of local/script/run-1 at entry 3)"),
+        out.contains("run local/script/run-2 completed (fork of local/script/run-1 at event 3)"),
         "{out}"
     );
     let fork = server
@@ -921,7 +921,7 @@ async fn a_run_is_exported_and_replayed_here() {
     // `rewind replay <run>` exports the history and replays it in this process.
     let (exit, out, err) = server.rewind(&["replay", "run-1"]).await;
     assert_eq!(exit, Exit::Success, "{out}{err}");
-    assert!(out.contains("the code replays the 4 entries"), "{out}");
+    assert!(out.contains("the code replays the 4 events"), "{out}");
 }
 
 #[tokio::test(flavor = "multi_thread")]

@@ -208,9 +208,9 @@ pub(super) async fn trace(
     console: &mut Console,
 ) -> Result<Exit, CliError> {
     let client = server.client().await?;
-    match args.entry {
+    match args.event {
         Some(index) => {
-            let entry = client.run_entry(&args.run, index).await?;
+            let entry = client.run_event(&args.run, index).await?;
             console.print_json(&entry)?;
         }
         None => {

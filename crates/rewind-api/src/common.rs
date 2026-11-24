@@ -237,7 +237,7 @@ impl ToSchema for Duration {
 // -------------------------------------------------------------------------------------------
 // Payloads
 
-/// Above this size, a payload's value is left out of run states, entries streamed and
+/// Above this size, a payload's value is left out of run states, events streamed and
 /// webhooks: read it with `GET /v1/payloads/{digest}`. The agent tools bound what they hand the
 /// model to the same size.
 pub const PAYLOAD_VALUE_LIMIT: u64 = 256 * 1024;

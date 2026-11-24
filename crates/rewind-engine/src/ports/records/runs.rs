@@ -36,11 +36,11 @@ pub struct RunMetadata {
 }
 
 /// The run a fork was started from. The fork's first activation copies the parent's history
-/// while the fork's commands match it, up to the entry `at` when the request gave one.
+/// while the fork's commands match it, up to the event `at` when the request gave one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ForkParent {
     pub run: RunId,
-    /// Go live from this entry of the parent's history, even if the commands still match.
+    /// Go live from this event of the parent's history, even if the commands still match.
     pub at: Option<u64>,
 }
 

@@ -10,7 +10,7 @@
 use std::collections::BTreeMap;
 
 use rewind_core::{
-    Attachments, Digest, Epoch, Event, HistoryEntry, JsonValue, Lifecycle, Payload, RunId,
+    Attachments, Digest, Epoch, Event, HistoryEvent, JsonValue, Lifecycle, Payload, RunId,
     SecretRef, Seq,
 };
 use rewind_engine::ports::legacy::{
@@ -194,7 +194,7 @@ fn run_from_row(row: &PgRow) -> Result<LegacyRun, Error> {
         ended_at: row.opt_ts(22)?,
         history: match row.opt_digest(23)? {
             Some(document) => LegacyHistory::Archived(document),
-            None => LegacyHistory::Entries(Vec::new()),
+            None => LegacyHistory::Events(Vec::new()),
         },
         inbox: Vec::new(),
         signal_keys: Vec::new(),
@@ -279,13 +279,13 @@ impl PostgresLegacy {
             .await?
         {
             let run = &mut runs[index(&row)?];
-            let entry = HistoryEntry {
+            let entry = HistoryEvent {
                 index: row.u64(1)?,
                 recorded_at: row.ts(2)?,
                 event: event(&row.text(3)?)?,
             };
             match &mut run.history {
-                LegacyHistory::Entries(entries) => entries.push(entry),
+                LegacyHistory::Events(events) => events.push(entry),
                 LegacyHistory::Archived(_) => {
                     return Err(corrupt(format!(
                         "run {} is archived and still has entries",

@@ -1,5 +1,5 @@
 {
-  "description": "A code changed after the run: an argument differs, and the replay of the history stops at the exact entry where it diverges.",
+  "description": "A code changed after the run: an argument differs, and the replay of the history stops at the exact event where it diverges.",
   "input": {
     "repo": "acme/api"
   },
@@ -13,6 +13,6 @@
   },
   "replay": {
     "code": "changed.ts",
-    "diverges": "history entry 3 is call #3 github.get_issue({\"number\":3,\"repo\":\"acme/api\"}), but the code emitted call #3 github.get_issue({\"number\":4,\"repo\":\"acme/api\"})"
+    "diverges": "event 3 is call #3 github.get_issue({\"number\":3,\"repo\":\"acme/api\"}), but the code emitted call #3 github.get_issue({\"number\":4,\"repo\":\"acme/api\"})"
   }
 }

@@ -15,7 +15,7 @@ use rewind_blob::{
     CachedArchive, CachedBlobs, DEFAULT_ARCHIVE_CACHE_CAPACITY, DEFAULT_CACHE_CAPACITY,
     FileArchive, FileBlobs, LegacyFiles, LegacyS3, S3Archive, S3Blobs, S3Config,
 };
-use rewind_core::{Digest, HistoryEntry};
+use rewind_core::{Digest, HistoryEvent};
 use rewind_engine::ports::legacy::{LegacyBlobs, LegacyError};
 use rewind_engine::ports::partition::Attempt;
 use rewind_engine::ports::{
@@ -269,7 +269,7 @@ impl LegacyBlobs for LegacyBlobStore {
         &self,
         tenant: &TenantId,
         digest: Digest,
-    ) -> Result<Option<Vec<HistoryEntry>>, LegacyError> {
+    ) -> Result<Option<Vec<HistoryEvent>>, LegacyError> {
         match self {
             Self::Files(files) => files.export(tenant, digest).await,
             Self::S3(s3) => s3.export(tenant, digest).await,

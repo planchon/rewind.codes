@@ -49,7 +49,7 @@ fn decode(run: &RunRef, attempt: Attempt, bytes: &[u8]) -> Result<SealedAttempt,
         attempt,
         code: document.code,
         action_set: document.action_set,
-        entries: document.entries,
+        events: document.events,
     })
 }
 

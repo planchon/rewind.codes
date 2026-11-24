@@ -23,8 +23,8 @@ async fn a_history_that_no_longer_matches_its_code_does_not_replay() {
     let case = Case::load("epoch-1/blue/fan_out_out_of_order").unwrap();
     let export = std::fs::read_to_string(case.history_path()).unwrap();
     let mut document = rewind_format::decode_run_export(&export).unwrap();
-    let Event::Command(Command::ScheduleCall { args, .. }) = &mut document.entries[2].event else {
-        panic!("entry 2 is the second call");
+    let Event::Command(Command::ScheduleCall { args, .. }) = &mut document.events[2].event else {
+        panic!("event 2 is the second call");
     };
     *args = Payload::Value(json!({ "number": 20, "repo": "acme/api" }));
 
@@ -32,10 +32,7 @@ async fn a_history_that_no_longer_matches_its_code_does_not_replay() {
     let Replayed::Fails(message) = replayed else {
         panic!("{replayed:?}")
     };
-    assert!(
-        message.starts_with("history entry 2 is call #2"),
-        "{message}"
-    );
+    assert!(message.starts_with("event 2 is call #2"), "{message}");
 
     // The same history, untouched, replays.
     let document = rewind_format::decode_run_export(&export).unwrap();

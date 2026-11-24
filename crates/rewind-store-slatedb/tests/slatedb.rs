@@ -88,7 +88,7 @@ fn create(run: &RunRef) -> Change {
         run: run.clone(),
         head,
         start_key: None,
-        entries: Vec::new(),
+        events: Vec::new(),
         payloads: Vec::new(),
         summary,
     }

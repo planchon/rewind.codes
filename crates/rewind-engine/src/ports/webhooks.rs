@@ -93,7 +93,7 @@ impl WebhookEventType {
 #[derive(Clone, Debug, PartialEq)]
 pub struct WebhookEvent {
     /// Deterministic, so that a receiver can deduplicate a delivery repeated after a crash:
-    /// `{run_id}/{index}` for an event projected from the history entry `index`,
+    /// `{run_id}/{index}` for an event projected from the event `index`,
     /// `{run_id}/{seq}/{attempt}` for an event about a call's task, the alert's
     /// [`QuotaAlertKey::event_id`] for a quota alert.
     pub id: String,

@@ -1,4 +1,4 @@
-//! What the API shows of a run: its state, its history entries, its payloads, its tasks. Every
+//! What the API shows of a run: its state, its events, its payloads, its tasks. Every
 //! view is read from the run's owner (its head, summary, history and tasks, live or sealed) and
 //! from the run's blobs; nothing here writes.
 
@@ -6,13 +6,13 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use rewind_api::calls::{CallState, ParkedReason};
 use rewind_api::common::{AbortReason, Callsite, Labels, Payload, RunMode, timestamp};
-use rewind_api::events::Entry;
+use rewind_api::events::HistoryEvent as EventView;
 use rewind_api::runs::{
     Deliveries, FailedCall, ForkParent, LogLine, Quarantine, QuarantineCause, Run, RunError,
     Waiting,
 };
 use rewind_core::{
-    Annotation, Command, Completion, Digest, Event, HistoryEntry, Lifecycle, RunOutcome, RunState,
+    Annotation, Command, Completion, Digest, Event, HistoryEvent, Lifecycle, RunOutcome, RunState,
     ScriptError, Seq,
 };
 use rewind_engine::failures::code_location;
@@ -79,10 +79,10 @@ pub(crate) fn code_frame(source: &str, line: u32, column: u32) -> Option<String>
     Some(frame)
 }
 
-/// The digests of the payloads the entries hold by digest: those above 64 KiB, in the run's
+/// The digests of the payloads the events hold by digest: those above 64 KiB, in the run's
 /// blobs.
-fn held_by_digest(entries: &[HistoryEntry]) -> BTreeSet<Digest> {
-    entries
+fn held_by_digest(events: &[HistoryEvent]) -> BTreeSet<Digest> {
+    events
         .iter()
         .filter_map(|entry| match payload_of(&entry.event) {
             Some(rewind_core::Payload::Digest(digest)) => Some(*digest),
@@ -98,7 +98,7 @@ impl Views<'_> {
         &self,
         run: &RunRef,
         from: u64,
-    ) -> Result<Vec<HistoryEntry>, ApiError> {
+    ) -> Result<Vec<HistoryEvent>, ApiError> {
         self.app
             .edge
             .history(&mut self.app.gateway(), run, from, true)
@@ -107,7 +107,7 @@ impl Views<'_> {
     }
 
     /// The run's whole history.
-    pub(crate) async fn history(&self, run: &RunRef) -> Result<Vec<HistoryEntry>, ApiError> {
+    pub(crate) async fn history(&self, run: &RunRef) -> Result<Vec<HistoryEvent>, ApiError> {
         self.history_from(run, 0).await
     }
 
@@ -188,19 +188,19 @@ impl Views<'_> {
         Ok(None)
     }
 
-    /// The API views of history entries of a run.
-    pub(crate) async fn entries(
+    /// The API views of events of a run.
+    pub(crate) async fn events(
         &self,
         run: &RunRef,
-        entries: &[HistoryEntry],
+        events: &[HistoryEvent],
         limit: u64,
-    ) -> Result<Vec<Entry>, ApiError> {
+    ) -> Result<Vec<EventView>, ApiError> {
         let held = self
-            .blob_payloads(run, held_by_digest(entries), limit)
+            .blob_payloads(run, held_by_digest(events), limit)
             .await?;
-        Ok(entries
+        Ok(events
             .iter()
-            .map(|entry| Entry::from_core(entry, |payload| view(payload, &held, limit)))
+            .map(|entry| EventView::from_core(entry, |payload| view(payload, &held, limit)))
             .collect())
     }
 
@@ -219,7 +219,7 @@ impl Views<'_> {
     pub(crate) async fn run_with(
         &self,
         view: &RunView,
-        history: &[HistoryEntry],
+        history: &[HistoryEvent],
         tasks: &[TaskRecord],
     ) -> Result<Run, ApiError> {
         let head = &view.head;
@@ -342,7 +342,7 @@ impl Views<'_> {
     async fn run_error(
         &self,
         head: &rewind_engine::ports::RunHead,
-        history: &[HistoryEntry],
+        history: &[HistoryEvent],
         failure: &ScriptError,
         payload: &impl Fn(&rewind_core::Payload) -> Payload,
     ) -> Result<RunError, ApiError> {
@@ -389,7 +389,7 @@ pub(crate) fn trace_id(head: &rewind_engine::ports::RunHead) -> String {
 /// What a run that has not ended waits for.
 fn waiting(
     run: &RunRef,
-    history: &[HistoryEntry],
+    history: &[HistoryEvent],
     state: &RunState,
     tasks: &[TaskRecord],
     payload: &impl Fn(&rewind_core::Payload) -> Payload,
@@ -517,7 +517,7 @@ pub(crate) fn view(
 }
 
 /// The last log lines of the code.
-fn logs(history: &[HistoryEntry]) -> Vec<LogLine> {
+fn logs(history: &[HistoryEvent]) -> Vec<LogLine> {
     let mut lines: Vec<LogLine> = history
         .iter()
         .filter_map(|entry| match &entry.event {
@@ -543,7 +543,7 @@ fn logs(history: &[HistoryEntry]) -> Vec<LogLine> {
 /// The call whose failure the code did not catch: its `seq`, as `ScriptError::failed_call`
 /// finds it, with its arguments and recorded failure.
 fn failed_call(
-    history: &[HistoryEntry],
+    history: &[HistoryEvent],
     seq: rewind_core::Seq,
     payload: &impl Fn(&rewind_core::Payload) -> Payload,
 ) -> Option<FailedCall> {

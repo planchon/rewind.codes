@@ -27,7 +27,7 @@ where
 }
 
 /// An activation an owner sends: `{"partition":3,"head":<run head record>,"summary":<summary
-/// record>,"inbox":[<inbox item record>,…],"history":[<history entry record>,…],
+/// record>,"inbox":[<inbox item record>,…],"history":[<event record>,…],
 /// "payloads":[<payload record>,…],"parent":{…},"code":{…},"action_set":{…},
 /// "purpose":"runnable","tasks":[<call task record>,…]}`; `history` left out when the owner
 /// expects the executor's instance cache to hold the run.
@@ -41,7 +41,7 @@ pub struct ActivationRequest {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub inbox: Vec<record::InboxItem>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub history: Option<Vec<record::Entry>>,
+    pub history: Option<Vec<record::HistoryEvent>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub payloads: Vec<record::PayloadValue>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -53,13 +53,13 @@ pub struct ActivationRequest {
     pub tasks: Vec<record::Task>,
 }
 
-/// The history a fork follows: `{"run":"0196…","entries":[…],"payloads":[…],"sealed":{…}}`.
+/// The history a fork follows: `{"run":"0196…","events":[…],"payloads":[…],"sealed":{…}}`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ParentHistory {
     pub run: Id,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub entries: Vec<record::Entry>,
+    pub events: Vec<record::HistoryEvent>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub payloads: Vec<record::PayloadValue>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -145,7 +145,7 @@ pub struct Committed {
     pub measurements: Vec<Measurement>,
 }
 
-/// A run metric of the new entries: `"started"`, `{"ended":{"outcome":"completed"}}` or
+/// A run metric of the new events: `"started"`, `{"ended":{"outcome":"completed"}}` or
 /// `{"call":{"action":"…","outcome":"failed","error_kind":"timeout","seconds":1.5}}`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
@@ -214,7 +214,7 @@ pub struct Child {
     pub attached: bool,
 }
 
-/// Everything one activation commits: `{"run":{…},"attempt":1,"entries":[…],"consumed":[…],
+/// Everything one activation commits: `{"run":{…},"attempt":1,"events":[…],"consumed":[…],
 /// "payloads":[…],"tasks":[…],"timers":[…],"head":<run head record>,"summary":<summary
 /// record>,"counters":[…],"outbox":[<outbox entry record>,…]}`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -223,7 +223,7 @@ pub struct Activation {
     pub run: RunRef,
     pub attempt: u32,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub entries: Vec<record::Entry>,
+    pub events: Vec<record::HistoryEvent>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub consumed: Vec<u64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -283,11 +283,11 @@ impl From<&link::ActivationRequest> for ActivationRequest {
             history: request
                 .history
                 .as_ref()
-                .map(|history| history.iter().map(codec::entry_record).collect()),
+                .map(|history| history.iter().map(codec::event_record).collect()),
             payloads: request.payloads.iter().map(codec::payload_record).collect(),
             parent: request.parent.as_ref().map(|parent| ParentHistory {
                 run: Id(parent.run),
-                entries: parent.entries.iter().map(codec::entry_record).collect(),
+                events: parent.events.iter().map(codec::event_record).collect(),
                 payloads: parent.payloads.iter().map(codec::payload_record).collect(),
                 sealed: parent
                     .sealed
@@ -328,7 +328,7 @@ impl TryFrom<ActivationRequest> for link::ActivationRequest {
             inbox: all(request.inbox, codec::inbox_of)?,
             history: request
                 .history
-                .map(|history| history.into_iter().map(codec::entry_of).collect()),
+                .map(|history| history.into_iter().map(codec::event_of).collect()),
             payloads: request
                 .payloads
                 .into_iter()
@@ -339,7 +339,7 @@ impl TryFrom<ActivationRequest> for link::ActivationRequest {
                 .map(|parent| {
                     Ok::<_, Invalid>(link::ParentHistory {
                         run: parent.run.0,
-                        entries: parent.entries.into_iter().map(codec::entry_of).collect(),
+                        events: parent.events.into_iter().map(codec::event_of).collect(),
                         payloads: parent.payloads.into_iter().map(codec::payload_of).collect(),
                         sealed: parent
                             .sealed
@@ -394,7 +394,7 @@ impl TryFrom<SealedAttempt> for engine::SealedAttempt {
             attempt: engine::Attempt(sealed.attempt),
             code: export.code,
             action_set: export.action_set,
-            entries: export.entries,
+            events: export.events,
         })
     }
 }
@@ -490,7 +490,7 @@ impl From<&store::Activation> for Activation {
         Self {
             run: (&activation.run).into(),
             attempt: activation.attempt.0,
-            entries: activation.entries.iter().map(codec::entry_record).collect(),
+            events: activation.events.iter().map(codec::event_record).collect(),
             consumed: activation.consumed.clone(),
             payloads: activation
                 .payloads
@@ -514,11 +514,7 @@ impl TryFrom<Activation> for store::Activation {
         Ok(store::Activation {
             run: activation.run.try_into()?,
             attempt: engine::Attempt(activation.attempt),
-            entries: activation
-                .entries
-                .into_iter()
-                .map(codec::entry_of)
-                .collect(),
+            events: activation.events.into_iter().map(codec::event_of).collect(),
             consumed: activation.consumed,
             payloads: activation
                 .payloads

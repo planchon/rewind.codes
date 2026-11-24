@@ -312,11 +312,11 @@ pub struct InternalAllowList {
 }
 
 impl InternalAllowList {
-    /// Reads the entries of the list; the first one that is neither a name, a `*.` wildcard,
+    /// Reads the events of the list; the first one that is neither a name, a `*.` wildcard,
     /// an address nor a network is refused.
-    pub fn parse<S: AsRef<str>>(entries: &[S]) -> Result<Self, String> {
+    pub fn parse<S: AsRef<str>>(events: &[S]) -> Result<Self, String> {
         let mut list = Self::default();
-        for entry in entries {
+        for entry in events {
             let entry = entry.as_ref().trim();
             let invalid = || {
                 format!(
@@ -346,7 +346,7 @@ impl InternalAllowList {
         Ok(list)
     }
 
-    /// Whether the list has no entry.
+    /// Whether the list has no event.
     pub fn is_empty(&self) -> bool {
         self.names.is_empty() && self.subdomains.is_empty() && self.networks.is_empty()
     }

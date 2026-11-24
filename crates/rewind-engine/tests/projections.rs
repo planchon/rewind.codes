@@ -1,4 +1,4 @@
-//! What committed entries project, in the driver (`archi/05-testing-and-observability.md`,
+//! What committed events project, in the driver (`archi/05-testing-and-observability.md`,
 //! "The projector", "Span model"): a run's snapshot and headline, and the spans a run exports
 //! through its partition's outbox, joined to the harness's trace, unless it is unsampled or a
 //! mock run.
@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use rewind_core::{
     AbortKind, AbortReason, Action, ActionRoute, ActionSet, Annotation, Callsite, CancelReason,
-    Command, Completion, Digest, Epoch, Event, HistoryEntry, Lifecycle, McpServer, McpTransport,
+    Command, Completion, Digest, Epoch, Event, HistoryEvent, Lifecycle, McpServer, McpTransport,
     RunMode, RunStarted, RunStatus, ScriptError, Seed, Seq, Timestamp,
 };
 use rewind_engine::failures;
@@ -118,11 +118,11 @@ fn ms(offset: u64) -> Timestamp {
 }
 
 /// A history of these events, recorded at these offsets from `T0`.
-fn history(events: Vec<(u64, Event)>) -> Vec<HistoryEntry> {
+fn history(events: Vec<(u64, Event)>) -> Vec<HistoryEvent> {
     events
         .into_iter()
         .enumerate()
-        .map(|(index, (offset, event))| HistoryEntry {
+        .map(|(index, (offset, event))| HistoryEvent {
             index: index as u64,
             recorded_at: ms(offset),
             event,
@@ -213,7 +213,7 @@ fn wait(
 
 #[test]
 fn a_snapshot_holds_what_an_active_run_waits_for() {
-    let entries = history(vec![
+    let events = history(vec![
         (0, run_started()),
         (0, schedule(1, "ask_user", 2)),
         (0, schedule(2, "github.get_issue", 3)),
@@ -274,7 +274,7 @@ fn a_snapshot_holds_what_an_active_run_waits_for() {
     );
     let review = wait(WaitKind::Signal, None, Some("review"), 40, None, None);
     assert_eq!(
-        run_snapshot(&entries[..9], Some(&action_set)),
+        run_snapshot(&events[..9], Some(&action_set)),
         RunSnapshot {
             history_len: 9,
             status: RunStatus::Active,
@@ -291,7 +291,7 @@ fn a_snapshot_holds_what_an_active_run_waits_for() {
         "by since, then kind: the signal's timeout is its wait's end, not a timer of its own"
     );
     // Without the action set, a harness action's call is a call.
-    let kinds: Vec<(WaitKind, Option<Seq>)> = run_snapshot(&entries[..9], None)
+    let kinds: Vec<(WaitKind, Option<Seq>)> = run_snapshot(&events[..9], None)
         .waits
         .iter()
         .map(|wait| (wait.kind, wait.seq))
@@ -305,15 +305,15 @@ fn a_snapshot_holds_what_an_active_run_waits_for() {
     );
     // The timeout fired: the signal's wait is over.
     assert_eq!(
-        run_snapshot(&entries[..10], Some(&action_set)).waits,
+        run_snapshot(&events[..10], Some(&action_set)).waits,
         [calls[0].clone(), calls[1].clone(), sleep.clone(), review]
     );
     // The signal came.
-    let last = run_snapshot(&entries, Some(&action_set));
+    let last = run_snapshot(&events, Some(&action_set));
     assert_eq!(last.history_len, 11);
     assert_eq!(last.waits, [calls[0].clone(), calls[1].clone(), sleep]);
-    // A history that cannot be folded stops before the entry that breaks it.
-    let broken = run_snapshot(&entries[1..], Some(&action_set));
+    // A history that cannot be folded stops before the event that breaks it.
+    let broken = run_snapshot(&events[1..], Some(&action_set));
     assert_eq!(
         (broken.history_len, broken.status, broken.waits.len()),
         (0, RunStatus::Pending, 0)

@@ -10,7 +10,7 @@
 use tracing::Instrument as _;
 
 use rewind_core::{
-    AbortReason, ActionSet, HistoryEntry, HistoryError, Next, NonDeterminism, ReplayCursor,
+    AbortReason, ActionSet, HistoryError, HistoryEvent, Next, NonDeterminism, ReplayCursor,
     Replayed,
 };
 
@@ -46,7 +46,7 @@ pub struct ReplayInput<'a> {
     /// The code as compiled, or why it does not compile.
     pub compiled: Result<&'a CompiledCode, &'a InvalidCode>,
     pub action_set: &'a ActionSet,
-    pub history: &'a [HistoryEntry],
+    pub history: &'a [HistoryEvent],
 }
 
 /// A code rebuilt from its history.
@@ -90,7 +90,7 @@ where
 {
     let span = tracing::info_span!(
         "replay",
-        entries = input.history.len() as u64,
+        events = input.history.len() as u64,
         histogram.rewind.replay.duration = tracing::field::Empty,
         rewind.outcome = tracing::field::Empty,
     );
@@ -202,7 +202,7 @@ fn aborted<I>(instance: Option<I>, reason: &AbortReason) -> Rebuilt<I> {
 pub enum ReplayVerdict {
     /// The code reproduces the history.
     Matches(ReplayEnd),
-    /// The code diverges from the history, at the entry the error names.
+    /// The code diverges from the history, at the event the error names.
     Diverges(NonDeterminism),
     /// The code could not go on where the original run went on.
     Fails(ExecutorError),

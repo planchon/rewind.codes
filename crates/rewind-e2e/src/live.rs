@@ -357,7 +357,7 @@ pub async fn run_live(case: &Case) -> Result<Live, String> {
         let mut gateway = driver.gateway(at);
         edge.export_run(&mut gateway, &run).await.map_err(fail)?
     };
-    let state = RunState::from_history(&export.entries).map_err(|err| err.to_string())?;
+    let state = RunState::from_history(&export.events).map_err(|err| err.to_string())?;
     let children = children(&mut world, &run).await?;
     let dispatcher = &world.plane.dispatcher;
     Ok(Live::Ran(Box::new(Recorded {

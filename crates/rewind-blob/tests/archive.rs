@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use rewind_blob::{CachedArchive, DEFAULT_ARCHIVE_CACHE_CAPACITY, FileArchive, FileBlobs};
 use rewind_core::{
-    ActionSet, Code, Digest, Epoch, Event, HistoryEntry, Lifecycle, RunMode, RunStarted, Seed,
+    ActionSet, Code, Digest, Epoch, Event, HistoryEvent, Lifecycle, RunMode, RunStarted, Seed,
     Timestamp, canonical_json,
 };
 use rewind_engine::conformance::{archive, tenant};
@@ -30,7 +30,7 @@ fn sealed(run: &RunRef, attempt: Attempt, input: &str) -> SealedAttempt {
     SealedAttempt {
         run: run.clone(),
         attempt,
-        entries: vec![HistoryEntry {
+        events: vec![HistoryEvent {
             index: 0,
             recorded_at: Timestamp(1),
             event: Event::Lifecycle(Lifecycle::RunStarted(RunStarted {

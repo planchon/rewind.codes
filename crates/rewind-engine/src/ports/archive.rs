@@ -8,7 +8,7 @@
 
 use std::future::Future;
 
-use rewind_core::{ActionSet, Code, HistoryEntry, RunExport};
+use rewind_core::{ActionSet, Code, HistoryEvent, RunExport};
 
 use crate::ports::partition::Attempt;
 use crate::ports::tenancy::RunRef;
@@ -24,7 +24,7 @@ pub struct SealedAttempt {
     pub action_set: ActionSet,
     /// The attempt's history, every payload up to 64 KiB inlined as a value; larger ones stay
     /// digests, their values in the run's blobs.
-    pub entries: Vec<HistoryEntry>,
+    pub events: Vec<HistoryEvent>,
 }
 
 impl SealedAttempt {
@@ -34,7 +34,7 @@ impl SealedAttempt {
             run: self.run.id,
             code: self.code.clone(),
             action_set: self.action_set.clone(),
-            entries: self.entries.clone(),
+            events: self.events.clone(),
         }
     }
 }

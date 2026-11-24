@@ -3,7 +3,7 @@
 //! which runs a job to its end before the next one, never produces by itself.
 //!
 //! - **A seal between two reads.** The batch that seals an attempt is held once it is committed,
-//!   and applied at the next read of a history: a job that reads a run's head, then its entries,
+//!   and applied at the next read of a history: a job that reads a run's head, then its events,
 //!   sees the seal committed between the two, as when the sealer's batch and a read run at once.
 //! - **A read that finds the partition opened elsewhere.** The next reads of a head answer
 //!   `Fenced`, as SlateDB does once another node opened the partition.
@@ -11,7 +11,7 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
-use rewind_core::{Digest, HistoryEntry, PartitionId, RunId, Shape, Timestamp};
+use rewind_core::{Digest, HistoryEvent, PartitionId, RunId, Shape, Timestamp};
 use rewind_engine::adapters::{MemoryPartitionLog, MemoryPartitions};
 use rewind_engine::ports::partition::Change;
 use rewind_engine::ports::{
@@ -144,7 +144,7 @@ impl PartitionLog for InterleavedLog {
         run: &RunRef,
         attempt: Attempt,
         from: u64,
-    ) -> Result<Vec<HistoryEntry>, PartitionError> {
+    ) -> Result<Vec<HistoryEvent>, PartitionError> {
         let batch = self.state.lock().unwrap().held.take();
         if let Some(batch) = batch {
             self.inner.commit(batch).await?;

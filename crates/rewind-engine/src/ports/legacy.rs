@@ -7,7 +7,7 @@
 //!  LegacyRuns ── runs(after, limit) ──► [LegacyRun]   the schema `legacy` (Postgres),
 //!             ── drop_tables()                         the tables `legacy_*` (Turso)
 //!  LegacyBlobs ── payload(tenant, digest) ──► bytes    `{tenant}/sha256/{digest}`
-//!              ── history(tenant, digest) ──► entries  the run export archived there
+//!              ── history(tenant, digest) ──► events  the run export archived there
 //! ```
 //!
 //! [`crate::migrate`] reads them once, writes each run into its namespace's partition or into
@@ -15,7 +15,7 @@
 
 use std::future::Future;
 
-use rewind_core::{Digest, Epoch, HistoryEntry, Payload, RunId, Seq, Timestamp};
+use rewind_core::{Digest, Epoch, HistoryEvent, Payload, RunId, Seq, Timestamp};
 
 use crate::ports::namespaces::NamespaceName;
 use crate::ports::partition::Watcher;
@@ -85,7 +85,7 @@ pub struct LegacyRun {
 #[derive(Clone, Debug, PartialEq)]
 pub enum LegacyHistory {
     /// In the tables, in order.
-    Entries(Vec<HistoryEntry>),
+    Events(Vec<HistoryEvent>),
     /// The retention archived it: the run export is a blob of the tenant, by its
     /// digest ([`LegacyBlobs::history`]).
     Archived(Digest),
@@ -140,10 +140,10 @@ pub trait LegacyBlobs: Send + Sync {
         digest: Digest,
     ) -> impl Future<Output = Result<Option<Vec<u8>>, LegacyError>> + Send;
 
-    /// The entries of an archived run export of the tenant; `None` when it is missing.
+    /// The events of an archived run export of the tenant; `None` when it is missing.
     fn export(
         &self,
         tenant: &TenantId,
         digest: Digest,
-    ) -> impl Future<Output = Result<Option<Vec<HistoryEntry>>, LegacyError>> + Send;
+    ) -> impl Future<Output = Result<Option<Vec<HistoryEvent>>, LegacyError>> + Send;
 }

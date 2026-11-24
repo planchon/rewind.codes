@@ -1,7 +1,7 @@
-//! What a run's committed entries project (`archi/05-testing-and-observability.md`, "The
+//! What a run's committed events project (`archi/05-testing-and-observability.md`, "The
 //! projector", "Read model"): its summary in the run index, and its lifecycle events.
 //!
-//! An activation derives them from the run's history as the batch that commits its entries
+//! An activation derives them from the run's history as the batch that commits its events
 //! does (`executors::derive`): the summary is written in the same batch, and what leaves the
 //! partition (spans and logs, lifecycle webhooks) goes through its outbox
 //! (`archi/06-storage-and-scale.md`, "The outbox").
@@ -18,26 +18,26 @@
 //!   fingerprint ([`failures`]).
 //!
 //! Lifecycle events carry a deterministic id for receivers to deduplicate: `{run}/{index}` of
-//! the entry they are projected from.
+//! the event they are projected from.
 
 use std::collections::BTreeSet;
 
 use rewind_core::{
-    ActionRoute, ActionSet, Annotation, Callsite, Command, Event, HistoryEntry, Lifecycle,
+    ActionRoute, ActionSet, Annotation, Callsite, Command, Event, HistoryEvent, Lifecycle,
     RunState, RunStatus, ScriptError, Seq, Timestamp,
 };
 
 use crate::failures;
 use crate::ports::{RunHead, RunSnapshot, Wait, WaitKind, WebhookEvent, WebhookEventKind};
 
-/// The lifecycle events of the entries from `from` to the end of `history`, which leave the
+/// The lifecycle events of the events from `from` to the end of `history`, which leave the
 /// run in `state`: the run's end (`run.completed`, `run.failed`), or, when the range leaves the
 /// run waiting for the outside world only (signals, harness actions), `run.suspended`. Each is
-/// named by the index of the entry it is projected from.
+/// named by the index of the event it is projected from.
 pub(crate) fn lifecycle_events(
     head: &RunHead,
     action_set: Option<&ActionSet>,
-    history: &[HistoryEntry],
+    history: &[HistoryEvent],
     from: usize,
     state: &RunState,
 ) -> Vec<WebhookEvent> {
@@ -126,8 +126,8 @@ pub fn headline(source: &str) -> String {
 /// The snapshot of a run, folded from its history (see the [module](self)): its status and
 /// mode, what it waits for while active, and how it ended. The pinned action set tells the calls
 /// of harness actions from the calls Rewind sends; without it, every call is a `call`. A history
-/// that cannot be folded past an entry gives the snapshot of the entries before it.
-pub fn run_snapshot(history: &[HistoryEntry], action_set: Option<&ActionSet>) -> RunSnapshot {
+/// that cannot be folded past an event gives the snapshot of the events before it.
+pub fn run_snapshot(history: &[HistoryEvent], action_set: Option<&ActionSet>) -> RunSnapshot {
     let mut state = RunState::new();
     for entry in history {
         if let Err(error) = state.apply(entry) {
@@ -152,13 +152,13 @@ pub fn run_snapshot(history: &[HistoryEntry], action_set: Option<&ActionSet>) ->
     }
 }
 
-/// The entry that opened the call or timer `seq`, pending in `state`, read at its index in
+/// The event that opened the call or timer `seq`, pending in `state`, read at its index in
 /// `history`.
 pub(crate) fn opening<'h>(
-    history: &'h [HistoryEntry],
+    history: &'h [HistoryEvent],
     state: &RunState,
     seq: Seq,
-) -> Option<&'h HistoryEntry> {
+) -> Option<&'h HistoryEvent> {
     let index = state.opened_by(seq)?;
     history
         .get(usize::try_from(index).ok()?)
@@ -166,13 +166,13 @@ pub(crate) fn opening<'h>(
 }
 
 /// The waits of an active run, by `since`, then kind, then seq and name: what `state` holds
-/// pending, each read at the entry that opened it.
+/// pending, each read at the event that opened it.
 pub(crate) fn waits(
-    history: &[HistoryEntry],
+    history: &[HistoryEvent],
     state: &RunState,
     action_set: Option<&ActionSet>,
 ) -> Vec<Wait> {
-    // The entry that opened a timer or a call: when, and where in the code.
+    // The event that opened a timer or a call: when, and where in the code.
     let opened = |seq: &Seq| -> Option<(Timestamp, Option<Callsite>)> {
         let entry = opening(history, state, *seq)?;
         match &entry.event {

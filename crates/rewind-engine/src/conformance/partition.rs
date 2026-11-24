@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use rewind_core::{
     AbortKind, AbortReason, ActionFailureKind, ActionPolicy, ActionRoute, Annotation, Completion,
-    Digest, Epoch, Event, HistoryEntry, Lifecycle, LogLevel, PartitionId, RunId, RunMode,
+    Digest, Epoch, Event, HistoryEvent, Lifecycle, LogLevel, PartitionId, RunId, RunMode,
     RunStarted, RunStatus, Seed, Seq, Shape, Timestamp,
 };
 use serde_json::json;
@@ -157,7 +157,7 @@ fn create_with(head: RunHead, start_key: Option<&str>) -> Change {
         run: head.run.clone(),
         head,
         start_key: start_key.map(str::to_owned),
-        entries: Vec::new(),
+        events: Vec::new(),
         payloads: Vec::new(),
         summary,
     }
@@ -185,30 +185,30 @@ fn started() -> RunStarted {
     }
 }
 
-fn entry(index: u64, event: Event) -> HistoryEntry {
-    HistoryEntry {
+fn entry(index: u64, event: Event) -> HistoryEvent {
+    HistoryEvent {
         index,
         recorded_at: later(T0, index),
         event,
     }
 }
 
-fn run_started_entry() -> HistoryEntry {
+fn run_started_event() -> HistoryEvent {
     entry(0, Event::Lifecycle(Lifecycle::RunStarted(started())))
 }
 
-fn log_entry(index: u64) -> HistoryEntry {
+fn log_event(index: u64) -> HistoryEvent {
     entry(
         index,
         Event::Annotation(Annotation::Log {
             level: LogLevel::Info,
-            message: format!("entry {index}"),
+            message: format!("event {index}"),
             callsite: None,
         }),
     )
 }
 
-fn aborted_entry(index: u64) -> HistoryEntry {
+fn aborted_event(index: u64) -> HistoryEvent {
     entry(
         index,
         Event::Lifecycle(Lifecycle::RunAborted(AbortReason {
@@ -277,12 +277,12 @@ fn summary_of(run: &RunRef, namespace: &NamespaceName, status: RunStatus) -> Ind
     })
 }
 
-/// An activation of the run as it is now: appends `entries`, consumes `consumed`, and leaves
+/// An activation of the run as it is now: appends `events`, consumes `consumed`, and leaves
 /// the run in `status`, with nothing else.
 async fn activation<L: PartitionLog>(
     log: &L,
     run: &RunRef,
-    entries: Vec<HistoryEntry>,
+    events: Vec<HistoryEvent>,
     consumed: Vec<u64>,
     status: RunStatus,
 ) -> Activation {
@@ -292,11 +292,11 @@ async fn activation<L: PartitionLog>(
     head.attempts = 0;
     head.ended_at = status.is_terminal().then_some(later(T0, 100));
     let mut summary = summary_of(run, &head.namespace, status);
-    summary.summary.history_len = head.history_len + entries.len() as u64;
+    summary.summary.history_len = head.history_len + events.len() as u64;
     Activation {
         run: run.clone(),
         attempt: head.attempt,
-        entries,
+        events,
         consumed,
         payloads: Vec::new(),
         tasks: Vec::new(),
@@ -311,11 +311,11 @@ async fn activation<L: PartitionLog>(
 async fn activate<L: PartitionLog>(
     log: &L,
     run: &RunRef,
-    entries: Vec<HistoryEntry>,
+    events: Vec<HistoryEvent>,
     consumed: Vec<u64>,
     status: RunStatus,
 ) {
-    let activation = activation(log, run, entries, consumed, status).await;
+    let activation = activation(log, run, events, consumed, status).await;
     commit(log, vec![activation.into()]).await;
 }
 
@@ -335,7 +335,7 @@ async fn index<L: PartitionLog>(
     )
     .await;
     let mut activation =
-        activation(log, run, vec![run_started_entry()], vec![1], summary.status).await;
+        activation(log, run, vec![run_started_event()], vec![1], summary.status).await;
     activation.summary = IndexedSummary::new(summary);
     commit(log, vec![activation.into()]).await;
 }
@@ -343,12 +343,12 @@ async fn index<L: PartitionLog>(
 /// Ends the run: an activation that appends `run_aborted`.
 async fn end<L: PartitionLog>(log: &L, run: &RunRef) {
     let next = log.run(run).await.expect("run").expect("run").history_len;
-    let entries = if next == 0 {
-        vec![run_started_entry(), aborted_entry(1)]
+    let events = if next == 0 {
+        vec![run_started_event(), aborted_event(1)]
     } else {
-        vec![aborted_entry(next)]
+        vec![aborted_event(next)]
     };
-    activate(log, run, entries, Vec::new(), RunStatus::Aborted).await;
+    activate(log, run, events, Vec::new(), RunStatus::Aborted).await;
 }
 
 fn task(run: &RunRef, seq: u32, state: TaskState) -> TaskRecord {
@@ -675,7 +675,7 @@ pub async fn a_batch_is_applied_whole_or_not_at_all<S: PartitionStore>(store: &S
         [started_item(1), signal(2, "go")],
         "the changes of a batch apply in order"
     );
-    let wrong = activation(&log, &r1, vec![log_entry(3)], vec![1], RunStatus::Active).await;
+    let wrong = activation(&log, &r1, vec![log_event(3)], vec![1], RunStatus::Active).await;
     let error = refused(
         &log,
         vec![enqueue(&r1, signal(3, "later"), None), wrong.into()],
@@ -755,24 +755,21 @@ pub async fn the_mistakes_of_a_single_writer_are_refused<S: PartitionStore>(stor
     )
     .await;
 
-    for (mistake, entries) in [
+    for (mistake, events) in [
         (
-            "entries after a gap",
-            vec![run_started_entry(), log_entry(2)],
+            "events after a gap",
+            vec![run_started_event(), log_event(2)],
         ),
-        (
-            "entries that do not start at the length",
-            vec![log_entry(1)],
-        ),
+        ("events that do not start at the length", vec![log_event(1)]),
     ] {
-        let wrong = activation(&log, &r1, entries, vec![1], RunStatus::Active).await;
+        let wrong = activation(&log, &r1, events, vec![1], RunStatus::Active).await;
         let error = refused(&log, vec![wrong.into()]).await;
         assert!(is_conflict(&error), "{mistake}: {error:?}");
     }
     let missing = activation(
         &log,
         &r1,
-        vec![run_started_entry()],
+        vec![run_started_event()],
         vec![1, 99],
         RunStatus::Active,
     )
@@ -785,7 +782,7 @@ pub async fn the_mistakes_of_a_single_writer_are_refused<S: PartitionStore>(stor
     let mut another_attempt = activation(
         &log,
         &r1,
-        vec![run_started_entry()],
+        vec![run_started_event()],
         vec![1],
         RunStatus::Active,
     )
@@ -800,7 +797,7 @@ pub async fn the_mistakes_of_a_single_writer_are_refused<S: PartitionStore>(stor
     let mut twice = activation(
         &log,
         &r1,
-        vec![run_started_entry()],
+        vec![run_started_event()],
         vec![1],
         RunStatus::Active,
     )
@@ -812,7 +809,7 @@ pub async fn the_mistakes_of_a_single_writer_are_refused<S: PartitionStore>(stor
     activate(
         &log,
         &r1,
-        vec![run_started_entry()],
+        vec![run_started_event()],
         vec![1],
         RunStatus::Active,
     )
@@ -820,15 +817,15 @@ pub async fn the_mistakes_of_a_single_writer_are_refused<S: PartitionStore>(stor
     let overlap = activation(
         &log,
         &r1,
-        vec![run_started_entry()],
+        vec![run_started_event()],
         Vec::new(),
         RunStatus::Active,
     )
     .await;
     let error = refused(&log, vec![overlap.into()]).await;
-    assert!(is_conflict(&error), "entries over the history: {error:?}");
+    assert!(is_conflict(&error), "events over the history: {error:?}");
     end(&log, &r1).await;
-    let after_end = activation(&log, &r1, vec![log_entry(2)], Vec::new(), RunStatus::Active).await;
+    let after_end = activation(&log, &r1, vec![log_event(2)], Vec::new(), RunStatus::Active).await;
     let error = refused(&log, vec![after_end.into()]).await;
     assert!(
         is_conflict(&error),
@@ -851,7 +848,7 @@ pub async fn changes_to_a_missing_or_erased_run_are_refused<S: PartitionStore>(s
     let template = activation(
         &log,
         &run(1),
-        vec![run_started_entry()],
+        vec![run_started_event()],
         Vec::new(),
         RunStatus::Active,
     )
@@ -994,7 +991,7 @@ pub async fn a_signal_key_is_taken_once_per_run<S: PartitionStore>(store: &S) {
     activate(
         &log,
         &r1,
-        vec![run_started_entry()],
+        vec![run_started_event()],
         vec![1, 4],
         RunStatus::Active,
     )
@@ -1044,7 +1041,7 @@ pub async fn a_terminal_activation_clears_the_attempt<S: PartitionStore>(store: 
     let mut first = activation(
         &log,
         &r1,
-        vec![run_started_entry()],
+        vec![run_started_event()],
         vec![1],
         RunStatus::Active,
     )
@@ -1156,7 +1153,7 @@ pub async fn an_activation_writes_its_records<S: PartitionStore>(store: &S) {
     let mut first = activation(
         &log,
         &r1,
-        vec![run_started_entry(), log_entry(1)],
+        vec![run_started_event(), log_event(1)],
         vec![1, 2],
         RunStatus::Active,
     )
@@ -1174,11 +1171,11 @@ pub async fn an_activation_writes_its_records<S: PartitionStore>(store: &S) {
 
     assert_eq!(
         log.history(&r1, Attempt::FIRST, 0).await.expect("history"),
-        [run_started_entry(), log_entry(1)]
+        [run_started_event(), log_event(1)]
     );
     assert_eq!(
         log.history(&r1, Attempt::FIRST, 1).await.expect("history"),
-        [log_entry(1)],
+        [log_event(1)],
         "from an index"
     );
     assert_eq!(
@@ -1239,7 +1236,7 @@ pub async fn an_activation_writes_its_records<S: PartitionStore>(store: &S) {
         [outbox_entry(1, Some(&r1))]
     );
 
-    let mut second = activation(&log, &r1, vec![log_entry(2)], vec![3], RunStatus::Active).await;
+    let mut second = activation(&log, &r1, vec![log_event(2)], vec![3], RunStatus::Active).await;
     second.timers = vec![TimerChange::Cancel(code_timer(&r1, 2))];
     commit(&log, vec![second.into()]).await;
     assert_eq!(
@@ -1329,7 +1326,7 @@ pub async fn failures_and_interruptions_are_counted<S: PartitionStore>(store: &S
     activate(
         &log,
         &r1,
-        vec![run_started_entry()],
+        vec![run_started_event()],
         vec![1],
         RunStatus::Active,
     )
@@ -1406,7 +1403,7 @@ pub async fn failures_and_interruptions_are_counted<S: PartitionStore>(store: &S
     );
     let retried = Quarantine {
         kind: QuarantineKind::NonDeterminism,
-        reason: "replay mismatch at entry 3".into(),
+        reason: "replay mismatch at event 3".into(),
         since: later(T0, 200),
         retried_by: Some("build-2".into()),
     };
@@ -1533,7 +1530,7 @@ pub async fn recover_returns_what_an_owner_needs<S: PartitionStore>(store: &S) {
     let mut activation = activation(
         &log,
         &active,
-        vec![run_started_entry()],
+        vec![run_started_event()],
         vec![1],
         RunStatus::Active,
     )
@@ -1734,7 +1731,7 @@ pub async fn runs_in_range_read_the_heads_a_suffix_names<S: PartitionStore>(stor
     activate(
         &log,
         &a,
-        vec![run_started_entry()],
+        vec![run_started_event()],
         vec![1],
         RunStatus::Active,
     )
@@ -1769,7 +1766,7 @@ pub async fn seal_keeps_the_head_and_the_summary<S: PartitionStore>(store: &S) {
     let mut first = activation(
         &log,
         &r1,
-        vec![run_started_entry()],
+        vec![run_started_event()],
         vec![1],
         RunStatus::Active,
     )
@@ -1861,7 +1858,7 @@ pub async fn erase_deletes_everything_of_the_run<S: PartitionStore>(store: &S) {
     let mut first = activation(
         &log,
         &erased,
-        vec![run_started_entry()],
+        vec![run_started_event()],
         vec![1],
         RunStatus::Active,
     )
@@ -2832,13 +2829,13 @@ pub async fn outbox_entries_are_added_and_removed<S: PartitionStore>(store: &S) 
     assert_eq!(
         log.recover(T0).await.expect("recover").outbox,
         [outbox_entry(2, Some(&r1)), quota],
-        "removing an entry that is not there changes nothing"
+        "removing an event that is not there changes nothing"
     );
     commit(&log, vec![OutboxChange::Remove(OutboxId(3)).into()]).await;
     assert_eq!(
         timers_of(&log).await,
         [],
-        "a delivered entry's retry goes with it"
+        "a delivered event's retry goes with it"
     );
 }
 
@@ -2857,7 +2854,7 @@ pub async fn runs_of_another_tenant_are_invisible<S: PartitionStore>(store: &S) 
     activate(
         &log,
         &r1,
-        vec![run_started_entry()],
+        vec![run_started_event()],
         Vec::new(),
         RunStatus::Active,
     )

@@ -1,10 +1,10 @@
-//! A run's history over HTTP: one entry in full (`GET /v1/runs/{id}/entries/{idx}`) and the
+//! A run's history over HTTP: one event in full (`GET /v1/runs/{id}/events/{idx}`) and the
 //! event stream (`GET /v1/runs/{id}/events`, server-sent events); and the stream of what changes
 //! in the organization, its runs and its control plane (`GET /v1/changes`, server-sent events).
 //!
-//! These are projections of committed entries (`archi/05-testing-and-observability.md`). The
+//! These are projections of committed events (`archi/05-testing-and-observability.md`). The
 //! stored form of the history is `rewind-format`'s, exported by `GET /v1/runs/{id}/export`; the
-//! entries here are its HTTP view: camelCase fields, RFC 3339 times, payloads with their size
+//! events here are its HTTP view: camelCase fields, RFC 3339 times, payloads with their size
 //! and preview, and no seed.
 
 use serde::{Deserialize, Serialize};
@@ -17,23 +17,23 @@ use crate::common::{
 use crate::namespaces::NamespaceName;
 use crate::runs::RunSummary;
 
-/// One history entry.
+/// One event.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct Entry {
+pub struct HistoryEvent {
     /// Position in the history: from 0, contiguous.
     pub idx: u64,
-    /// When the entry was committed; monotonic per run. Once a trigger is delivered, it is the
+    /// When the event was committed; monotonic per run. Once a trigger is delivered, it is the
     /// code's logical time.
     pub recorded_at: Timestamp,
     pub event: Event,
 }
 
-impl Entry {
-    /// The HTTP view of a history entry. `payload` turns each payload into its view: the
+impl HistoryEvent {
+    /// The HTTP view of an event. `payload` turns each payload into its view: the
     /// server knows where values that left the event live, and how much of them to include.
     pub fn from_core(
-        entry: &rewind_core::HistoryEntry,
+        entry: &rewind_core::HistoryEvent,
         payload: impl FnMut(&rewind_core::Payload) -> Payload,
     ) -> Self {
         Self {
@@ -48,7 +48,7 @@ impl Entry {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Event {
-    /// The run's first entry. The seed is left out: it is only in the run export.
+    /// The run's first event. The seed is left out: it is only in the run export.
     #[serde(rename_all = "camelCase")]
     RunStarted {
         code: String,
@@ -265,29 +265,29 @@ impl Event {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, IntoParams)]
 #[into_params(parameter_in = Query)]
 pub struct EventsQuery {
-    /// `1`: keep the stream open and send entries as they are committed, until the run ends.
-    /// Without it, the stream ends once the entries committed so far are sent.
+    /// `1`: keep the stream open and send events as they are committed, until the run ends.
+    /// Without it, the stream ends once the events committed so far are sent.
     #[serde(
         default,
         deserialize_with = "crate::runs::flag",
         skip_serializing_if = "Option::is_none"
     )]
     pub follow: Option<bool>,
-    /// The first entry to send. `0` by default; a reconnecting client sends the `id` of the last
+    /// The first event to send. `0` by default; a reconnecting client sends the `id` of the last
     /// event it received plus one (or the `Last-Event-ID` header).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub from: Option<u64>,
 }
 
 /// One event of the stream. On the wire, each is a server-sent event whose `event` field is
-/// the `type` below, whose `data` is this JSON object, and, for an entry, whose `id` is the
-/// entry's `idx`.
+/// the `type` below, whose `data` is this JSON object, and, for an event, whose `id` is the
+/// event's `idx`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum StreamEvent {
-    /// A committed history entry. Payload values above 256 KiB are left out.
-    Entry(Box<Entry>),
-    /// The last event of a stream: the run has ended, or, without `follow`, every entry
+    /// A committed event of the history. Payload values above 256 KiB are left out.
+    Event(Box<HistoryEvent>),
+    /// The last event of a stream: the run has ended, or, without `follow`, every event
     /// committed so far was sent.
     End { status: RunStatus },
 }
@@ -296,15 +296,15 @@ impl StreamEvent {
     /// The SSE `event` field.
     pub fn sse_event(&self) -> &'static str {
         match self {
-            StreamEvent::Entry(_) => "entry",
+            StreamEvent::Event(_) => "event",
             StreamEvent::End { .. } => "end",
         }
     }
 
-    /// The SSE `id` field: the entry's index.
+    /// The SSE `id` field: the event's index.
     pub fn sse_id(&self) -> Option<String> {
         match self {
-            StreamEvent::Entry(entry) => Some(entry.idx.to_string()),
+            StreamEvent::Event(entry) => Some(entry.idx.to_string()),
             StreamEvent::End { .. } => None,
         }
     }
@@ -428,7 +428,7 @@ impl ChangeEvent {
 
 #[cfg(test)]
 mod tests {
-    use rewind_core::{Command, HistoryEntry, Seq};
+    use rewind_core::{Command, Seq};
     use serde_json::json;
 
     use super::*;
@@ -442,8 +442,8 @@ mod tests {
     }
 
     #[test]
-    fn a_journal_entry_has_an_http_view() {
-        let entry = HistoryEntry {
+    fn an_event_has_an_http_view() {
+        let entry = rewind_core::HistoryEvent {
             index: 1,
             recorded_at: rewind_core::Timestamp::from_millis(1_000),
             event: rewind_core::Event::Command(Command::StartTimer {
@@ -456,7 +456,7 @@ mod tests {
                 }),
             }),
         };
-        let written = serde_json::to_value(Entry::from_core(&entry, view)).unwrap();
+        let written = serde_json::to_value(HistoryEvent::from_core(&entry, view)).unwrap();
         assert_eq!(
             written,
             json!({
@@ -471,24 +471,24 @@ mod tests {
                 }
             })
         );
-        let read: Entry = serde_json::from_value(written).unwrap();
+        let read: HistoryEvent = serde_json::from_value(written).unwrap();
         assert_eq!(read.event.name(), entry.event.name());
     }
 
     #[test]
     fn a_stream_event_is_flat_and_tagged() {
-        let entry = HistoryEntry {
+        let entry = rewind_core::HistoryEvent {
             index: 4,
             recorded_at: rewind_core::Timestamp::from_millis(0),
             event: rewind_core::Event::Command(Command::CompleteRun {
                 output: json!({ "closed": 3 }).into(),
             }),
         };
-        let event = StreamEvent::Entry(Box::new(Entry::from_core(&entry, view)));
-        assert_eq!(event.sse_event(), "entry");
+        let event = StreamEvent::Event(Box::new(HistoryEvent::from_core(&entry, view)));
+        assert_eq!(event.sse_event(), "event");
         assert_eq!(event.sse_id().as_deref(), Some("4"));
         let written = serde_json::to_value(&event).unwrap();
-        assert_eq!(written["type"], "entry");
+        assert_eq!(written["type"], "event");
         assert_eq!(written["idx"], 4);
         assert_eq!(written["event"]["type"], "complete_run");
         assert_eq!(written["event"]["output"]["value"], json!({ "closed": 3 }));

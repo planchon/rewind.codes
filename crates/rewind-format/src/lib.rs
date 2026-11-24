@@ -11,9 +11,9 @@
 //! - one **event**, as stored in a row (`history.event`, `inbox.event`):
 //!   `{"v":1,"type":"schedule_call","seq":1,…}`;
 //! - a **run export** (exports, the archive of a finished run, the epoch corpus):
-//!   `{"v":1,"run":"…","code":"…","action_set":{…},"entries":[{"index":0,"recorded_at":…,
+//!   `{"v":1,"run":"…","code":"…","action_set":{…},"events":[{"index":0,"recorded_at":…,
 //!   "event":{"type":"run_started",…}},…]}`: the run's id, its TypeScript source, its pinned
-//!   action set document and its entries, written with one entry per line so that diffs stay
+//!   action set document and its events, written with one event per line so that diffs stay
 //!   readable. It replays on its own;
 //! - a **cassette** (mocks recorded from a run, replayed by `rewind test`):
 //!   `{"v":1,"matching":"sequential","calls":[…],"signals":[…]}`, one call or signal per line;
@@ -62,8 +62,8 @@ pub enum FormatError {
     InvalidEvent(String),
     #[error("invalid run export: {0}")]
     InvalidDocument(String),
-    #[error("invalid history entry at position {position}: {message}")]
-    InvalidEntry { position: usize, message: String },
+    #[error("invalid event at position {position}: {message}")]
+    InvalidHistoryEvent { position: usize, message: String },
     #[error("invalid cassette: {0}")]
     InvalidCassette(String),
     #[error("invalid pinned action set: {0}")]
@@ -101,18 +101,18 @@ pub fn decode_event(json: &str) -> Result<Event, FormatError> {
     }
 }
 
-/// A run export: the version, the run, its code and its action set, then one entry per
+/// A run export: the version, the run, its code and its action set, then one event per
 /// line.
 pub fn encode_run_export(export: &RunExport) -> String {
     let mut out = format!(
-        "{{\"v\":{VERSION},\"run\":{},\"code\":{},\"action_set\":{},\"entries\":[",
+        "{{\"v\":{VERSION},\"run\":{},\"code\":{},\"action_set\":{},\"events\":[",
         to_json(&export.run.to_string()),
         to_json(&export.code.source()),
         encode_action_set(&export.action_set),
     );
-    for (i, entry) in export.entries.iter().enumerate() {
+    for (i, entry) in export.events.iter().enumerate() {
         out.push_str(if i == 0 { "\n" } else { ",\n" });
-        out.push_str(&to_json(&v1::EntryV1::from(entry)));
+        out.push_str(&to_json(&v1::HistoryEventV1::from(entry)));
     }
     out.push_str("\n]}\n");
     out
@@ -120,7 +120,7 @@ pub fn encode_run_export(export: &RunExport) -> String {
 
 /// Decodes a run export written by [`encode_run_export`], of any supported version.
 ///
-/// Only the encoding is checked here. Whether the entries form a valid history, and whether
+/// Only the encoding is checked here. Whether the events form a valid history, and whether
 /// the code and the action set are those of its `run_started`, is the domain's business
 /// ([`RunExport::check`]).
 pub fn decode_run_export(json: &str) -> Result<RunExport, FormatError> {
@@ -148,29 +148,29 @@ pub fn decode_run_export(json: &str) -> Result<RunExport, FormatError> {
                 Some(_) => return Err(invalid("\"action_set\" is not an object")),
                 None => return Err(invalid("missing \"action_set\"")),
             };
-            let entries = match object.remove("entries") {
-                Some(Value::Array(entries)) => entries,
-                Some(_) => return Err(invalid("\"entries\" is not an array")),
-                None => return Err(invalid("missing \"entries\"")),
+            let events = match object.remove("events") {
+                Some(Value::Array(events)) => events,
+                Some(_) => return Err(invalid("\"events\" is not an array")),
+                None => return Err(invalid("missing \"events\"")),
             };
             if let Some(unknown) = object.keys().next() {
                 return Err(FormatError::InvalidDocument(format!(
                     "unknown field {unknown:?}"
                 )));
             }
-            let entries = entries
+            let events = events
                 .into_iter()
                 .enumerate()
                 .map(|(position, entry)| {
-                    v1::decode_entry(entry)
-                        .map_err(|message| FormatError::InvalidEntry { position, message })
+                    v1::decode_history_event(entry)
+                        .map_err(|message| FormatError::InvalidHistoryEvent { position, message })
                 })
                 .collect::<Result<_, _>>()?;
             Ok(RunExport {
                 run,
                 code,
                 action_set,
-                entries,
+                events,
             })
         }
     }

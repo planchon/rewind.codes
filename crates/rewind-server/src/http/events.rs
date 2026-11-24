@@ -13,7 +13,7 @@ use futures_util::Stream;
 use rewind_api::access::Permission;
 use rewind_api::events::{EventsQuery, StreamEvent};
 use rewind_api::headers::LAST_EVENT_ID;
-use rewind_core::{HistoryEntry, RunStatus};
+use rewind_core::{HistoryEvent, RunStatus};
 use rewind_engine::ports::RunRef;
 use rewind_engine::ports::link::{Changed, SubscriptionKey};
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -74,7 +74,7 @@ struct Tail {
     app: Arc<App>,
     rights: Rights,
     run: RunRef,
-    /// The index of the next entry to send.
+    /// The index of the next event to send.
     next: u64,
     /// The run's changes, when followed.
     changes: Option<UnboundedReceiver<Changed>>,
@@ -133,7 +133,7 @@ impl Tail {
         Ok(())
     }
 
-    /// A batch the owner committed: its entries, read again from the history when the batch
+    /// A batch the owner committed: its events, read again from the history when the batch
     /// starts past `next`.
     async fn changed(&mut self, changed: Changed) -> Result<(), ApiError> {
         let Some(summary) = &changed.summary else {
@@ -142,37 +142,37 @@ impl Tail {
             return Ok(());
         };
         let starts_after = changed
-            .entries
+            .events
             .first()
             .is_some_and(|first| first.index > self.next);
         if starts_after {
             return self.catch_up().await;
         }
-        let entries: Vec<HistoryEntry> = changed
-            .entries
+        let events: Vec<HistoryEvent> = changed
+            .events
             .into_iter()
             .filter(|entry| entry.index >= self.next)
             .collect();
-        self.push(&entries).await?;
+        self.push(&events).await?;
         if summary.status.is_terminal() && self.next >= summary.history_len {
             self.end(summary.status);
         }
         Ok(())
     }
 
-    async fn push(&mut self, history: &[HistoryEntry]) -> Result<(), ApiError> {
-        let entries = self
+    async fn push(&mut self, history: &[HistoryEvent]) -> Result<(), ApiError> {
+        let events = self
             .app
             .views()
-            .entries(&self.run, history, rewind_api::common::PAYLOAD_VALUE_LIMIT)
+            .events(&self.run, history, rewind_api::common::PAYLOAD_VALUE_LIMIT)
             .await?;
-        for entry in entries {
+        for entry in events {
             if entry.idx < self.next {
                 continue;
             }
             self.next = entry.idx + 1;
             self.pending
-                .push_back(sse(&StreamEvent::Entry(Box::new(entry))));
+                .push_back(sse(&StreamEvent::Event(Box::new(entry))));
         }
         Ok(())
     }

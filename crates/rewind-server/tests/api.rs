@@ -120,17 +120,17 @@ async fn a_run_starts_waits_and_is_read_back() {
     assert_eq!(read.history_len, run.history_len);
     let trace = harness.run_trace(&run.id, TraceFormat::Llm).await.unwrap();
     assert!(trace.text.contains("completed"), "{}", trace.text);
-    let entry = harness.run_entry(&run.id, 0).await.unwrap();
+    let entry = harness.run_event(&run.id, 0).await.unwrap();
     assert!(matches!(entry.event, Event::RunStarted { .. }));
     assert_eq!(
-        problem(harness.run_entry(&run.id, 99).await.unwrap_err()).kind(),
+        problem(harness.run_event(&run.id, 99).await.unwrap_err()).kind(),
         Some(ProblemType::NotFound)
     );
 
     let export = harness.export_run(&run.id, ExportAs::Run).await.unwrap();
     let document = rewind_format::decode_run_export(&export.to_string()).unwrap();
     assert_eq!(document.run.to_string(), run.id);
-    assert_eq!(document.entries.len() as u64, run.history_len);
+    assert_eq!(document.events.len() as u64, run.history_len);
     let cassette = harness
         .export_run(&run.id, ExportAs::Cassette)
         .await
@@ -776,7 +776,7 @@ async fn the_event_stream_follows_a_run_until_it_ends() {
         .unwrap()
     {
         match event.unwrap() {
-            StreamEvent::Entry(entry) => names.push(entry.event.name()),
+            StreamEvent::Event(entry) => names.push(entry.event.name()),
             StreamEvent::End { status } => end = Some(status),
         }
     }
@@ -804,14 +804,14 @@ async fn the_event_stream_follows_a_run_until_it_ends() {
         .unwrap();
     let mut count = 0;
     while let Some(event) = rest.next().await {
-        if let StreamEvent::Entry(entry) = event.unwrap() {
+        if let StreamEvent::Event(entry) = event.unwrap() {
             assert!(entry.idx >= 3);
             count += 1;
         }
     }
     assert_eq!(count, 2);
 
-    // A client resumes after the last entry it saw, whatever index it sends.
+    // A client resumes after the last event it saw, whatever index it sends.
     let resumed = reqwest::Client::new()
         .get(format!("{}/v1/runs/{}/events", server.url, run.id))
         .bearer_auth(support::ADMIN_KEY)
@@ -822,7 +822,7 @@ async fn the_event_stream_follows_a_run_until_it_ends() {
     assert_eq!(resumed.status(), 200);
     let text = resumed.text().await.unwrap();
     assert!(text.contains("event: end"), "{text}");
-    assert!(!text.contains("event: entry"), "{text}");
+    assert!(!text.contains("event: event"), "{text}");
     server.stop().await;
 }
 
@@ -1207,7 +1207,7 @@ async fn harness_action_failures_are_bounded_like_results() {
         .await
         .unwrap();
 
-    // A failure stays in its history entry: message and data together hold 64 KiB at most.
+    // A failure stays in its event: message and data together hold 64 KiB at most.
     let large = 64 * 1024;
     for failure in [
         FailCall {

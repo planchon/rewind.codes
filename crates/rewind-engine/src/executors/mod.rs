@@ -396,16 +396,16 @@ async fn parent_history<P: Plane>(
         .map_err(|error| failed(error.to_string()))?;
     Ok(read.map(|read| match read {
         crate::partition::AttemptRead::Live {
-            entries, payloads, ..
+            events, payloads, ..
         } => ParentHistory {
             run: parent,
-            entries,
+            events,
             payloads,
             sealed: None,
         },
         crate::partition::AttemptRead::Sealed { sealed, .. } => ParentHistory {
             run: parent,
-            entries: Vec::new(),
+            events: Vec::new(),
             payloads: Vec::new(),
             sealed: Some(sealed),
         },

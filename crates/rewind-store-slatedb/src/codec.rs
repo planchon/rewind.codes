@@ -5,7 +5,7 @@
 //! namespace, an event that is no trigger) is [`PartitionError::Corrupt`].
 //!
 //! The conversions are public: `rewind-server`, a composition root, writes the records the
-//! stored format already defines (a run head, a history entry, a summary, …) in the DTOs of its
+//! stored format already defines (a run head, an event, a summary, …) in the DTOs of its
 //! node link rather than defining them a second time. `*_record` writes a record, `*_of` reads
 //! one back.
 
@@ -247,16 +247,16 @@ fn wait_of(record: record::Wait) -> Wait {
 // -------------------------------------------------------------------------------------------
 // History, inbox, tasks, timers, payloads, watchers, webhook tokens
 
-pub fn entry_record(entry: &rewind_core::HistoryEntry) -> record::Entry {
-    record::Entry {
+pub fn event_record(entry: &rewind_core::HistoryEvent) -> record::HistoryEvent {
+    record::HistoryEvent {
         index: entry.index,
         recorded_at: entry.recorded_at.0,
         event: entry.event.clone(),
     }
 }
 
-pub fn entry_of(record: record::Entry) -> rewind_core::HistoryEntry {
-    rewind_core::HistoryEntry {
+pub fn event_of(record: record::HistoryEvent) -> rewind_core::HistoryEvent {
+    rewind_core::HistoryEvent {
         index: record.index,
         recorded_at: Timestamp(record.recorded_at),
         event: record.event,

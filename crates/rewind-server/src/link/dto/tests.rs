@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use rewind_core::{
     ActionFailure, ActionFailureKind, ActionPolicy, ActionRoute, ActionSet, Annotation, Callsite,
-    CancelReason, Code, Command, Completion, Digest, Epoch, Event, HistoryEntry, Lifecycle,
+    CancelReason, Code, Command, Completion, Digest, Epoch, Event, HistoryEvent, Lifecycle,
     LogLevel, PartitionId, Payload, RunId, RunMode, RunStarted, RunStatus, SecretRef, Seed, Seq,
     Shape, Timestamp,
 };
@@ -259,8 +259,8 @@ fn indexed(n: u128) -> IndexedSummary {
     }
 }
 
-/// One entry of each kind of event.
-fn history() -> Vec<HistoryEntry> {
+/// One event of each kind of event.
+fn history() -> Vec<HistoryEvent> {
     let events = [
         Event::Lifecycle(Lifecycle::RunStarted(started())),
         Event::Command(Command::ScheduleCall {
@@ -293,7 +293,7 @@ fn history() -> Vec<HistoryEntry> {
     events
         .into_iter()
         .enumerate()
-        .map(|(index, event)| HistoryEntry {
+        .map(|(index, event)| HistoryEvent {
             index: index as u64,
             recorded_at: at(index as u64),
             event,
@@ -578,7 +578,7 @@ fn activation() -> Activation {
     Activation {
         run: run(1),
         attempt: Attempt(2),
-        entries: history(),
+        events: history(),
         consumed: vec![1, 2],
         payloads: payloads(),
         tasks: tasks(),
@@ -1090,13 +1090,13 @@ fn subscriptions_and_changes_round_trip() {
         run: run(1),
         namespace: user(),
         summary: Some(summary(1)),
-        entries: history(),
+        events: history(),
     });
     round_trip::<_, super::Changed>(&Changed {
         run: run(1),
         namespace: user(),
         summary: None,
-        entries: Vec::new(),
+        events: Vec::new(),
     });
 }
 
@@ -1110,14 +1110,14 @@ fn activation_request(purpose: Purpose) -> ActivationRequest {
         payloads: payloads(),
         parent: Some(ParentHistory {
             run: run_id(9),
-            entries: history(),
+            events: history(),
             payloads: payloads(),
             sealed: Some(Box::new(SealedAttempt {
                 run: RunRef::new(acme(), run_id(9)),
                 attempt: Attempt(1),
                 code: Code::new("export default async () => 1;"),
                 action_set: action_set(),
-                entries: history(),
+                events: history(),
             })),
         }),
         code: StoredCode {
@@ -1190,7 +1190,7 @@ fn activations_round_trip() {
         })),
         ActivationResult::Quarantined {
             kind: QuarantineKind::NonDeterminism,
-            reason: "the replay diverged at entry 3".into(),
+            reason: "the replay diverged at event 3".into(),
         },
         ActivationResult::Released,
         ActivationResult::Failed {

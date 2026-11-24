@@ -13,7 +13,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::sync::atomic::Ordering;
 use std::sync::{Mutex, PoisonError};
 
-use rewind_core::HistoryEntry;
+use rewind_core::HistoryEvent;
 use rewind_engine::ports::partition::{Activation, CreateRun};
 use rewind_engine::ports::{
     Attempt, Batch, Change, CounterDelta, DueTimer, Gauges, IndexedSummary, OutboxChange,
@@ -152,7 +152,7 @@ impl Apply<'_> {
         self.txn.delete(key).map_err(|err| self.error(err))
     }
 
-    /// Every entry under `prefix`, the batch's writes included.
+    /// Every event under `prefix`, the batch's writes included.
     async fn scan(&self, prefix: &Key) -> Result<Vec<(Bytes, Bytes)>, PartitionError> {
         let options = ScanOptions {
             durability_filter: DurabilityLevel::Memory,
@@ -530,7 +530,7 @@ impl Apply<'_> {
             run,
             mut head,
             start_key,
-            entries,
+            events: entries,
             payloads,
             summary,
         } = create;
@@ -559,7 +559,7 @@ impl Apply<'_> {
         for entry in &entries {
             self.put(
                 &keys::history(&run, head.attempt, entry.index),
-                &codec::entry_record(entry),
+                &codec::event_record(entry),
             )?;
         }
         for payload in &payloads {
@@ -579,7 +579,7 @@ impl Apply<'_> {
         let Activation {
             run,
             attempt,
-            entries,
+            events: entries,
             consumed,
             payloads,
             tasks,
@@ -608,7 +608,7 @@ impl Apply<'_> {
         for entry in &entries {
             self.put(
                 &keys::history(&run, attempt, entry.index),
-                &codec::entry_record(entry),
+                &codec::event_record(entry),
             )?;
         }
         head.history_len = before.head.history_len + entries.len() as u64;
@@ -886,18 +886,18 @@ fn subtract(gauges: &mut Gauges, held: &Gauges) {
     }
 }
 
-/// Refuses entries that do not continue the attempt's history at `len`, index by index.
+/// Refuses events that do not continue the attempt's history at `len`, index by index.
 fn continue_history(
     run: &RunRef,
     attempt: Attempt,
     len: u64,
-    entries: &[HistoryEntry],
+    entries: &[HistoryEvent],
 ) -> Result<(), PartitionError> {
     for (offset, entry) in entries.iter().enumerate() {
         let expected = len + offset as u64;
         if entry.index != expected {
             return Err(conflict(format!(
-                "attempt {attempt} of run {run} continues at entry {expected}, not {}",
+                "attempt {attempt} of run {run} continues at event {expected}, not {}",
                 entry.index
             )));
         }

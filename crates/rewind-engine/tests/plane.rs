@@ -118,7 +118,7 @@ async fn a_run_calls_its_actions_ends_and_is_sealed() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(sealed.entries.len(), 8);
+    assert_eq!(sealed.events.len(), 8);
     let summary = view.summary.unwrap();
     assert_eq!(summary.status, RunStatus::Completed);
     assert_eq!(summary.calls, 3);
@@ -138,8 +138,8 @@ async fn a_run_calls_its_actions_ends_and_is_sealed() {
     );
 }
 
-/// A read of a history is two reads, the head then the entries: the seal of the attempt,
-/// committed between them, deletes the entries the head counts. The read still answers the
+/// A read of a history is two reads, the head then the events: the seal of the attempt,
+/// committed between them, deletes the events the head counts. The read still answers the
 /// whole history, from the archive, never an ended run with an empty one.
 #[tokio::test]
 async fn a_history_read_while_its_attempt_is_sealed_is_whole() {
@@ -184,7 +184,7 @@ async fn a_history_read_while_its_attempt_is_sealed_is_whole() {
     let mut gateway = world.driver.gateway(&world.at.clone());
     let export = world.edge.export_run(&mut gateway, &run).await.unwrap();
     assert_eq!(store.applied(), 1);
-    assert_eq!(export.entries.len(), 8);
+    assert_eq!(export.events.len(), 8);
 }
 
 /// An owner whose read finds the partition opened by another node drops it, as a fenced commit
@@ -367,7 +367,7 @@ async fn thousands_of_timers_due_at_once_fire_until_the_history_is_full() {
         panic!("the run is aborted");
     };
     assert_eq!(reason.kind, AbortKind::LimitExceeded);
-    assert_eq!(reason.message, "the history would exceed 50000 entries");
+    assert_eq!(reason.message, "the history would exceed 50000 events");
 }
 
 #[tokio::test]
@@ -478,7 +478,7 @@ async fn a_replay_mismatch_quarantines_the_run_and_commits_nothing() {
     assert_eq!(quarantine.kind, QuarantineKind::NonDeterminism);
     assert_eq!(
         quarantine.reason,
-        "history entry 1 is call #1 a({\"n\":0}), but the code emitted call #1 a({\"n\":1})"
+        "event 1 is call #1 a({\"n\":0}), but the code emitted call #1 a({\"n\":1})"
     );
     assert!(
         view.summary.unwrap().quarantine.is_some(),

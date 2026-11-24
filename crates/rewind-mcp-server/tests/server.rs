@@ -18,7 +18,7 @@ use rewind_api::action_sets::{
     ActionSearchResults, ActionSet, ActionSetList, CreateActionSet, SearchQuery,
 };
 use rewind_api::common::Duration;
-use rewind_api::events::Entry;
+use rewind_api::events::HistoryEvent;
 use rewind_api::headers::IdempotencyKey;
 use rewind_api::namespaces::{NamespaceList, NamespaceListQuery, NamespaceName};
 use rewind_api::runs::{
@@ -146,7 +146,7 @@ impl Api for FakeApi {
         .unwrap())
     }
 
-    async fn run_entry(&self, _run: &str, _idx: u64) -> Result<Entry, ApiError> {
+    async fn run_event(&self, _run: &str, _idx: u64) -> Result<HistoryEvent, ApiError> {
         Err(unused("run_entry"))
     }
 

@@ -18,13 +18,13 @@ use rewind_core::{
 };
 use rewind_format::FormatError;
 use rewind_format::partition::{
-    ActionCounts, Admission, Attribute, Callsite, Counters, CredentialsReason, Ending, Entry,
-    FailureCounts, FailureKind, ForkParent, Gauges, InboxItem, LatestRun, Level, Log, Metadata,
-    Mode, Organization, Outbox, ParkKind, PayloadValue, Projection, Quarantine, QuarantineKind,
-    QuarantineNote, QuotaAlert, QuotaKind, Record, RunCounts, RunHead, RunWorkflow, ScriptCounts,
-    Shape, SignalKey, Sketch, Span, SpanKind, SpanStatus, StartKey, StartedBy, Status, Summary,
-    Task, TaskPhase, TaskState, Threshold, Timer, TimerKind, TraceContext, Wait, WaitKind,
-    WaitingFor, Watcher, WebhookEvent, WebhookKind, WebhookToken, decode, encode,
+    ActionCounts, Admission, Attribute, Callsite, Counters, CredentialsReason, Ending,
+    FailureCounts, FailureKind, ForkParent, Gauges, HistoryEvent, InboxItem, LatestRun, Level, Log,
+    Metadata, Mode, Organization, Outbox, ParkKind, PayloadValue, Projection, Quarantine,
+    QuarantineKind, QuarantineNote, QuotaAlert, QuotaKind, Record, RunCounts, RunHead, RunWorkflow,
+    ScriptCounts, Shape, SignalKey, Sketch, Span, SpanKind, SpanStatus, StartKey, StartedBy,
+    Status, Summary, Task, TaskPhase, TaskState, Threshold, Timer, TimerKind, TraceContext, Wait,
+    WaitKind, WaitingFor, Watcher, WebhookEvent, WebhookKind, WebhookToken, decode, encode,
 };
 use serde_json::json;
 
@@ -96,7 +96,7 @@ fn run_head() -> RunHead {
         attempts: 2,
         quarantine: Some(Quarantine {
             kind: QuarantineKind::NonDeterminism,
-            reason: "replay mismatch at entry 3".into(),
+            reason: "replay mismatch at event 3".into(),
             since: T0 + 50,
             retried_by: Some("build-2".into()),
         }),
@@ -132,8 +132,8 @@ fn run_head() -> RunHead {
     }
 }
 
-fn entry() -> Entry {
-    Entry {
+fn history_event() -> HistoryEvent {
+    HistoryEvent {
         index: 0,
         recorded_at: T0,
         event: Event::Lifecycle(Lifecycle::RunStarted(RunStarted {
@@ -422,7 +422,7 @@ fn golden<R: Record + PartialEq + std::fmt::Debug>(name: &str, record: R) {
 #[test]
 fn every_record_decodes_from_its_fixture_and_re_encodes_to_the_same_bytes() {
     golden("run-head", run_head());
-    golden("entry", entry());
+    golden("history-event", history_event());
     golden("inbox-item", inbox_item());
     golden("signal-key", SignalKey {});
     golden("task", task());

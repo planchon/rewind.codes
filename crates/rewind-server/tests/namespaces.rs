@@ -808,7 +808,7 @@ async fn revoked_tokens_are_refused_from_the_next_request() {
     let mut events = alice.run_events(&run.id, &query).await.unwrap();
     assert!(
         events.next().await.is_some(),
-        "the stream sends the run's entries"
+        "the stream sends the run's events"
     );
     customer.revoke_token(&minted.id).await.unwrap();
     customer.revoke_token(&minted.id).await.unwrap();

@@ -1,4 +1,4 @@
-//! The LLM trace of a run, and one entry in full (`rewind trace <run> [--entry n]`).
+//! The LLM trace of a run, and one event in full (`rewind trace <run> [--event n]`).
 
 #![allow(clippy::unwrap_used)]
 
@@ -61,7 +61,7 @@ async fn the_trace_folds_each_call_with_its_outcome_and_truncates_payloads() {
     assert!(
         lines[5].contains("#1 a({\"repo\":\"acme/api\",\"state\":\"open\"})")
             && lines[5].contains("L1")
-            && lines[5].ends_with("→ 3 items · 40 B · 0.0s · entry 2"),
+            && lines[5].ends_with("→ 3 items · 40 B · 0.0s · event 2"),
         "{trace}"
     );
     assert!(
@@ -85,7 +85,7 @@ async fn the_trace_folds_each_call_with_its_outcome_and_truncates_payloads() {
     );
     assert!(lines[7].ends_with("→ dropped with the run"), "{trace}");
     assert!(
-        lines[8].ends_with("→ received after 1h00m · entry 6"),
+        lines[8].ends_with("→ received after 1h00m · event 6"),
         "{trace}"
     );
     // A payload is truncated in the trace.
@@ -96,20 +96,20 @@ async fn the_trace_folds_each_call_with_its_outcome_and_truncates_payloads() {
     assert!(lines[9].ends_with("…"), "{trace}");
     assert!(lines[10].contains("failed · TypeError: decision.close is undefined"));
 
-    // One entry in full.
+    // One event in full.
     let mut gateway = world.driver.gateway(&world.at.clone());
     let entry = world
         .edge
-        .trace_entry(&mut gateway, &run, 6)
+        .trace_event(&mut gateway, &run, 6)
         .await
         .unwrap()
         .unwrap();
-    assert!(entry.starts_with("entry 6 · signal_received · +1h00m (2026-01-01T01:00:00Z)"));
+    assert!(entry.starts_with("event 6 · signal_received · +1h00m (2026-01-01T01:00:00Z)"));
     assert!(entry.contains(&"x".repeat(300)), "{entry}");
     assert_eq!(
         world
             .edge
-            .trace_entry(&mut gateway, &run, 99)
+            .trace_event(&mut gateway, &run, 99)
             .await
             .unwrap(),
         None

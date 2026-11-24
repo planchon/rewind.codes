@@ -19,7 +19,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use rewind_core::{
-    Digest, ERASED_TEST_REASON, Expectations, HistoryEntry, RecordError, RetiredTest, RunId,
+    Digest, ERASED_TEST_REASON, Expectations, HistoryEvent, RecordError, RetiredTest, RunId,
     RunPath, Suite, SuiteTest, Test, TestOrigin, Timestamp, UpdatedTest, Workflow,
 };
 
@@ -542,7 +542,7 @@ impl Recorder {
 
     /// Offers a run, its history with every payload loaded. A run whose path a newer run
     /// already stands for adds nothing.
-    pub fn offer(&mut self, history: &[HistoryEntry], origin: TestOrigin) {
+    pub fn offer(&mut self, history: &[HistoryEvent], origin: TestOrigin) {
         if self.is_full() {
             return;
         }

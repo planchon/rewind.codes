@@ -9,9 +9,9 @@
 //!     if the attempt ended: drop the item
 //!     emitted ← instance.deliver(item, recorded_at)    # payloads loaded from where they live
 //!     cpu += instance.cpu_time()                       # calls that execute, never a replay's
-//!     entries += [item] + emitted
-//! move payloads > 1 KiB out of the entries: to the run's payload records, or a blob, put first
-//! derive tasks, timers, head, summary, counters and projections from the new entries
+//!     events += [item] + emitted
+//! move payloads > 1 KiB out of the events: to the run's payload records, or a blob, put first
+//! derive tasks, timers, head, summary, counters and projections from the new events
 //! → Committed, for the owner's next batch; the instance stays in the cache
 //! ```
 //!
@@ -25,7 +25,7 @@ use std::time::Duration;
 
 use rewind_core::{
     AbortKind, AbortReason, ActionFailure, ActionFailureKind, Completion, Digest, Event,
-    HistoryEntry, JsonValue, Lifecycle, RunEnd, RunOutcome, RunState, Timestamp,
+    HistoryEvent, JsonValue, Lifecycle, RunEnd, RunOutcome, RunState, Timestamp,
 };
 
 use crate::batch::EngineError;
@@ -226,7 +226,7 @@ async fn work<P: Plane>(
                 .or_insert_with(|| record.clone());
         }
         if let Some(sealed) = &parent.sealed {
-            for entry in &sealed.entries {
+            for entry in &sealed.events {
                 if let Some(rewind_core::Payload::Digest(digest)) =
                     payloads::payload_of(&entry.event)
                 {
@@ -382,7 +382,7 @@ async fn work<P: Plane>(
                     let parent_history = parent
                         .sealed
                         .as_ref()
-                        .map_or(&parent.entries, |sealed| &sealed.entries);
+                        .map_or(&parent.events, |sealed| &sealed.events);
                     let with = FollowWith {
                         executor: plane.executor(),
                         payloads: &source,
@@ -453,15 +453,15 @@ async fn work<P: Plane>(
 
     let from = history.len();
     let crate::batch::Finished {
-        entries,
+        events,
         consumed,
         before,
         after: state,
     } = batch.finish();
-    history.extend(entries);
+    history.extend(events);
     let end = end_of(&source, &run.tenant, &state).await?;
-    // The summary the owner holds describes the history before the new entries, unless the
-    // activation copied a fork's parent: then the summary is derived from every entry.
+    // The summary the owner holds describes the history before the new events, unless the
+    // activation copied a fork's parent: then the summary is derived from every event.
     let previous =
         previous.filter(|previous| !first_of_fork && previous.summary.history_len == from as u64);
     let committed = commit(
@@ -496,7 +496,7 @@ async fn work<P: Plane>(
         _ => None,
     };
     tracing::debug!(
-        entries = committed.activation.entries.len(),
+        events = committed.activation.events.len(),
         status = %committed.activation.head.status,
         "activation done"
     );
@@ -506,12 +506,12 @@ async fn work<P: Plane>(
 /// What an activation commits, before it is derived.
 struct CommitOf<'a> {
     head: &'a RunHead,
-    history: &'a mut Vec<HistoryEntry>,
-    /// The new entries are `history[from..]`: they take the run from `before` to `state`.
+    history: &'a mut Vec<HistoryEvent>,
+    /// The new events are `history[from..]`: they take the run from `before` to `state`.
     from: usize,
     before: &'a RunState,
     state: &'a RunState,
-    /// The summary of `history[..from]`, when there is one to count the new entries from.
+    /// The summary of `history[..from]`, when there is one to count the new events from.
     previous: Option<&'a crate::ports::IndexedSummary>,
     consumed: Vec<u64>,
     released: bool,
@@ -524,7 +524,7 @@ struct CommitOf<'a> {
     first_of_fork: bool,
 }
 
-/// Moves the new entries' payloads out, and derives what the activation writes beside them.
+/// Moves the new events' payloads out, and derives what the activation writes beside them.
 async fn commit<P: Plane, B: BlobStore>(
     plane: &P,
     config: &NodeConfig,
@@ -598,7 +598,7 @@ async fn commit<P: Plane, B: BlobStore>(
     for record in &records {
         all_records.insert(record.digest, record.clone());
     }
-    let new = derive::NewEntries {
+    let new = derive::NewEvents {
         history,
         from,
         before,
@@ -617,7 +617,7 @@ async fn commit<P: Plane, B: BlobStore>(
         activation: Activation {
             run: run.clone(),
             attempt: head.attempt,
-            entries: history[from..].to_vec(),
+            events: history[from..].to_vec(),
             consumed,
             payloads: records,
             tasks: new_tasks,
@@ -670,7 +670,7 @@ async fn start_fork<X, S, C, K>(
     clock: &K,
     batch: &mut Batch<'_>,
     source: ForkSource<'_>,
-    parent: &[HistoryEntry],
+    parent: &[HistoryEvent],
 ) -> Result<Option<X::Instance>, EngineError>
 where
     X: CodeExecutor,
@@ -743,7 +743,7 @@ async fn give_up<P: Plane, B: BlobStore>(
     source: &Carried<'_, B>,
     head: RunHead,
     inbox: Vec<crate::ports::InboxItem>,
-    mut history: Vec<HistoryEntry>,
+    mut history: Vec<HistoryEvent>,
     action_set: &crate::ports::StoredActionSet,
     code: &crate::ports::StoredCode,
     tasks: &[crate::ports::TaskRecord],
@@ -782,7 +782,7 @@ async fn give_up<P: Plane, B: BlobStore>(
     let from = history.len();
     let before = state.clone();
     for event in events {
-        let entry = HistoryEntry {
+        let entry = HistoryEvent {
             index: state.history_len(),
             recorded_at,
             event,
@@ -820,11 +820,11 @@ async fn give_up<P: Plane, B: BlobStore>(
     Ok(ActivationResult::Committed(Box::new(committed)))
 }
 
-/// The digests of the payloads entries hold by digest: what an activation must be sent.
+/// The digests of the payloads events hold by digest: what an activation must be sent.
 pub(crate) fn digests_of<'a>(
-    entries: impl IntoIterator<Item = &'a HistoryEntry>,
+    events: impl IntoIterator<Item = &'a HistoryEvent>,
 ) -> BTreeSet<Digest> {
-    entries
+    events
         .into_iter()
         .filter_map(|entry| match payloads::payload_of(&entry.event) {
             Some(rewind_core::Payload::Digest(digest)) => Some(*digest),

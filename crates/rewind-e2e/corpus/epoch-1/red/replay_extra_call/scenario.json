@@ -16,6 +16,6 @@
   },
   "replay": {
     "code": "changed.ts",
-    "diverges": "history entry 7 is run completion ({\"numbers\":[1,2,3]}), but the code emitted call #4 audit.record({\"count\":3})"
+    "diverges": "event 7 is run completion ({\"numbers\":[1,2,3]}), but the code emitted call #4 audit.record({\"count\":3})"
   }
 }

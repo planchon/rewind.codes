@@ -1,15 +1,15 @@
 //! The LLM trace of a run at the edge (`archi/05-testing-and-observability.md`, "LLM trace and
-//! metrics"): `GET /v1/runs/{id}/trace?format=llm`, `rewind trace <run> [--entry n]`, and the
+//! metrics"): `GET /v1/runs/{id}/trace?format=llm`, `rewind trace <run> [--event n]`, and the
 //! trace of a test's report.
 //!
 //! The run's head and the history of its attempt come from its owner, from the partition while
 //! the attempt is live, from its sealed attempt once it is sealed; every payload up to 64 KiB is
 //! a value there. A payload above is a blob of the run: the trace shows its size and preview,
-//! and an entry shown in full loads its value.
+//! and an event shown in full loads its value.
 
 use std::collections::BTreeMap;
 
-use rewind_core::{Digest, HistoryEntry, Payload};
+use rewind_core::{Digest, HistoryEvent, Payload};
 
 use super::{Edge, EdgeError, Gateway, unavailable};
 use crate::executors::activation::Carried;
@@ -39,9 +39,9 @@ impl<P: Plane> Edge<P> {
         }))
     }
 
-    /// One entry of the run's history in full, its payload loaded (`rewind trace <run> --entry
+    /// One event of the run's history in full, its payload loaded (`rewind trace <run> --event
     /// n`). `None` past the end of the history.
-    pub async fn trace_entry<G: Gateway>(
+    pub async fn trace_event<G: Gateway>(
         &self,
         gateway: &mut G,
         run: &RunRef,
@@ -62,7 +62,7 @@ impl<P: Plane> Edge<P> {
         let started_at = history
             .first()
             .map_or(entry.recorded_at, |first| first.recorded_at);
-        Ok(Some(trace::render_entry(entry, value.as_ref(), started_at)))
+        Ok(Some(trace::render_event(entry, value.as_ref(), started_at)))
     }
 
     /// The history of the run's attempt, the payloads up to 64 KiB as values.
@@ -70,7 +70,7 @@ impl<P: Plane> Edge<P> {
         &self,
         gateway: &mut G,
         run: &RunRef,
-    ) -> Result<Vec<HistoryEntry>, EdgeError> {
+    ) -> Result<Vec<HistoryEvent>, EdgeError> {
         Ok(self
             .history(gateway, run, 0, true)
             .await?
@@ -91,7 +91,7 @@ impl<P: Plane> Edge<P> {
     async fn blob_rows(
         &self,
         run: &RunRef,
-        history: &[HistoryEntry],
+        history: &[HistoryEvent],
     ) -> Result<BTreeMap<Digest, PayloadRecord>, EdgeError> {
         let owner = BlobOwner::Run(run.clone());
         let mut rows = BTreeMap::new();

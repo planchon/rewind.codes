@@ -2278,36 +2278,11 @@
         ],
         "type": "object"
       },
-      "Entry": {
-        "description": "One history entry.",
-        "properties": {
-          "event": {
-            "$ref": "#/components/schemas/Event"
-          },
-          "idx": {
-            "description": "Position in the history: from 0, contiguous.",
-            "format": "int64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "recordedAt": {
-            "description": "When the entry was committed; monotonic per run. Once a trigger is delivered, it is the\ncode's logical time.",
-            "format": "date-time",
-            "type": "string"
-          }
-        },
-        "required": [
-          "idx",
-          "recordedAt",
-          "event"
-        ],
-        "type": "object"
-      },
       "Event": {
         "description": "A history event (`archi/02-history.md`): lifecycle, commands, completions and annotations.",
         "oneOf": [
           {
-            "description": "The run's first entry. The seed is left out: it is only in the run export.",
+            "description": "The run's first event. The seed is left out: it is only in the run export.",
             "properties": {
               "actionSet": {
                 "type": "string"
@@ -3082,7 +3057,7 @@
         "description": "The run a fork was started from.",
         "properties": {
           "at": {
-            "description": "The entry from which the fork was forced live, if the request gave one.",
+            "description": "The event from which the fork was forced live, if the request gave one.",
             "format": "int64",
             "minimum": 0,
             "type": [
@@ -3110,7 +3085,7 @@
         "description": "`POST /v1/runs/{id}/fork` (`retry_run`): a new run with a corrected code. While its\ncommands match the parent's, the parent's recorded results are reused and no action is called\nagain; it continues live at the first difference, at `at`, or at the end of the parent's\nhistory (`archi/03-execution.md`, \"Forks\"). Takes `Idempotency-Key` as `POST /v1/runs`.",
         "properties": {
           "at": {
-            "description": "Go live from this history entry even if the commands still match.",
+            "description": "Go live from this event even if the commands still match.",
             "format": "int64",
             "minimum": 0,
             "type": [
@@ -3344,6 +3319,31 @@
           "name",
           "description",
           "inputSchema"
+        ],
+        "type": "object"
+      },
+      "HistoryEvent": {
+        "description": "One event.",
+        "properties": {
+          "event": {
+            "$ref": "#/components/schemas/Event"
+          },
+          "idx": {
+            "description": "Position in the history: from 0, contiguous.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "recordedAt": {
+            "description": "When the event was committed; monotonic per run. Once a trigger is delivered, it is the\ncode's logical time.",
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "idx",
+          "recordedAt",
+          "event"
         ],
         "type": "object"
       },
@@ -3745,7 +3745,7 @@
             ]
           },
           "idx": {
-            "description": "The history entry.",
+            "description": "The event.",
             "format": "int64",
             "minimum": 0,
             "type": "integer"
@@ -5438,7 +5438,7 @@
             "type": "string"
           },
           "historyLen": {
-            "description": "Number of history entries.",
+            "description": "Number of events.",
             "format": "int64",
             "minimum": 0,
             "type": "integer"
@@ -6927,19 +6927,19 @@
         "type": "object"
       },
       "StreamEvent": {
-        "description": "One event of the stream. On the wire, each is a server-sent event whose `event` field is\nthe `type` below, whose `data` is this JSON object, and, for an entry, whose `id` is the\nentry's `idx`.",
+        "description": "One event of the stream. On the wire, each is a server-sent event whose `event` field is\nthe `type` below, whose `data` is this JSON object, and, for an event, whose `id` is the\nevent's `idx`.",
         "oneOf": [
           {
             "allOf": [
               {
-                "$ref": "#/components/schemas/Entry",
-                "description": "A committed history entry. Payload values above 256 KiB are left out."
+                "$ref": "#/components/schemas/HistoryEvent",
+                "description": "A committed event of the history. Payload values above 256 KiB are left out."
               },
               {
                 "properties": {
                   "type": {
                     "enum": [
-                      "entry"
+                      "event"
                     ],
                     "type": "string"
                   }
@@ -6950,10 +6950,10 @@
                 "type": "object"
               }
             ],
-            "description": "A committed history entry. Payload values above 256 KiB are left out."
+            "description": "A committed event of the history. Payload values above 256 KiB are left out."
           },
           {
-            "description": "The last event of a stream: the run has ended, or, without `follow`, every entry\ncommitted so far was sent.",
+            "description": "The last event of a stream: the run has ended, or, without `follow`, every event\ncommitted so far was sent.",
             "properties": {
               "status": {
                 "$ref": "#/components/schemas/RunStatus"
@@ -17232,131 +17232,9 @@
         ]
       }
     },
-    "/v1/runs/{id}/entries/{idx}": {
-      "get": {
-        "description": "Every payload of the entry has its value, whatever its size.",
-        "operationId": "getRunEntry",
-        "parameters": [
-          {
-            "description": "The run's id, or its handle percent-encoded (`dana%2Ftriage%2F06bqx3k9f2mt`).",
-            "in": "path",
-            "name": "id",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "The entry's index, from 0.",
-            "in": "path",
-            "name": "idx",
-            "required": true,
-            "schema": {
-              "format": "int64",
-              "minimum": 0,
-              "type": "integer"
-            }
-          },
-          {
-            "description": "The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`.",
-            "in": "header",
-            "name": "Rewind-Namespace",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
-            "in": "header",
-            "name": "Rewind-Organization",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Entry"
-                }
-              }
-            },
-            "description": "The entry."
-          },
-          "400": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "The request is malformed (`invalid-request`)."
-          },
-          "401": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
-          },
-          "403": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
-          },
-          "404": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "No such run or entry."
-          },
-          "500": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "A fault of the platform (`internal`)."
-          },
-          "503": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "The server cannot serve the request now (`unavailable`)."
-          }
-        },
-        "summary": "One history entry in full",
-        "tags": [
-          "runs"
-        ]
-      }
-    },
     "/v1/runs/{id}/events": {
       "get": {
-        "description": "Each event's `data` is a `StreamEvent`: the committed entries from `from`, then, with\n`follow=1`, each new entry as it is committed, and `end` when the run has ended.",
+        "description": "Each event's `data` is a `StreamEvent`: the committed events from `from`, then, with\n`follow=1`, each new event as it is committed, and `end` when the run has ended.",
         "operationId": "streamRunEvents",
         "parameters": [
           {
@@ -17369,7 +17247,7 @@
             }
           },
           {
-            "description": "`1`: keep the stream open and send entries as they are committed, until the run ends.\nWithout it, the stream ends once the entries committed so far are sent.",
+            "description": "`1`: keep the stream open and send events as they are committed, until the run ends.\nWithout it, the stream ends once the events committed so far are sent.",
             "in": "query",
             "name": "follow",
             "required": false,
@@ -17378,7 +17256,7 @@
             }
           },
           {
-            "description": "The first entry to send. `0` by default; a reconnecting client sends the `id` of the last\nevent it received plus one (or the `Last-Event-ID` header).",
+            "description": "The first event to send. `0` by default; a reconnecting client sends the `id` of the last\nevent it received plus one (or the `Last-Event-ID` header).",
             "in": "query",
             "name": "from",
             "required": false,
@@ -17389,7 +17267,7 @@
             }
           },
           {
-            "description": "Resume after this entry: the same as `from` set to it plus one.",
+            "description": "Resume after this event: the same as `from` set to it plus one.",
             "in": "header",
             "name": "Last-Event-ID",
             "required": false,
@@ -17492,6 +17370,128 @@
           }
         },
         "summary": "Stream the run's history (server-sent events)",
+        "tags": [
+          "runs"
+        ]
+      }
+    },
+    "/v1/runs/{id}/events/{idx}": {
+      "get": {
+        "description": "Every payload of the event has its value, whatever its size.",
+        "operationId": "getRunEvent",
+        "parameters": [
+          {
+            "description": "The run's id, or its handle percent-encoded (`dana%2Ftriage%2F06bqx3k9f2mt`).",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The event's index, from 0.",
+            "in": "path",
+            "name": "idx",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Namespace",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HistoryEvent"
+                }
+              }
+            },
+            "description": "The event."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The request is malformed (`invalid-request`)."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No such run or event."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A fault of the platform (`internal`)."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The server cannot serve the request now (`unavailable`)."
+          }
+        },
+        "summary": "One event in full",
         "tags": [
           "runs"
         ]

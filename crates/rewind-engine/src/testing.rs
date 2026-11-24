@@ -26,7 +26,7 @@ use std::time::Duration;
 use futures_util::StreamExt;
 use futures_util::stream;
 use rewind_core::{
-    AbortReason, ActionOutcome, ActionSet, Code, Command, Event, HistoryEntry, JsonValue, Observed,
+    AbortReason, ActionOutcome, ActionSet, Code, Command, Event, HistoryEvent, JsonValue, Observed,
     ObservedCall, PartitionId, RunId, RunMode, RunOutcome, RunState, RunStatus, ScriptError, Seed,
     SignalWhen, Test, Timestamp, WorkflowOp, WorkflowSchemas,
 };
@@ -109,7 +109,7 @@ pub struct TestReport {
     /// The LLM trace of the run; empty for a test that was not run.
     pub trace: String,
     /// The run's history, every payload loaded.
-    pub history: Vec<HistoryEntry>,
+    pub history: Vec<HistoryEvent>,
 }
 
 impl TestReport {
@@ -462,7 +462,7 @@ where
         .export_run(&mut gateway, &run)
         .await
         .map_err(unavailable)?
-        .entries;
+        .events;
     let trace = world
         .edge
         .trace(&mut gateway, &run)

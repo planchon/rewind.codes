@@ -1,6 +1,6 @@
 //! The limits of `archi/03-execution.md` ("Resource limits", "Run TTL") through the HTTP API,
 //! with the server's defaults: 5 s of CPU time per call into the code, 128 MiB of heap,
-//! 10,000 commands per activation, 50,000 history entries, 8 MiB per payload, and the TTL
+//! 10,000 commands per activation, 50,000 events, 8 MiB per payload, and the TTL
 //! bounded by the deployment's maximum.
 //!
 //! A limit exceeded by the code ends the run with `run_aborted { limit_exceeded }`: the trigger
@@ -64,10 +64,10 @@ fn assert_limit(run: &Run, message: &str) {
     );
 }
 
-/// The `type` of each entry of the run's history.
+/// The `type` of each event of the run's history.
 async fn events(client: &Client, run: &str) -> Vec<String> {
     let export = client.export_run(run, ExportAs::Run).await.unwrap();
-    export["entries"]
+    export["events"]
         .as_array()
         .unwrap()
         .iter()
@@ -176,10 +176,10 @@ export default async function main() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn the_history_is_capped_at_50000_entries() {
+async fn the_history_is_capped_at_50000_events() {
     let server = TestServer::start(&[]).await;
     let harness = server.key(BuiltInRole::Harness, &[]).await;
-    // Batches of 9,000 timers (below the commands' bound): 18,000 entries each.
+    // Batches of 9,000 timers (below the commands' bound): 18,000 events each.
     let run = harness
         .start_run(
             &start(
@@ -195,12 +195,12 @@ export default async function main() {
         .await
         .unwrap();
     let run = ended(&harness, &run.id, Duration::from_secs(600)).await;
-    assert_limit(&run, "the history would exceed 50000 entries");
+    assert_limit(&run, "the history would exceed 50000 events");
     // The cap bounds what the run records before it ends: the trigger that would cross it is
-    // committed with `run_aborted`, two entries past the cap at most.
+    // committed with `run_aborted`, two events past the cap at most.
     assert!(
         run.history_len <= 50_002 && run.history_len > 45_000,
-        "{} entries",
+        "{} events",
         run.history_len
     );
     let events = events(&harness, &run.id).await;

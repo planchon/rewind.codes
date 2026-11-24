@@ -97,7 +97,7 @@ async fn an_engine_s_service_telemetry_joins_its_runs_and_measures_it() {
                 .all(|kv| kv.key.as_str() != "run")
         );
     }
-    // An activation's id is `H(run, "activation", index of its first entry)`: the start's
+    // An activation's id is `H(run, "activation", index of its first event)`: the start's
     // `run_started` and `schedule_call`, then the call's result at 2.
     let mut ids: Vec<String> = activations
         .iter()
@@ -155,7 +155,7 @@ async fn an_engine_s_service_telemetry_joins_its_runs_and_measures_it() {
         backend.series(metrics::REDELIVERIES),
         vec![(vec![label("rewind.action", ISSUE)], 1)]
     );
-    // Run metrics, from the outbox's projections of the committed entries.
+    // Run metrics, from the outbox's projections of the committed events.
     assert_eq!(backend.series(metrics::RUNS_STARTED), vec![(vec![], 1)]);
     assert_eq!(
         backend.series(metrics::RUNS_ENDED),

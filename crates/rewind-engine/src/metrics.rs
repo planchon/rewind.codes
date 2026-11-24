@@ -22,7 +22,7 @@
 //! | `rewind.delivery.duration` | histogram, s (span `delivery`) | `rewind.action`, `rewind.outcome`: `result`, `failed`, `transient`, `deferred`, `parked` | one dispatch of a call, to its answer |
 //! | `rewind.delivery.redeliveries` | counter | `rewind.action` | transient failures delivered again after a backoff |
 //!
-//! Run metrics, derived from an activation's new entries and recorded by the run's owner once
+//! Run metrics, derived from an activation's new events and recorded by the run's owner once
 //! the batch that commits them is durable, for every run (sampling is for traces), mock runs
 //! aside unless their telemetry is exported:
 //!
@@ -119,7 +119,7 @@ pub(crate) fn redelivery(action: &str) {
     );
 }
 
-/// What a run's committed entries measure: a run metric, recorded once the batch that commits
+/// What a run's committed events measure: a run metric, recorded once the batch that commits
 /// them is durable. An activation's executor derives them from the run's history; they reach the
 /// run's owner with the activation's result.
 #[derive(Debug, Clone, PartialEq)]

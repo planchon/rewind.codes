@@ -167,11 +167,11 @@ fn app(log: Log) -> Router {
                 assert_eq!(headers.get(header::ACCEPT).unwrap(), "text/event-stream");
                 assert_eq!(query.as_deref(), Some("follow=true&from=1"));
                 let entry = json!({
-                    "type": "entry", "idx": 1, "recordedAt": "2026-11-09T10:02:11Z",
+                    "type": "event", "idx": 1, "recordedAt": "2026-11-09T10:02:11Z",
                     "event": { "type": "timer_fired", "seq": 2 }
                 });
                 let body = format!(
-                    ": keep-alive\n\nevent: entry\nid: 1\ndata: {entry}\n\nevent: end\ndata: {}\n\n",
+                    ": keep-alive\n\nevent: event\nid: 1\ndata: {entry}\n\nevent: end\ndata: {}\n\n",
                     json!({ "type": "end", "status": "completed" })
                 );
                 ([(header::CONTENT_TYPE, "text/event-stream")], Body::from(body))
@@ -339,11 +339,11 @@ async fn the_event_stream_skips_keep_alives_and_reads_each_event() {
         .await;
     assert_eq!(events.len(), 2);
     match &events[0] {
-        StreamEvent::Entry(entry) => {
+        StreamEvent::Event(entry) => {
             assert_eq!(entry.idx, 1);
             assert_eq!(entry.event.name(), "timer_fired");
         }
-        other => panic!("expected an entry, got {other:?}"),
+        other => panic!("expected an event, got {other:?}"),
     }
     assert_eq!(
         events[1],

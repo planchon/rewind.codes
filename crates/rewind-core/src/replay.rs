@@ -10,19 +10,19 @@
 //!    - [`Next::End`]: the history is exhausted. The code is in exactly the state it was in
 //!      after the last commit, and the run can continue live.
 //!
-//! This relies on the commit invariant: every entry the code emitted in response to a
+//! This relies on the commit invariant: every event the code emitted in response to a
 //! trigger is recorded with it. So until `End`, every emitted command has a recorded
 //! counterpart, and every annotation emitted is already recorded.
 
-use crate::event::{AbortReason, Command, Completion, Event, HistoryEntry, Lifecycle, RunStarted};
+use crate::event::{AbortReason, Command, Completion, Event, HistoryEvent, Lifecycle, RunStarted};
 use crate::history::{HistoryError, validate_history};
 use crate::time::Timestamp;
 
 #[derive(Debug)]
 pub struct ReplayCursor<'h> {
-    history: &'h [HistoryEntry],
+    history: &'h [HistoryEvent],
     started: &'h RunStarted,
-    /// Position of the next entry to consume.
+    /// Position of the next event to consume.
     pos: usize,
     logical_now: Timestamp,
 }
@@ -30,7 +30,7 @@ pub struct ReplayCursor<'h> {
 /// Outcome of a command the code emitted during replay.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Replayed<'h> {
-    /// The command matches the history entry at `index`.
+    /// The command matches the event at `index`.
     Matched { index: u64 },
     /// The host aborted the original run at this point; stop replaying.
     Aborted { index: u64, reason: &'h AbortReason },
@@ -54,22 +54,22 @@ pub enum Next<'h> {
 /// model.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum NonDeterminism {
-    #[error("history entry {index} is {recorded}, but the code emitted {emitted}")]
+    #[error("event {index} is {recorded}, but the code emitted {emitted}")]
     CommandMismatch {
         index: u64,
         recorded: Box<Command>,
         emitted: Box<Command>,
     },
-    #[error("the code emitted {emitted}, which the history does not contain (at entry {at})")]
+    #[error("the code emitted {emitted}, which the history does not contain (at event {at})")]
     UnexpectedCommand { at: u64, emitted: Box<Command> },
-    #[error("history entry {index} is {expected}, but the code went idle without emitting it")]
+    #[error("event {index} is {expected}, but the code went idle without emitting it")]
     MissingCommand { index: u64, expected: Box<Command> },
 }
 
 impl<'h> ReplayCursor<'h> {
     /// A cursor at the start of `history`, which is validated first
     /// (see [`validate_history`]).
-    pub fn new(history: &'h [HistoryEntry]) -> Result<Self, HistoryError> {
+    pub fn new(history: &'h [HistoryEvent]) -> Result<Self, HistoryError> {
         let started = validate_history(history)?;
         Ok(Self {
             history,
@@ -155,7 +155,7 @@ impl<'h> ReplayCursor<'h> {
     }
 
     /// The reason the original run was aborted, if it was aborted at this point: the next
-    /// entry that is not an annotation is `run_aborted`.
+    /// event that is not an annotation is `run_aborted`.
     ///
     /// When the code cannot go on (it failed to load, or hit a resource limit), this tells
     /// whether the original run stopped at the same point.
@@ -166,8 +166,8 @@ impl<'h> ReplayCursor<'h> {
         }
     }
 
-    /// The next entry that is not an annotation.
-    fn peek(&mut self) -> Option<&'h HistoryEntry> {
+    /// The next event that is not an annotation.
+    fn peek(&mut self) -> Option<&'h HistoryEvent> {
         while let Some(entry) = self.history.get(self.pos) {
             if !matches!(entry.event, Event::Annotation(_)) {
                 return Some(entry);
@@ -229,12 +229,12 @@ mod tests {
         })
     }
 
-    /// Entry `i` is recorded at `1000 + 10 * i` ms.
-    fn history(events: Vec<Event>) -> Vec<HistoryEntry> {
+    /// Event `i` is recorded at `1000 + 10 * i` ms.
+    fn history(events: Vec<Event>) -> Vec<HistoryEvent> {
         events
             .into_iter()
             .enumerate()
-            .map(|(i, event)| HistoryEntry {
+            .map(|(i, event)| HistoryEvent {
                 index: i as u64,
                 recorded_at: Timestamp(1_000 + 10 * i as u64),
                 event,
@@ -349,7 +349,7 @@ mod tests {
         ));
         assert_eq!(
             err.to_string(),
-            "history entry 1 is call #1 github.close_issue({\"number\":4}), \
+            "event 1 is call #1 github.close_issue({\"number\":4}), \
              but the code emitted call #1 github.close_issue({\"number\":5})"
         );
     }
@@ -375,7 +375,7 @@ mod tests {
         let err = cursor.on_command(&call(2, "b", json!({}))).unwrap_err();
         assert_eq!(
             err.to_string(),
-            "the code emitted call #2 b({}), which the history does not contain (at entry 3)"
+            "the code emitted call #2 b({}), which the history does not contain (at event 3)"
         );
     }
 
@@ -394,7 +394,7 @@ mod tests {
         let err = cursor.on_idle().unwrap_err();
         assert_eq!(
             err.to_string(),
-            "history entry 1 is timer #1 (3000ms), but the code went idle without emitting it"
+            "event 1 is timer #1 (3000ms), but the code went idle without emitting it"
         );
     }
 
@@ -487,7 +487,7 @@ mod tests {
         }));
         assert_eq!(
             ReplayCursor::new(&history(vec![started(), abort, log("x")])).err(),
-            Some(HistoryError::EntriesAfterEnd { index: 2 })
+            Some(HistoryError::EventsAfterEnd { index: 2 })
         );
     }
 }

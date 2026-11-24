@@ -190,7 +190,7 @@ impl<P: Plane> Owner<P> {
                 PartitionRequest::History { run, from, values } => PartitionReply::History(
                     super::attempt::read_attempt(&*plane, &*log, &run, from, values)
                         .await
-                        .map(|read| read.map(|read| read.into_entries(from)))
+                        .map(|read| read.map(|read| read.into_events(from)))
                         .map_err(unavailable),
                 ),
                 PartitionRequest::Tasks { run } => PartitionReply::Tasks(

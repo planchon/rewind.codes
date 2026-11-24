@@ -1,4 +1,4 @@
-//! What wakes a run, and the payloads its entries hold by digest (`archi/03-execution.md`,
+//! What wakes a run, and the payloads its events hold by digest (`archi/03-execution.md`,
 //! "Activations"; `archi/06-storage-and-scale.md`, "Payloads").
 
 use rewind_core::{Completion, Digest, JsonValue, RunStarted, Timestamp};

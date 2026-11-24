@@ -222,7 +222,7 @@ fn remove(path: &Path) -> io::Result<bool> {
     }
 }
 
-/// Creates a directory and its missing parents, syncing each parent that got a new entry.
+/// Creates a directory and its missing parents, syncing each parent that got a new event.
 fn create_dirs(dir: &Path) -> io::Result<()> {
     if dir.try_exists()? {
         return Ok(());
@@ -241,7 +241,7 @@ fn parent(path: &Path) -> io::Result<&Path> {
         .ok_or_else(|| io::Error::other(format!("{} has no parent", path.display())))
 }
 
-/// Makes the entries of a directory durable (a created, renamed or removed file).
+/// Makes the events of a directory durable (a created, renamed or removed file).
 #[cfg(unix)]
 fn sync_dir(dir: &Path) -> io::Result<()> {
     File::open(dir)?.sync_all()

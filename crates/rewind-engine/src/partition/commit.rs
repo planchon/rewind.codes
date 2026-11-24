@@ -71,7 +71,7 @@ pub(crate) enum After<P: Plane> {
     Forget(RunRef),
     /// Another message for the owner.
     Owner(OwnerMsg<P>),
-    /// The run metrics of an activation's entries.
+    /// The run metrics of an activation's events.
     Measure(Vec<crate::metrics::RunMeasurement>),
     /// The run of a start key is created: the starts with the key that waited for it get it.
     Started {
@@ -420,19 +420,19 @@ impl<P: Plane> Owner<P> {
                     run: create.run.clone(),
                     namespace: create.head.namespace.clone(),
                     summary: Some(create.summary.summary.clone()),
-                    entries: create.entries.clone(),
+                    events: create.events.clone(),
                 }),
                 Change::Activation(activation) => changed.push(Changed {
                     run: activation.run.clone(),
                     namespace: activation.head.namespace.clone(),
                     summary: Some(activation.summary.summary.clone()),
-                    entries: activation.entries.clone(),
+                    events: activation.events.clone(),
                 }),
                 Change::Summary { run, summary } => changed.push(Changed {
                     run: run.clone(),
                     namespace: summary.summary.namespace.clone(),
                     summary: Some(summary.summary.clone()),
-                    entries: Vec::new(),
+                    events: Vec::new(),
                 }),
                 Change::Erase { run } => {
                     if let Some(slot) = self.slot(run.id) {
@@ -440,7 +440,7 @@ impl<P: Plane> Owner<P> {
                             run: run.clone(),
                             namespace: slot.head.namespace.clone(),
                             summary: None,
-                            entries: Vec::new(),
+                            events: Vec::new(),
                         });
                     }
                 }

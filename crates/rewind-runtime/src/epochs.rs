@@ -2,7 +2,7 @@
 //! (`archi/03-execution.md`, "Determinism epoch").
 //!
 //! Changing anything here that a code can observe (a `seq`, a digest, a value, a global)
-//! requires a new epoch: a new `js/epochN/` directory and a new entry in [`EPOCHS`], while the
+//! requires a new epoch: a new `js/epochN/` directory and a new event in [`EPOCHS`], while the
 //! previous epochs stay as they are for the runs that started under them. The epoch corpus
 //! (`rewind-e2e`) fails the build when a supported epoch stops replaying.
 
@@ -18,7 +18,7 @@ pub(crate) struct Glue {
     /// Runs once per isolate, before any module: deterministic globals, removed capabilities,
     /// and the hooks Rust drives the code with.
     pub(crate) bootstrap: &'static str,
-    /// `rewind:entry`, the module the runtime loads.
+    /// `rewind:event`, the module the runtime loads.
     pub(crate) entry: &'static str,
     /// `rewind:internal`, the hand-over from the bootstrap to the `rewind` modules.
     pub(crate) internal: &'static str,

@@ -315,7 +315,7 @@ async fn compatibility_tells_where_a_corrected_script_diverges_and_what_a_fork_r
     };
     assert_eq!(
         mismatch.to_string(),
-        "history entry 3 is call #2 b(\"bad\"), but the code emitted call #2 b(\"good\")"
+        "event 3 is call #2 b(\"bad\"), but the code emitted call #2 b(\"good\")"
     );
     assert_eq!(fixed.status, RunStatus::Active);
 

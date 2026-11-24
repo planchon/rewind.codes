@@ -661,11 +661,11 @@ impl<P: Plane, M: Membership + 'static> Node<P, M> {
                 SubscriptionKey::Tenant(change.run.tenant.clone()),
             ];
             for key in keys {
-                let entries = matches!(key, SubscriptionKey::Run(_));
+                let events = matches!(key, SubscriptionKey::Run(_));
                 if let Some(sinks) = self.subscriptions.get_mut(&key) {
                     let mut change = change.clone();
-                    if !entries {
-                        change.entries.clear();
+                    if !events {
+                        change.events.clear();
                     }
                     sinks.retain(|sink| sink.send(change.clone()).is_ok());
                 }
@@ -674,7 +674,7 @@ impl<P: Plane, M: Membership + 'static> Node<P, M> {
         self.subscriptions.retain(|_, sinks| !sinks.is_empty());
     }
 
-    /// Subscribes a sink to a key. For a run and `from`, the entries from `from` are sent
+    /// Subscribes a sink to a key. For a run and `from`, the events from `from` are sent
     /// first, read from the run's partition when this node holds it.
     pub(crate) fn subscribe(
         &mut self,
@@ -708,7 +708,7 @@ impl<P: Plane, M: Membership + 'static> Node<P, M> {
                             run: run.clone(),
                             namespace,
                             summary: summary.map(|indexed| indexed.summary),
-                            entries: read.into_entries(from),
+                            events: read.into_events(from),
                         });
                     }
                     Message::Nothing

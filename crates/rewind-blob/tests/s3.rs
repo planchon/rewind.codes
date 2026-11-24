@@ -123,7 +123,7 @@ async fn s3_blobs_pass_the_conformance_suite_on_minio() {
         attempt: Attempt::FIRST,
         code: Code::new("export default () => 1"),
         action_set: ActionSet::from_harness_actions(["a"]).expect("action set"),
-        entries: vec![rewind_core::HistoryEntry {
+        events: vec![rewind_core::HistoryEvent {
             index: 0,
             recorded_at: rewind_core::Timestamp(1),
             event: rewind_core::Event::Lifecycle(rewind_core::Lifecycle::RunStarted(

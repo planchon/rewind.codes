@@ -49,8 +49,8 @@ async fn replay(name: &str, code: Option<&str>) -> Result<String, String> {
     };
     match rewind_e2e::replay_export(&case, &export, &code).await {
         Replayed::Matches(end) => Ok(format!(
-            "{name}: the code replays the {} entries of the history ({end:?})",
-            export.entries.len()
+            "{name}: the code replays the {} events of the history ({end:?})",
+            export.events.len()
         )),
         Replayed::Fails(message) => Err(format!("{name}: {message}")),
     }

@@ -16,7 +16,7 @@ use serde_json::Value;
 
 use crate::digest::Digest;
 use crate::event::{
-    ActionFailure, ActionFailureKind, ActionOutcome, Command, Completion, Event, HistoryEntry,
+    ActionFailure, ActionFailureKind, ActionOutcome, Command, Completion, Event, HistoryEvent,
 };
 use crate::history::{HistoryError, validate_history};
 use crate::ids::{RunId, Seq};
@@ -75,7 +75,7 @@ pub enum CassetteError {
     #[error("invalid history: {0}")]
     History(#[from] HistoryError),
     /// A cassette is self-contained: every payload must be loaded before it is recorded.
-    #[error("entry {index} holds only the digest {digest} of its payload: load it first")]
+    #[error("event {index} holds only the digest {digest} of its payload: load it first")]
     PayloadNotLoaded { index: u64, digest: Digest },
 }
 
@@ -83,7 +83,7 @@ impl Cassette {
     /// The cassette of a history whose payloads are all loaded. Calls left without an outcome
     /// (a cancelled or aborted run) are not recorded: there is nothing to replay for them.
     pub fn from_history(
-        history: &[HistoryEntry],
+        history: &[HistoryEvent],
         matching: Matching,
     ) -> Result<Self, CassetteError> {
         validate_history(history)?;
@@ -188,8 +188,8 @@ mod tests {
     use crate::ids::{Epoch, Seed};
     use crate::time::Timestamp;
 
-    fn entry(index: u64, at: u64, event: Event) -> HistoryEntry {
-        HistoryEntry {
+    fn entry(index: u64, at: u64, event: Event) -> HistoryEvent {
+        HistoryEvent {
             index,
             recorded_at: Timestamp(at),
             event,

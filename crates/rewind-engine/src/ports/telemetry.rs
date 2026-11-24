@@ -61,7 +61,7 @@ pub enum SpanStatus {
     Error { message: String },
 }
 
-/// A span derived from committed entries (`archi/05-testing-and-observability.md`, "Span
+/// A span derived from committed events (`archi/05-testing-and-observability.md`, "Span
 /// model"): the run, its calls, timers and signal waits. Attributes carry payload digests,
 /// sizes and previews, never values.
 #[derive(Clone, Debug, PartialEq)]
@@ -95,7 +95,7 @@ pub enum ExportError {
     Export(String),
 }
 
-/// Exports run telemetry, projected from committed entries (`archi/07-code-architecture.md`,
+/// Exports run telemetry, projected from committed events (`archi/07-code-architecture.md`,
 /// "The other ports"). Nothing about a code is exported from the isolate, the runtime or a
 /// replay.
 ///

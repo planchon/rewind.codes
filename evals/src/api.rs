@@ -21,7 +21,7 @@ use rewind_api::action_sets::{
     ActionMatch, ActionSearchResults, ActionSet, CreateActionSet, SearchQuery,
 };
 use rewind_api::common::{Duration, RunStatus as ApiRunStatus, timestamp};
-use rewind_api::events::Entry;
+use rewind_api::events::HistoryEvent;
 use rewind_api::headers::IdempotencyKey;
 use rewind_api::runs::{
     CancelRun, ForkRun, Run, RunFilter, RunPage, SignalAccepted, StartRun, Trace, TraceFormat,
@@ -773,19 +773,21 @@ impl Api for World {
         })
     }
 
-    async fn run_entry(&self, run: &str, idx: u64) -> Result<Entry, ApiError> {
+    async fn run_event(&self, run: &str, idx: u64) -> Result<HistoryEvent, ApiError> {
         let id = run;
         let (run, _) = self.visible_run(id).await?;
         let history = self.history(&run).await.map_err(edge_error)?;
         let Some(found) = history.iter().find(|entry| entry.index == idx) else {
             return Err(not_found(format!(
-                "run {id} has no entry {idx}: its entries are numbered from 0 to {}",
+                "run {id} has no event {idx}: its events are numbered from 0 to {}",
                 history.len().saturating_sub(1)
             )));
         };
-        Ok(Entry::from_core(found, |payload| match payload.value() {
-            Some(value) => rewind_api::common::Payload::of(value.clone(), u64::MAX),
-            None => rewind_api::common::Payload::reference(String::new(), 0, String::new()),
+        Ok(HistoryEvent::from_core(found, |payload| {
+            match payload.value() {
+                Some(value) => rewind_api::common::Payload::of(value.clone(), u64::MAX),
+                None => rewind_api::common::Payload::reference(String::new(), 0, String::new()),
+            }
         }))
     }
 

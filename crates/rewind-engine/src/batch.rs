@@ -1,18 +1,18 @@
-//! The entries of one activation, as they are appended (`archi/02-history.md`, "The commit
+//! The events of one activation, as they are appended (`archi/02-history.md`, "The commit
 //! invariant"; `archi/03-execution.md`, "Activations", "How a code ends").
 //!
 //! A trigger is always appended with everything the code emitted in response to it. When the
 //! host must end the run instead (the code cannot load, a limit is exceeded, the cancellation
 //! grace runs out), the trigger is appended with `run_aborted` and what the code emitted in
-//! response to it is dropped. The run's state is folded as the entries are appended, so a
-//! terminal entry ends the batch. An activation that fails otherwise appends nothing: its
+//! response to it is dropped. The run's state is folded as the events are appended, so a
+//! terminal event ends the batch. An activation that fails otherwise appends nothing: its
 //! [`EngineError`] reaches the owner, which records the failure.
 
 use std::cmp::max;
 use std::time::Duration;
 
 use rewind_core::{
-    AbortKind, AbortReason, Event, HistoryEntry, HistoryError, Lifecycle, RunId, RunState,
+    AbortKind, AbortReason, Event, HistoryError, HistoryEvent, Lifecycle, RunId, RunState,
     Timestamp,
 };
 
@@ -79,16 +79,16 @@ pub(crate) trait CountCpu {
     );
 }
 
-/// What a batch appended: its entries, the inbox items it consumed, the run's state before the
-/// entries and after them.
+/// What a batch appended: its events, the inbox items it consumed, the run's state before the
+/// events and after them.
 pub(crate) struct Finished {
-    pub(crate) entries: Vec<HistoryEntry>,
+    pub(crate) events: Vec<HistoryEvent>,
     pub(crate) consumed: Vec<u64>,
     pub(crate) before: RunState,
     pub(crate) after: RunState,
 }
 
-/// The entries of one activation, folded into the run's state as they are appended.
+/// The events of one activation, folded into the run's state as they are appended.
 pub(crate) struct Batch<'l> {
     pub(crate) run_id: rewind_core::RunId,
     pub(crate) tenant: crate::ports::TenantId,
@@ -96,13 +96,13 @@ pub(crate) struct Batch<'l> {
     /// they run nothing of a run's, as a fork's compatibility check.
     namespace: Option<crate::ports::NamespaceName>,
     pub(crate) state: RunState,
-    /// The state before the batch's first entry: what a refused response is undone from.
+    /// The state before the batch's first event: what a refused response is undone from.
     initial: RunState,
     last_recorded_at: Timestamp,
-    entries: Vec<HistoryEntry>,
+    events: Vec<HistoryEvent>,
     pub(crate) consumed: Vec<u64>,
     commands: usize,
-    /// The commands of entries copied from a fork's parent do not count against the limit per
+    /// The commands of events copied from a fork's parent do not count against the limit per
     /// activation: they are bounded by the history's.
     pub(crate) copying: bool,
     limits: &'l Limits,
@@ -123,7 +123,7 @@ impl<'l> Batch<'l> {
             initial: state.clone(),
             state,
             last_recorded_at,
-            entries: Vec::new(),
+            events: Vec::new(),
             consumed: Vec::new(),
             commands: 0,
             copying: false,
@@ -145,11 +145,11 @@ impl<'l> Batch<'l> {
         }
     }
 
-    /// The entries appended, the inbox items consumed, and the run's state before and after
+    /// The events appended, the inbox items consumed, and the run's state before and after
     /// them.
     pub(crate) fn finish(self) -> Finished {
         Finished {
-            entries: self.entries,
+            events: self.events,
             consumed: self.consumed,
             before: self.initial,
             after: self.state,
@@ -162,9 +162,9 @@ impl<'l> Batch<'l> {
         self.last_recorded_at
     }
 
-    /// The entries appended so far.
-    pub(crate) fn entries(&self) -> &[HistoryEntry] {
-        &self.entries
+    /// The events appended so far.
+    pub(crate) fn events(&self) -> &[HistoryEvent] {
+        &self.events
     }
 
     /// Appends a trigger and what the code emitted in response, or the trigger and
@@ -183,10 +183,10 @@ impl<'l> Batch<'l> {
 
         // Folded in place: a copy of the state for each response would cost the size of the
         // state (every pending timer and call) at each delivery. A response refused is undone.
-        let start = self.entries.len();
+        let start = self.events.len();
         let mut refused = None;
         for event in std::iter::once(trigger.clone()).chain(response) {
-            let entry = HistoryEntry {
+            let entry = HistoryEvent {
                 index: self.state.history_len(),
                 recorded_at: at,
                 event,
@@ -198,7 +198,7 @@ impl<'l> Batch<'l> {
                 });
                 break;
             }
-            self.entries.push(entry);
+            self.events.push(entry);
         }
         if refused.is_none() && grace == Grace::Ends && !self.state.is_terminal() {
             refused = Some(AbortReason {
@@ -212,7 +212,7 @@ impl<'l> Batch<'l> {
         }
 
         if !self.copying {
-            self.commands += self.entries[start..]
+            self.commands += self.events[start..]
                 .iter()
                 .filter(|entry| matches!(entry.event, Event::Command(_)))
                 .count();
@@ -220,12 +220,12 @@ impl<'l> Batch<'l> {
         Ok(())
     }
 
-    /// Drops the entries appended from `start` on, and folds the state again without them,
+    /// Drops the events appended from `start` on, and folds the state again without them,
     /// from the state the batch began with.
     fn undo(&mut self, start: usize) -> Result<(), HistoryError> {
-        self.entries.truncate(start);
+        self.events.truncate(start);
         let mut state = self.initial.clone();
-        for entry in &self.entries {
+        for entry in &self.events {
             state.apply(entry)?;
         }
         self.state = state;
@@ -242,13 +242,13 @@ impl<'l> Batch<'l> {
     ) -> Result<(), HistoryError> {
         tracing::warn!(%reason, "run aborted");
         for event in [trigger, Event::Lifecycle(Lifecycle::RunAborted(reason))] {
-            let entry = HistoryEntry {
+            let entry = HistoryEvent {
                 index: self.state.history_len(),
                 recorded_at: at,
                 event,
             };
             self.state.apply(&entry)?;
-            self.entries.push(entry);
+            self.events.push(entry);
         }
         Ok(())
     }
@@ -274,7 +274,7 @@ impl<'l> Batch<'l> {
         let length = self.state.history_len() + 1 + response.len() as u64;
         if length > limits.max_history_len {
             return limit_exceeded(format!(
-                "the history would exceed {} entries",
+                "the history would exceed {} events",
                 limits.max_history_len
             ));
         }

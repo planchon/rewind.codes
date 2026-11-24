@@ -7,7 +7,7 @@
 //!
 //! - the DTOs of every endpoint, request and response, one module per group of the endpoint
 //!   table: [`action_sets`], [`workflows`], [`scripts`], [`runs`] (with [`events`], the history
-//!   entries and the event stream), [`calls`], [`webhooks`], [`reading`], [`organization`],
+//!   events and the event stream), [`calls`], [`webhooks`], [`reading`], [`organization`],
 //!   [`access`] (with the catalog of permissions and the built-in roles), [`namespaces`] (the
 //!   end users, their quotas and their tokens), [`connections`] (a person's connections and the
 //!   consent) and [`admin`] (the server); the dashboard's sign-in, [`auth`]; and the OAuth

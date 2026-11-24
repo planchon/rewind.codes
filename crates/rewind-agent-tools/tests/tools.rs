@@ -12,7 +12,7 @@ use rewind_agent_tools::{
 };
 use rewind_api::action_sets::{ActionSearchResults, ActionSet, CreateActionSet, SearchQuery};
 use rewind_api::common::Duration;
-use rewind_api::events::Entry;
+use rewind_api::events::HistoryEvent;
 use rewind_api::headers::IdempotencyKey;
 use rewind_api::runs::{
     CancelRun, ForkRun, Run, RunFilter, RunPage, SignalAccepted, StartRun, Trace,
@@ -164,7 +164,7 @@ impl Api for Fake {
         .unwrap())
     }
 
-    async fn run_entry(&self, _run: &str, _idx: u64) -> Result<Entry, ApiError> {
+    async fn run_event(&self, _run: &str, _idx: u64) -> Result<HistoryEvent, ApiError> {
         Err(ApiError::fault("unused"))
     }
 

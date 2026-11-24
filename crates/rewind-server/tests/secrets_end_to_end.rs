@@ -14,7 +14,7 @@
 //!   too (`refused`), and putting the secret again sends it with the same idempotency key;
 //! - a key limited to `env=dev` neither sees nor attaches the organization's `env=prod` secrets,
 //!   and never writes a namespace's;
-//! - a value is nowhere: not in a run, its history or cassette, its entries, events or trace, a
+//! - a value is nowhere: not in a run, its history or cassette, its events, events or trace, a
 //!   list, a usage, a problem, a webhook, the OpenTelemetry the server exports, nor the process's
 //!   logs.
 //!
@@ -784,7 +784,7 @@ async fn waits_for(client: &Client, run: &str, name: &str) {
 /// What a scenario left behind that a secret's value must never be in.
 #[derive(Default)]
 struct Left {
-    /// Runs: each is read whole (the run, its history and cassette, its entries, events and
+    /// Runs: each is read whole (the run, its history and cassette, its events, events and
     /// trace), and its spans must have reached the Collector.
     runs: Vec<String>,
     /// Namespaces whose secrets are listed.
@@ -825,8 +825,8 @@ async fn nothing_holds(server: &TestServer, outside: &Outside, left: &Left, valu
         let (status, body) = raw(server, &format!("/v1/runs/{run}")).await;
         assert_eq!(status, 200, "{body}");
         let history: Value = serde_json::from_str(&body).unwrap();
-        let entries = history["historyLen"].as_u64().unwrap();
-        assert!(entries > 0);
+        let events = history["historyLen"].as_u64().unwrap();
+        assert!(events > 0);
         paths.extend([
             format!("/v1/runs/{run}"),
             format!("/v1/runs/{run}/export"),
@@ -834,7 +834,7 @@ async fn nothing_holds(server: &TestServer, outside: &Outside, left: &Left, valu
             format!("/v1/runs/{run}/trace"),
             format!("/v1/runs/{run}/events"),
         ]);
-        paths.extend((0..entries).map(|idx| format!("/v1/runs/{run}/entries/{idx}")));
+        paths.extend((0..events).map(|idx| format!("/v1/runs/{run}/events/{idx}")));
     }
     for namespace in &left.namespaces {
         paths.push(format!("/v1/namespaces/{namespace}/secrets"));

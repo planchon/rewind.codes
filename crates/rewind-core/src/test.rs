@@ -25,7 +25,7 @@ use crate::canonical::canonical_json;
 use crate::cassette::{Cassette, CassetteError, Matching};
 use crate::digest::Digest;
 use crate::event::{
-    AbortReason, ActionOutcome, Annotation, Command, Event, HistoryEntry, ScriptError,
+    AbortReason, ActionOutcome, Annotation, Command, Event, HistoryEvent, ScriptError,
 };
 use crate::history::{HistoryError, validate_history};
 use crate::ids::{RunId, Seed};
@@ -309,7 +309,7 @@ impl Test {
     /// expectation its status, its output or its error, and how many times it called each action
     /// (`archi/05-testing-and-observability.md`, "Tests recorded from runs"). Every payload of
     /// the history must be loaded.
-    pub fn record(history: &[HistoryEntry], origin: TestOrigin) -> Result<Self, RecordError> {
+    pub fn record(history: &[HistoryEvent], origin: TestOrigin) -> Result<Self, RecordError> {
         let started = validate_history(history)?;
         let input = loaded(0, &started.input)?;
         let state = RunState::from_history(history)?;
@@ -568,7 +568,7 @@ pub enum StepKind {
 
 impl RunPath {
     /// The path of a history. The signals Rewind sends itself (`rewind:ended:…`) are left out.
-    pub fn of(history: &[HistoryEntry]) -> Result<Self, HistoryError> {
+    pub fn of(history: &[HistoryEvent]) -> Result<Self, HistoryError> {
         let state = RunState::from_history(history)?;
         let mut steps: Vec<PathStep> = Vec::new();
         for entry in history {
@@ -646,17 +646,17 @@ mod tests {
     };
     use crate::ids::{Epoch, Seq};
 
-    /// Entry `index` is recorded at `100 + index × 1000`.
-    fn entry(index: u64, event: Event) -> HistoryEntry {
-        HistoryEntry {
+    /// Event `index` is recorded at `100 + index × 1000`.
+    fn entry(index: u64, event: Event) -> HistoryEvent {
+        HistoryEvent {
             index,
             recorded_at: Timestamp(100 + index * 1_000),
             event,
         }
     }
 
-    /// Numbers the entries again after one was inserted or removed.
-    fn renumbered(mut history: Vec<HistoryEntry>) -> Vec<HistoryEntry> {
+    /// Numbers the events again after one was inserted or removed.
+    fn renumbered(mut history: Vec<HistoryEvent>) -> Vec<HistoryEvent> {
         for (index, entry) in history.iter_mut().enumerate() {
             entry.index = index as u64;
             entry.recorded_at = Timestamp(100 + index as u64 * 1_000);
@@ -676,7 +676,7 @@ mod tests {
         }))
     }
 
-    fn call(index: u64, seq: u32, action: &str, args: Value) -> HistoryEntry {
+    fn call(index: u64, seq: u32, action: &str, args: Value) -> HistoryEvent {
         entry(
             index,
             Event::Command(Command::ScheduleCall {
@@ -688,7 +688,7 @@ mod tests {
         )
     }
 
-    fn done(index: u64, seq: u32, result: Value) -> HistoryEntry {
+    fn done(index: u64, seq: u32, result: Value) -> HistoryEvent {
         entry(
             index,
             Event::Completion(Completion::CallCompleted {
@@ -698,7 +698,7 @@ mod tests {
         )
     }
 
-    fn awaited(index: u64, name: &str) -> HistoryEntry {
+    fn awaited(index: u64, name: &str) -> HistoryEvent {
         entry(
             index,
             Event::Annotation(Annotation::SignalAwaited {
@@ -709,7 +709,7 @@ mod tests {
         )
     }
 
-    fn signal(index: u64, name: &str, payload: Value) -> HistoryEntry {
+    fn signal(index: u64, name: &str, payload: Value) -> HistoryEvent {
         entry(
             index,
             Event::Completion(Completion::SignalReceived {
@@ -719,7 +719,7 @@ mod tests {
         )
     }
 
-    fn completed(index: u64, output: Value) -> HistoryEntry {
+    fn completed(index: u64, output: Value) -> HistoryEvent {
         entry(
             index,
             Event::Command(Command::CompleteRun {
@@ -729,7 +729,7 @@ mod tests {
     }
 
     /// A run that lists issues, waits for approval, closes two and completes.
-    fn triage() -> Vec<HistoryEntry> {
+    fn triage() -> Vec<HistoryEvent> {
         vec![
             entry(0, started()),
             call(1, 1, "github.list_issues", json!({ "state": "open" })),
@@ -752,7 +752,7 @@ mod tests {
         }
     }
 
-    fn observed_calls(history: &[HistoryEntry]) -> Vec<ObservedCall> {
+    fn observed_calls(history: &[HistoryEvent]) -> Vec<ObservedCall> {
         history
             .iter()
             .filter_map(|entry| match &entry.event {

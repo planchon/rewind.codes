@@ -11,7 +11,7 @@ use std::num::NonZeroU16;
 use std::sync::Arc;
 
 use rewind_core::{
-    Command, Completion, Digest, Event, HistoryEntry, JsonValue, Payload, RunId, RunStatus,
+    Command, Completion, Digest, Event, HistoryEvent, JsonValue, Payload, RunId, RunStatus,
     canonical_json,
 };
 use rewind_engine::adapters::{
@@ -79,9 +79,9 @@ fn payload(event: &Event) -> Option<Payload> {
     }
 }
 
-/// The digests of the payloads that left the entries.
-fn digests(entries: &[HistoryEntry]) -> Vec<Digest> {
-    entries
+/// The digests of the payloads that left the events.
+fn digests(events: &[HistoryEvent]) -> Vec<Digest> {
+    events
         .iter()
         .filter_map(|entry| match payload(&entry.event)? {
             Payload::Digest(digest) => Some(digest),
@@ -199,7 +199,7 @@ async fn ended_and_live_runs_move_into_their_partitions_once_and_go_on() {
             created_at: head.created_at,
             updated_at: head.updated_at,
             ended_at: head.ended_at,
-            history: LegacyHistory::Entries(digests),
+            history: LegacyHistory::Events(digests),
             inbox: Vec::new(),
             signal_keys: if head.ended_at.is_none() {
                 vec!["key-1".into()]
@@ -287,7 +287,7 @@ async fn ended_and_live_runs_move_into_their_partitions_once_and_go_on() {
         .await
         .unwrap()
         .unwrap();
-    let big = digests(&sealed.entries);
+    let big = digests(&sealed.events);
     assert_eq!(big.len(), 1, "only the value above 64 KiB stays a digest");
     assert!(
         plane

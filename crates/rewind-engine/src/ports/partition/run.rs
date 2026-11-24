@@ -72,16 +72,16 @@ pub struct RunHead {
     pub waits: Vec<Wait>,
     /// The deadline of `run_started`.
     pub expires_at: Timestamp,
-    /// The length of the attempt's history. The store keeps it: it is the number of entries
+    /// The length of the attempt's history. The store keeps it: it is the number of events
     /// committed to the attempt.
     pub history_len: u64,
     pub metadata: RunMetadata,
     /// The start's idempotency key, unique in the namespace.
     pub idempotency_key: Option<String>,
     pub created_at: Timestamp,
-    /// `recorded_at` of the last entry, or `created_at` before the first commit.
+    /// `recorded_at` of the last event, or `created_at` before the first commit.
     pub updated_at: Timestamp,
-    /// `recorded_at` of the entry that ended the attempt.
+    /// `recorded_at` of the event that ended the attempt.
     pub ended_at: Option<Timestamp>,
 }
 

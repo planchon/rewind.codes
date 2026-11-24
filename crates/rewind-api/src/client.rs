@@ -27,7 +27,7 @@ use crate::calls::{
     CallStreamMessage, CallStreamQuery, CompleteCall, DeferCall, FailCall, RejectCall,
 };
 use crate::common::Duration;
-use crate::events::{ChangeEvent, Entry, EventsQuery, StreamEvent};
+use crate::events::{ChangeEvent, EventsQuery, HistoryEvent, StreamEvent};
 use crate::headers::{IDEMPOTENCY_KEY, IdempotencyKey, NAMESPACE, ORGANIZATION};
 use crate::namespaces::{
     CreateToken, CreateTokenKey, NamespaceDefaults, NamespaceDetail, NamespaceList,
@@ -367,10 +367,10 @@ impl Client {
         self.json(request).await
     }
 
-    /// `GET /v1/runs/{id}/entries/{idx}`.
-    pub async fn run_entry(&self, run: &str, idx: u64) -> Result<Entry, Error> {
+    /// `GET /v1/runs/{id}/events/{idx}`.
+    pub async fn run_event(&self, run: &str, idx: u64) -> Result<HistoryEvent, Error> {
         let idx = idx.to_string();
-        let request = self.request(Method::GET, routes::RUN_ENTRY, &[run, &idx])?;
+        let request = self.request(Method::GET, routes::RUN_EVENT, &[run, &idx])?;
         self.json(request).await
     }
 

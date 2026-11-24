@@ -4,13 +4,13 @@
 //! An attempt's records live in its partition until the attempt is sealed: the seal writes its
 //! history to the archive, then a batch sets the head's `sealed` and deletes the attempt's
 //! history and payload records. A reader that runs as a job of its own reads the head, then the
-//! entries, in two reads: a seal committed between them would leave it a live head and no
-//! entries, and it would answer an ended run with an empty history. So the head is read again
+//! events, in two reads: a seal committed between them would leave it a live head and no
+//! events, and it would answer an ended run with an empty history. So the head is read again
 //! after the records: while it names the same live attempt, nothing deleted them (only a seal or
 //! an erasure does), and the read holds; otherwise it starts over, and finds the attempt sealed,
 //! the run's next attempt, or the run gone.
 
-use rewind_core::HistoryEntry;
+use rewind_core::HistoryEvent;
 
 use crate::plane::{LogOf, Plane};
 use crate::ports::{
@@ -27,9 +27,9 @@ pub(crate) enum AttemptRead {
     /// The attempt is live, or ended and not sealed yet: its records in the partition.
     Live {
         head: RunHead,
-        /// The entries from the index asked.
-        entries: Vec<HistoryEntry>,
-        /// The payload records of the payloads the entries hold by digest, when asked.
+        /// The events from the index asked.
+        events: Vec<HistoryEvent>,
+        /// The payload records of the payloads the events hold by digest, when asked.
         payloads: Vec<PayloadRecord>,
     },
     /// The attempt is sealed: its history in the archive.
@@ -40,16 +40,16 @@ pub(crate) enum AttemptRead {
 }
 
 impl AttemptRead {
-    /// The entries from the index asked: every payload up to 64 KiB with its value once sealed,
+    /// The events from the index asked: every payload up to 64 KiB with its value once sealed,
     /// with `payloads` the values of the payload records otherwise.
-    pub(crate) fn into_entries(self, from: u64) -> Vec<HistoryEntry> {
+    pub(crate) fn into_events(self, from: u64) -> Vec<HistoryEvent> {
         match self {
             AttemptRead::Live {
-                mut entries,
+                mut events,
                 payloads,
                 ..
             } => {
-                for entry in &mut entries {
+                for entry in &mut events {
                     if let Some(payload) = crate::payloads::payload_mut(&mut entry.event)
                         && let rewind_core::Payload::Digest(digest) = payload
                         && let Some(value) = payloads
@@ -60,10 +60,10 @@ impl AttemptRead {
                         *payload = rewind_core::Payload::Value(value);
                     }
                 }
-                entries
+                events
             }
             AttemptRead::Sealed { sealed, .. } => sealed
-                .entries
+                .events
                 .into_iter()
                 .filter(|entry| entry.index >= from)
                 .collect(),
@@ -71,7 +71,7 @@ impl AttemptRead {
     }
 }
 
-/// Reads the run's current attempt from index `from`, with the payload records of its entries
+/// Reads the run's current attempt from index `from`, with the payload records of its events
 /// when `payloads`; `None` when the run does not exist, or is being erased (its sealed attempt
 /// is gone from the archive).
 pub(crate) async fn read_attempt<P: Plane>(
@@ -101,10 +101,10 @@ pub(crate) async fn read_attempt<P: Plane>(
                 sealed: Box::new(sealed),
             }));
         }
-        let entries = log.history(run, head.attempt, from).await?;
+        let events = log.history(run, head.attempt, from).await?;
         let mut records = Vec::new();
         if payloads {
-            for digest in crate::executors::activation::digests_of(&entries) {
+            for digest in crate::executors::activation::digests_of(&events) {
                 records.extend(log.payload(run, digest).await?);
             }
         }
@@ -116,7 +116,7 @@ pub(crate) async fn read_attempt<P: Plane>(
         if unchanged {
             return Ok(Some(AttemptRead::Live {
                 head,
-                entries,
+                events,
                 payloads: records,
             }));
         }

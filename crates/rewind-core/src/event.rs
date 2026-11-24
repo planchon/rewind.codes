@@ -1,6 +1,6 @@
 //! The events of a run's history (`archi/02-history.md`).
 //!
-//! Every entry holds one event from four families:
+//! Every event holds one event from four families:
 //!
 //! | Family | Events |
 //! | --- | --- |
@@ -24,12 +24,12 @@ use crate::time::Timestamp;
 /// Characters of a payload shown in messages read by models.
 const PREVIEW_CHARS: usize = 120;
 
-/// One entry of a run's history.
+/// One event of a run's history.
 #[derive(Clone, Debug, PartialEq)]
-pub struct HistoryEntry {
+pub struct HistoryEvent {
     /// Position in the history: starts at 0, contiguous.
     pub index: u64,
-    /// When the entry was committed: `max(now, previous recorded_at)`, so monotonic per run.
+    /// When the event was committed: `max(now, previous recorded_at)`, so monotonic per run.
     /// Once a trigger is delivered, its `recorded_at` is the run's logical time.
     pub recorded_at: Timestamp,
     pub event: Event,
@@ -49,7 +49,7 @@ pub enum Event {
 impl Event {
     /// Whether the event wakes the code up: `run_started` and every completion.
     ///
-    /// Commit invariant: a trigger is committed in the same transaction as every entry the
+    /// Commit invariant: a trigger is committed in the same transaction as every event the
     /// code emitted in response to it.
     pub fn is_trigger(&self) -> bool {
         matches!(
@@ -110,7 +110,7 @@ pub enum Lifecycle {
     RunAborted(AbortReason),
 }
 
-/// The first entry of every history.
+/// The first event of every history.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RunStarted {
     /// Digest of the TypeScript source. A run always replays the exact code that produced it.
@@ -345,7 +345,7 @@ impl ScriptError {
     /// the last recorded failure that builds exactly this error. `None` when the error is not an
     /// `ActionError`, or when no recorded failure builds it (the code threw one it made itself
     /// from another error's message, say).
-    pub fn failed_call(&self, history: &[HistoryEntry]) -> Option<Seq> {
+    pub fn failed_call(&self, history: &[HistoryEvent]) -> Option<Seq> {
         if self.name != Self::ACTION_ERROR {
             return None;
         }
@@ -655,7 +655,7 @@ mod tests {
     /// by comparing the error's message with the action's: the runtime prefixes the action's name.
     #[test]
     fn an_uncaught_action_error_names_its_call() {
-        let entry = |index: u64, event: Event| HistoryEntry {
+        let entry = |index: u64, event: Event| HistoryEvent {
             index,
             recorded_at: Timestamp(index),
             event,

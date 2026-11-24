@@ -7,7 +7,7 @@
 //! - `workflow.ts`, the code;
 //! - `scenario.json`, its input, actions, steps and expectations ([`Scenario`]);
 //! - `history.v1.json`, the run export recorded from it (`rewind-format` v1): the run's id,
-//!   its code, its action set and its entries, committed.
+//!   its code, its action set and its events, committed.
 //!
 //! A case may fork its run with a corrected code (`fork` in the scenario): the expectations,
 //! the recorded history and the replays are then the fork's.
@@ -41,7 +41,7 @@ use std::time::Duration;
 
 use rewind_core::{
     Action, ActionAuth, ActionRoute, ActionSet, Attachments, Builtin, Code, Command, Event,
-    HistoryEntry, Lifecycle, McpServer, McpTransport, RunExport, RunId, RunOutcome, RunState,
+    HistoryEvent, Lifecycle, McpServer, McpTransport, RunExport, RunId, RunOutcome, RunState,
     SecretPlacement, SecretRef, Timestamp, Workflow, WorkflowSchemas,
 };
 use rewind_engine::adapters::SeededEntropy;
@@ -485,7 +485,7 @@ pub enum Replayed {
     Fails(String),
 }
 
-/// Replays a run export's entries with a code on a fresh executor, without any store:
+/// Replays a run export's events with a code on a fresh executor, without any store:
 /// the document holds the run's id and action set.
 pub async fn replay_export(case: &Case, export: &RunExport, code: &Code) -> Replayed {
     let executor = executor(&case.scenario);
@@ -495,7 +495,7 @@ pub async fn replay_export(case: &Case, export: &RunExport, code: &Code) -> Repl
         run: &run,
         compiled: compiled.as_ref(),
         action_set: &export.action_set,
-        history: &export.entries,
+        history: &export.events,
     };
     match replay::replay(&executor, &replay::InExport, input).await {
         Ok(rebuilt) => Replayed::Matches(rebuilt.end),
@@ -664,7 +664,7 @@ fn check_expectations(case: &Case, recorded: &Recorded, failures: &mut Vec<Strin
     }
     if let Some(expected) = &expect.calls {
         let mut calls: BTreeMap<String, usize> = BTreeMap::new();
-        for entry in &recorded.export.entries {
+        for entry in &recorded.export.events {
             if let Event::Command(Command::ScheduleCall { action, .. }) = &entry.event {
                 *calls.entry(action.clone()).or_default() += 1;
             }
@@ -677,7 +677,7 @@ fn check_expectations(case: &Case, recorded: &Recorded, failures: &mut Vec<Strin
     if let Some(expected) = &expect.events {
         let events: Vec<&str> = recorded
             .export
-            .entries
+            .events
             .iter()
             .map(|entry| entry.event.name())
             .collect();
@@ -770,7 +770,7 @@ async fn check_replays(case: &Case, recorded: &Recorded, failures: &mut Vec<Stri
     if &committed.code != case.recorded_code() {
         failures.push("the committed history holds another code than the case's".into());
     }
-    let expected_end = match committed.entries.last().map(|entry| &entry.event) {
+    let expected_end = match committed.events.last().map(|entry| &entry.event) {
         Some(Event::Lifecycle(Lifecycle::RunAborted(reason))) => ReplayEnd::Aborted(reason.clone()),
         _ => ReplayEnd::EndOfHistory,
     };
@@ -793,10 +793,10 @@ async fn check_altered_replay(
     failures: &mut Vec<String>,
 ) {
     let mut export = export.clone();
-    let history: &mut Vec<HistoryEntry> = &mut export.entries;
-    if let Some(index) = check.drop_entry {
+    let history: &mut Vec<HistoryEvent> = &mut export.events;
+    if let Some(index) = check.drop_event {
         if index >= history.len() {
-            failures.push(format!("drop_entry {index} is past the end of the history"));
+            failures.push(format!("drop_event {index} is past the end of the history"));
             return;
         }
         history.remove(index);

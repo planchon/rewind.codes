@@ -12,7 +12,7 @@
 use std::path::PathBuf;
 
 use object_store::path::Path;
-use rewind_core::{Digest, HistoryEntry};
+use rewind_core::{Digest, HistoryEvent};
 use rewind_engine::ports::legacy::{LegacyBlobs, LegacyError};
 use rewind_engine::ports::{BlobError, TenantId};
 
@@ -28,12 +28,12 @@ fn unavailable(error: BlobError) -> LegacyError {
     }
 }
 
-/// The entries of an archived run export.
-fn entries(digest: Digest, bytes: &[u8]) -> Result<Vec<HistoryEntry>, LegacyError> {
+/// The events of an archived run export.
+fn events(digest: Digest, bytes: &[u8]) -> Result<Vec<HistoryEvent>, LegacyError> {
     let text = std::str::from_utf8(bytes)
         .map_err(|_| LegacyError::Corrupt(format!("the history {digest} is not UTF-8")))?;
     rewind_format::decode_run_export(text)
-        .map(|document| document.entries)
+        .map(|document| document.events)
         .map_err(|error| LegacyError::Corrupt(format!("the history {digest}: {error}")))
 }
 
@@ -105,9 +105,9 @@ impl LegacyBlobs for LegacyFiles {
         &self,
         tenant: &TenantId,
         digest: Digest,
-    ) -> Result<Option<Vec<HistoryEntry>>, LegacyError> {
+    ) -> Result<Option<Vec<HistoryEvent>>, LegacyError> {
         match self.bytes(tenant, digest).await? {
-            Some(bytes) => entries(digest, &bytes).map(Some),
+            Some(bytes) => events(digest, &bytes).map(Some),
             None => Ok(None),
         }
     }
@@ -158,9 +158,9 @@ impl LegacyBlobs for LegacyS3 {
         &self,
         tenant: &TenantId,
         digest: Digest,
-    ) -> Result<Option<Vec<HistoryEntry>>, LegacyError> {
+    ) -> Result<Option<Vec<HistoryEvent>>, LegacyError> {
         match self.bytes(tenant, digest).await? {
-            Some(bytes) => entries(digest, &bytes).map(Some),
+            Some(bytes) => events(digest, &bytes).map(Some),
             None => Ok(None),
         }
     }

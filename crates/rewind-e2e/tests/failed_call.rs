@@ -20,7 +20,7 @@ fn every_uncaught_action_error_of_the_corpus_names_its_call() {
             };
             let document = rewind_format::decode_run_export(&export).unwrap();
             let Some(Event::Command(Command::FailRun { error })) =
-                document.entries.last().map(|entry| &entry.event)
+                document.events.last().map(|entry| &entry.event)
             else {
                 continue;
             };
@@ -29,9 +29,9 @@ fn every_uncaught_action_error_of_the_corpus_names_its_call() {
             }
             let name = format!("{color}/{}", case.file_name().unwrap().to_string_lossy());
             let seq = error
-                .failed_call(&document.entries)
+                .failed_call(&document.events)
                 .unwrap_or_else(|| panic!("{name}: no call for {error:?}"));
-            let failed = document.entries.iter().any(|entry| {
+            let failed = document.events.iter().any(|entry| {
                 matches!(&entry.event,
                     Event::Completion(Completion::CallFailed { seq: failed, .. }) if *failed == seq)
             });

@@ -14,7 +14,7 @@ use rewind_api::action_sets::{
     ActionSearchResults, ActionSet, ActionSetList, CreateActionSet, SearchQuery,
 };
 use rewind_api::common::Duration;
-use rewind_api::events::Entry;
+use rewind_api::events::HistoryEvent;
 use rewind_api::headers::IdempotencyKey;
 use rewind_api::namespaces::{NamespaceList, NamespaceListQuery};
 use rewind_api::runs::{
@@ -88,12 +88,12 @@ pub trait Api: Send + Sync {
     /// `GET /v1/runs/{id}/trace?format=llm`.
     fn run_trace(&self, run: &str) -> impl Future<Output = Result<Trace, ApiError>> + Send;
 
-    /// `GET /v1/runs/{id}/entries/{idx}`.
-    fn run_entry(
+    /// `GET /v1/runs/{id}/events/{idx}`.
+    fn run_event(
         &self,
         run: &str,
         idx: u64,
-    ) -> impl Future<Output = Result<Entry, ApiError>> + Send;
+    ) -> impl Future<Output = Result<HistoryEvent, ApiError>> + Send;
 
     /// `POST /v1/runs/{id}/signals/{name}`.
     fn signal_run(
@@ -230,12 +230,12 @@ impl<A: Api> Api for &A {
         (**self).run_trace(run)
     }
 
-    fn run_entry(
+    fn run_event(
         &self,
         run: &str,
         idx: u64,
-    ) -> impl Future<Output = Result<Entry, ApiError>> + Send {
-        (**self).run_entry(run, idx)
+    ) -> impl Future<Output = Result<HistoryEvent, ApiError>> + Send {
+        (**self).run_event(run, idx)
     }
 
     fn signal_run(

@@ -642,7 +642,7 @@ pub enum PartitionReply {
     Done(Result<bool, Refusal>),
     Answered(Result<(), Refusal>),
     Run(Result<Option<Box<RunView>>, Refusal>),
-    History(Result<Option<Vec<record::Entry>>, Refusal>),
+    History(Result<Option<Vec<record::HistoryEvent>>, Refusal>),
     Tasks(Result<Option<Vec<record::Task>>, Refusal>),
     Found(Result<Found, Refusal>),
     Counted(Result<Box<Counted>, Refusal>),
@@ -697,10 +697,10 @@ impl From<&link::PartitionReply> for PartitionReply {
             R::Run(result) => PartitionReply::Run(refused(result, |view| {
                 view.as_ref().map(|view| Box::new(view.into()))
             })),
-            R::History(result) => PartitionReply::History(refused(result, |entries| {
-                entries
+            R::History(result) => PartitionReply::History(refused(result, |events| {
+                events
                     .as_ref()
-                    .map(|entries| entries.iter().map(codec::entry_record).collect())
+                    .map(|events| events.iter().map(codec::event_record).collect())
             })),
             R::Tasks(result) => PartitionReply::Tasks(refused(result, |tasks| {
                 tasks
@@ -763,8 +763,8 @@ impl TryFrom<PartitionReply> for link::PartitionReply {
             PartitionReply::Run(result) => R::Run(refused_of(result, |view| {
                 view.map(|view| (*view).try_into()).transpose()
             })?),
-            PartitionReply::History(result) => R::History(refused_of(result, |entries| {
-                Ok(entries.map(|entries| entries.into_iter().map(codec::entry_of).collect()))
+            PartitionReply::History(result) => R::History(refused_of(result, |events| {
+                Ok(events.map(|events| events.into_iter().map(codec::event_of).collect()))
             })?),
             PartitionReply::Tasks(result) => R::Tasks(refused_of(result, |tasks| {
                 tasks
@@ -1304,7 +1304,7 @@ pub struct Subscribe {
 }
 
 /// A run changed: `{"run":{…},"namespace":"user-1","summary":<summary record>,
-/// "entries":[<history entry record>,…]}`, the summary left out once the run is erased.
+/// "events":[<event record>,…]}`, the summary left out once the run is erased.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Changed {
@@ -1313,7 +1313,7 @@ pub struct Changed {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary: Option<record::Summary>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub entries: Vec<record::Entry>,
+    pub events: Vec<record::HistoryEvent>,
 }
 
 impl From<&link::Changed> for Changed {
@@ -1322,7 +1322,7 @@ impl From<&link::Changed> for Changed {
             run: (&changed.run).into(),
             namespace: changed.namespace.to_string(),
             summary: changed.summary.as_ref().map(summary_record),
-            entries: changed.entries.iter().map(codec::entry_record).collect(),
+            events: changed.events.iter().map(codec::event_record).collect(),
         }
     }
 }
@@ -1335,7 +1335,7 @@ impl TryFrom<Changed> for link::Changed {
             run: changed.run.try_into()?,
             namespace: namespace(changed.namespace)?,
             summary: changed.summary.map(summary_of).transpose()?,
-            entries: changed.entries.into_iter().map(codec::entry_of).collect(),
+            events: changed.events.into_iter().map(codec::event_of).collect(),
         })
     }
 }

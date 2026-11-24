@@ -301,7 +301,7 @@ async fn test_replays_a_recorded_cassette() {
     )
     .unwrap();
     let cassette =
-        rewind_core::Cassette::from_history(&export.entries, rewind_core::Matching::Sequential)
+        rewind_core::Cassette::from_history(&export.events, rewind_core::Matching::Sequential)
             .unwrap();
     write(
         dir.path(),
@@ -356,7 +356,7 @@ async fn replay_reports_compatibility_with_a_corrected_script() {
     let run = rewind(&["replay", export.to_str().unwrap()]).await;
     assert_eq!(run.exit, Exit::Success, "{}{}", run.out, run.err);
     assert!(
-        run.out.contains("the code replays the 4 entries"),
+        run.out.contains("the code replays the 4 events"),
         "{}",
         run.out
     );
@@ -442,7 +442,7 @@ async fn the_corpus_replays_through_the_cli() {
             .or_else(|| check.get("error"))
             .and_then(Value::as_str)
             .unwrap();
-        let run = match (check.get("code"), check.get("drop_entry")) {
+        let run = match (check.get("code"), check.get("drop_event")) {
             (Some(code), None) => {
                 let code = case.join(code.as_str().unwrap());
                 rewind(&[
@@ -458,7 +458,7 @@ async fn the_corpus_replays_through_the_cli() {
                     rewind_format::decode_run_export(&std::fs::read_to_string(&export).unwrap())
                         .unwrap();
                 tampered
-                    .entries
+                    .events
                     .remove(usize::try_from(index.as_u64().unwrap()).unwrap());
                 let path = dir.path().join(format!("{}.json", name.replace('/', "_")));
                 std::fs::write(&path, rewind_format::encode_run_export(&tampered)).unwrap();
@@ -566,7 +566,7 @@ async fn the_corpus_runs_through_rewind_test() {
             "blue/fetch_with_the_http_action",
             "blue/fork_calls_again_what_its_parent_left",
             "blue/fork_inherits_its_parent_s_secrets",
-            "blue/fork_live_from_an_entry",
+            "blue/fork_live_from_an_event",
             "blue/fork_reuses_recorded_calls",
             "blue/idempotent_signal",
             "blue/interrupted_call_delivered_again",

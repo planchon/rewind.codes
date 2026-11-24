@@ -1,6 +1,6 @@
 //! Structural validation of a history (`archi/03-execution.md`, "Replay").
 
-use crate::event::{Event, HistoryEntry, Lifecycle, RunStarted};
+use crate::event::{Event, HistoryEvent, Lifecycle, RunStarted};
 use crate::time::Timestamp;
 
 /// A history that cannot have been written by the engine.
@@ -10,22 +10,22 @@ pub enum HistoryError {
     Empty,
     #[error("the history does not start with run_started")]
     MissingRunStarted,
-    #[error("the entry at position {position} has index {index}")]
+    #[error("the event at position {position} has index {index}")]
     NonContiguous { position: u64, index: u64 },
-    #[error("entry {index} is a second run_started")]
+    #[error("event {index} is a second run_started")]
     DuplicateRunStarted { index: u64 },
-    #[error("entry {index} follows the end of the run")]
-    EntriesAfterEnd { index: u64 },
-    #[error("entry {index} is recorded before the entry that precedes it")]
+    #[error("event {index} follows the end of the run")]
+    EventsAfterEnd { index: u64 },
+    #[error("event {index} is recorded before the event that precedes it")]
     TimeWentBackwards { index: u64 },
 }
 
 /// Checks that `history` is well formed and returns its `run_started`.
 ///
 /// A well-formed history is not empty, starts with exactly one `run_started`, has contiguous
-/// indexes from 0 and monotonic `recorded_at`, and has nothing after the entry that ended the
+/// indexes from 0 and monotonic `recorded_at`, and has nothing after the event that ended the
 /// run (`complete_run`, `fail_run` or `run_aborted`).
-pub fn validate_history(history: &[HistoryEntry]) -> Result<&RunStarted, HistoryError> {
+pub fn validate_history(history: &[HistoryEvent]) -> Result<&RunStarted, HistoryError> {
     let first = history.first().ok_or(HistoryError::Empty)?;
     let mut validator = Validator::default();
     for entry in history {
@@ -37,7 +37,7 @@ pub fn validate_history(history: &[HistoryEntry]) -> Result<&RunStarted, History
     }
 }
 
-/// Incremental form of [`validate_history`], entry by entry.
+/// Incremental form of [`validate_history`], event by event.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub(crate) struct Validator {
     next_index: u64,
@@ -46,7 +46,7 @@ pub(crate) struct Validator {
 }
 
 impl Validator {
-    pub(crate) fn check(&mut self, entry: &HistoryEntry) -> Result<(), HistoryError> {
+    pub(crate) fn check(&mut self, entry: &HistoryEvent) -> Result<(), HistoryError> {
         let position = self.next_index;
         if entry.index != position {
             return Err(HistoryError::NonContiguous {
@@ -62,7 +62,7 @@ impl Validator {
             return Err(HistoryError::DuplicateRunStarted { index: entry.index });
         }
         if self.ended {
-            return Err(HistoryError::EntriesAfterEnd { index: entry.index });
+            return Err(HistoryError::EventsAfterEnd { index: entry.index });
         }
         if self
             .last_recorded_at

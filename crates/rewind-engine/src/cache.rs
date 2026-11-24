@@ -39,9 +39,9 @@ pub(crate) struct Cached<I> {
     pub(crate) instance: I,
     /// The run's state after the last commit: its history length tells a hit from a miss.
     pub(crate) state: RunState,
-    /// The run's history as committed: a hit derives what its new entries project without
+    /// The run's history as committed: a hit derives what its new events project without
     /// reading the history again.
-    pub(crate) history: Vec<rewind_core::HistoryEntry>,
+    pub(crate) history: Vec<rewind_core::HistoryEvent>,
 }
 
 /// A least-recently-used cache of instances, by run.

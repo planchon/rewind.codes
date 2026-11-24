@@ -1,11 +1,11 @@
 //! The outbox consumers of a partition (`archi/05-testing-and-observability.md`, "The
 //! projector"; `archi/06-storage-and-scale.md`, "The outbox").
 //!
-//! An entry is written in the batch of the fact that causes it. Once the batch is durable, its
+//! An event is written in the batch of the fact that causes it. Once the batch is durable, its
 //! projection consumes it: the spans and logs go to the `SpanExporter`, a lifecycle webhook or a
 //! `quota.alert` to the tenant's subscriptions through the `WebhookSender`. A later batch removes
-//! the entry once it is exported or delivered. A failed delivery's next try is a timer of the
-//! wheel; after the last try the entry is given up. Recovery hands the consumers what is left.
+//! the event once it is exported or delivered. A failed delivery's next try is a timer of the
+//! wheel; after the last try the event is given up. Recovery hands the consumers what is left.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -50,7 +50,7 @@ impl<P: Plane> Owner<P> {
         }));
     }
 
-    /// An entry was exported or delivered, or its try failed.
+    /// An event was exported or delivered, or its try failed.
     pub(crate) fn consumed(&mut self, id: OutboxId, result: Result<(), String>) {
         let Some((entry, attempts)) = self.outbox.get_mut(&id) else {
             return;
@@ -87,7 +87,7 @@ impl<P: Plane> Owner<P> {
         self.push(unit);
     }
 
-    /// The next try of an entry.
+    /// The next try of an event.
     pub(crate) fn redeliver(&mut self, id: OutboxId) {
         if let Some((entry, _)) = self.outbox.get(&id) {
             let entry = entry.clone();

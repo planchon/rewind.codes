@@ -6,7 +6,7 @@ use rewind_api::action_sets::{
     ActionSearchResults, ActionSet, ActionSetList, CreateActionSet, SearchQuery,
 };
 use rewind_api::common::Duration;
-use rewind_api::events::Entry;
+use rewind_api::events::HistoryEvent;
 use rewind_api::headers::IdempotencyKey;
 use rewind_api::namespaces::{NamespaceList, NamespaceListQuery, NamespaceName};
 use rewind_api::runs::{
@@ -53,8 +53,8 @@ impl Api for Client {
         Ok(Client::run_trace(self, run, TraceFormat::Llm).await?)
     }
 
-    async fn run_entry(&self, run: &str, idx: u64) -> Result<Entry, ApiError> {
-        Ok(Client::run_entry(self, run, idx).await?)
+    async fn run_event(&self, run: &str, idx: u64) -> Result<HistoryEvent, ApiError> {
+        Ok(Client::run_event(self, run, idx).await?)
     }
 
     async fn signal_run(

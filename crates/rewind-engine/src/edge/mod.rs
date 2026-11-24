@@ -18,7 +18,7 @@
 //! | [`Edge::get_run`], [`Edge::find_run`], [`Edge::history`], [`Edge::export_run`], [`Edge::call_tasks`] | | the partition, or the archive |
 //! | [`Edge::search`], [`Edge::statistics`], [`Edge::series`], [`Edge::usage`], [`Edge::shapes`] | the partitions of the scope, merged | each partition's index and counters |
 //! | [`Edge::quota_alerts`] | | the owner of the tenant's home partition, from its organization actor |
-//! | [`Edge::trace`], [`Edge::trace_entry`] | | the run's head and history |
+//! | [`Edge::trace`], [`Edge::trace_event`] | | the run's head and history |
 //! | [`Edge::record_tests`] | the tests stored in the control plane | the runs searched, their history |
 //! | [`Edge::register_workflow`], [`Edge::run_tests`], [`Edge::suites`] | the catalog, the gate's tests on a driver of their own | |
 
@@ -35,7 +35,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use rewind_core::{
-    Code, HistoryEntry, JsonValue, PartitionId, Payload, RunExport, RunHandle, RunId, RunMode,
+    Code, HistoryEvent, JsonValue, PartitionId, Payload, RunExport, RunHandle, RunId, RunMode,
     RunStarted, SCRIPT_ORIGIN, Shape, code_doc, origin_slug,
 };
 
@@ -407,7 +407,7 @@ impl<P: Plane> Edge<P> {
             .await
             .map_err(edge_failed)?
             .unwrap_or_default();
-        let Some(HistoryEntry {
+        let Some(HistoryEvent {
             event: rewind_core::Event::Lifecycle(rewind_core::Lifecycle::RunStarted(parent_started)),
             ..
         }) = history.first()
@@ -938,14 +938,14 @@ impl<P: Plane> Edge<P> {
         }
     }
 
-    /// The entries of the run's attempt from `from`: from its partition, or its sealed attempt.
+    /// The events of the run's attempt from `from`: from its partition, or its sealed attempt.
     pub async fn history<G: Gateway>(
         &self,
         gateway: &mut G,
         run: &RunRef,
         from: u64,
         values: bool,
-    ) -> Result<Option<Vec<HistoryEntry>>, EdgeError> {
+    ) -> Result<Option<Vec<HistoryEvent>>, EdgeError> {
         let partition = self.partition_of(run.id).await?;
         let request = PartitionRequest::History {
             run: run.clone(),
@@ -968,7 +968,7 @@ impl<P: Plane> Edge<P> {
             .get_run(gateway, run)
             .await?
             .ok_or(Refusal::RunNotFound(run.id))?;
-        let mut entries = self
+        let mut events = self
             .history(gateway, run, 0, true)
             .await?
             .ok_or(Refusal::RunNotFound(run.id))?;
@@ -977,7 +977,7 @@ impl<P: Plane> Edge<P> {
             blobs: self.plane.blobs(),
             owners: vec![BlobOwner::Run(run.clone())],
         };
-        payloads::load_all(&source, &run.tenant, &mut entries)
+        payloads::load_all(&source, &run.tenant, &mut events)
             .await
             .map_err(unavailable)?;
         let catalog = self.plane.catalog();
@@ -995,7 +995,7 @@ impl<P: Plane> Edge<P> {
             run: run.id,
             code: code.code,
             action_set: action_set.action_set,
-            entries,
+            events,
         })
     }
 
@@ -1015,7 +1015,7 @@ impl<P: Plane> Edge<P> {
             run,
             compiled: compiled.as_ref(),
             action_set: &export.action_set,
-            history: &export.entries,
+            history: &export.events,
         };
         let blobs = self.plane.blobs();
         let source = crate::executors::activation::Carried {

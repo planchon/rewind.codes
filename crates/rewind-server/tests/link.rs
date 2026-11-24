@@ -60,7 +60,7 @@ async fn a_start_and_a_signal_reach_the_owner_on_another_node_and_its_changes_st
     let partition = namespace_partition(&TenantId::local(), &namespace, world.partitions);
     assert_eq!(map.owner(partition), Some(&b));
 
-    // Node a subscribes to the run at its owner, from its first entry.
+    // Node a subscribes to the run at its owner, from its first event.
     let mut changes = world
         .node(&a)
         .link
@@ -69,14 +69,14 @@ async fn a_start_and_a_signal_reach_the_owner_on_another_node_and_its_changes_st
         .unwrap();
     world.signal(&a, &run, "go", json!({ "from": "a" })).await;
 
-    let mut entries = BTreeSet::new();
+    let mut events = BTreeSet::new();
     let ended = tokio::time::timeout(PATIENCE, async {
         while let Some(change) = changes.next().await {
             assert_eq!(change.run, run);
             assert_eq!(change.namespace, namespace);
-            entries.extend(change.entries.iter().map(|entry| entry.index));
+            events.extend(change.events.iter().map(|entry| entry.index));
             let completed = change
-                .entries
+                .events
                 .iter()
                 .any(|entry| matches!(entry.event, Event::Command(Command::CompleteRun { .. })));
             if completed {
@@ -91,9 +91,9 @@ async fn a_start_and_a_signal_reach_the_owner_on_another_node_and_its_changes_st
     assert_eq!(summary.status, RunStatus::Completed);
     let len = summary.history_len;
     assert_eq!(
-        entries,
+        events,
         (0..len).collect(),
-        "every entry streamed, from the first"
+        "every event streamed, from the first"
     );
 
     // Its owner answers through the link.

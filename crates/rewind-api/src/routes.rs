@@ -23,7 +23,7 @@ pub const RUN_STATS: &str = "/v1/runs/stats";
 pub const RUN_FAILURES: &str = "/v1/runs/failures";
 pub const RUN: &str = "/v1/runs/{id}";
 pub const RUN_TRACE: &str = "/v1/runs/{id}/trace";
-pub const RUN_ENTRY: &str = "/v1/runs/{id}/entries/{idx}";
+pub const RUN_EVENT: &str = "/v1/runs/{id}/events/{idx}";
 pub const RUN_EVENTS: &str = "/v1/runs/{id}/events";
 pub const RUN_SIGNAL: &str = "/v1/runs/{id}/signals/{name}";
 pub const RUN_CANCEL: &str = "/v1/runs/{id}/cancel";
@@ -147,7 +147,7 @@ pub const OPERATIONS: [(&str, &str); 114] = [
     ("GET", RUN),
     ("DELETE", RUN),
     ("GET", RUN_TRACE),
-    ("GET", RUN_ENTRY),
+    ("GET", RUN_EVENT),
     ("GET", RUN_EVENTS),
     ("GET", CHANGES),
     ("POST", RUN_SIGNAL),
@@ -304,10 +304,10 @@ mod tests {
     #[test]
     fn a_base_path_is_kept_as_a_prefix() {
         let mut url = Url::parse("https://example.com/rewind/").unwrap();
-        push(&mut url, RUN_ENTRY, &["r1", "7"]).unwrap();
+        push(&mut url, RUN_EVENT, &["r1", "7"]).unwrap();
         assert_eq!(
             url.as_str(),
-            "https://example.com/rewind/v1/runs/r1/entries/7"
+            "https://example.com/rewind/v1/runs/r1/events/7"
         );
         let mut url = Url::parse("http://localhost").unwrap();
         push(&mut url, HOOK, &["tok"]).unwrap();

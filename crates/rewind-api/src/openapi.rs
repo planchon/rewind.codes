@@ -76,7 +76,7 @@ use crate::webhooks::{
         operations::get_run,
         operations::delete_run,
         operations::get_run_trace,
-        operations::get_run_entry,
+        operations::get_run_event,
         operations::stream_run_events,
         operations::stream_changes,
         operations::signal_run,
@@ -453,7 +453,7 @@ pub(crate) fn problem_response(description: &str) -> RefOr<utoipa::openapi::resp
         .into()
 }
 
-/// The outbound webhooks: one entry per event type, each a POST to the subscription's URL.
+/// The outbound webhooks: one event per event type, each a POST to the subscription's URL.
 fn webhooks_paths() -> PathsBuilder {
     let mut paths = PathsBuilder::new();
     for kind in WebhookEventType::ALL {
@@ -535,7 +535,7 @@ mod operations {
         Connection, ConnectionList, Consent, ConsentAnswer, ConsentQuery, ConsentRedirect,
         UpdateConnection,
     };
-    use crate::events::{ChangeEvent, Entry, EventsQuery, StreamEvent};
+    use crate::events::{ChangeEvent, EventsQuery, HistoryEvent, StreamEvent};
     use crate::namespaces::{
         CreateToken, CreateTokenKey, NamespaceDefaults, NamespaceDetail, NamespaceList,
         NamespaceListQuery, NamespaceNames, NamespacePatch, NamespaceQuery, PutCeiling,
@@ -900,29 +900,29 @@ mod operations {
     )]
     pub(super) fn get_run_trace() {}
 
-    /// One history entry in full
+    /// One event in full
     ///
-    /// Every payload of the entry has its value, whatever its size.
+    /// Every payload of the event has its value, whatever its size.
     #[utoipa::path(
-        get, path = "/v1/runs/{id}/entries/{idx}", tag = "runs", operation_id = "getRunEntry",
-        params(("id" = String, Path, description = "The run's id, or its handle percent-encoded (`dana%2Ftriage%2F06bqx3k9f2mt`)."), ("idx" = u64, Path, description = "The entry's index, from 0.")),
+        get, path = "/v1/runs/{id}/events/{idx}", tag = "runs", operation_id = "getRunEvent",
+        params(("id" = String, Path, description = "The run's id, or its handle percent-encoded (`dana%2Ftriage%2F06bqx3k9f2mt`)."), ("idx" = u64, Path, description = "The event's index, from 0.")),
         responses(
-            (status = 200, description = "The entry.", body = Entry),
-            (status = 404, description = "No such run or entry.", body = Problem, content_type = "application/problem+json"),
+            (status = 200, description = "The event.", body = HistoryEvent),
+            (status = 404, description = "No such run or event.", body = Problem, content_type = "application/problem+json"),
         )
     )]
-    pub(super) fn get_run_entry() {}
+    pub(super) fn get_run_event() {}
 
     /// Stream the run's history (server-sent events)
     ///
-    /// Each event's `data` is a `StreamEvent`: the committed entries from `from`, then, with
-    /// `follow=1`, each new entry as it is committed, and `end` when the run has ended.
+    /// Each event's `data` is a `StreamEvent`: the committed events from `from`, then, with
+    /// `follow=1`, each new event as it is committed, and `end` when the run has ended.
     #[utoipa::path(
         get, path = "/v1/runs/{id}/events", tag = "runs", operation_id = "streamRunEvents",
         params(
             ("id" = String, Path, description = "The run's id, or its handle percent-encoded (`dana%2Ftriage%2F06bqx3k9f2mt`)."),
             EventsQuery,
-            ("Last-Event-ID" = Option<String>, Header, description = "Resume after this entry: the same as `from` set to it plus one."),
+            ("Last-Event-ID" = Option<String>, Header, description = "Resume after this event: the same as `from` set to it plus one."),
         ),
         responses(
             (status = 200, description = "A stream of server-sent events; each `data` is a `StreamEvent`.", body = StreamEvent, content_type = "text/event-stream"),

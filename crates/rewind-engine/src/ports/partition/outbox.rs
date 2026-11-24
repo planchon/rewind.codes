@@ -21,13 +21,13 @@ impl fmt::Display for OutboxId {
 }
 
 /// A delivery waiting to leave the partition. It is written in the batch of the fact that
-/// causes it; once that batch is durable its projection consumes it, and the entry is removed
+/// causes it; once that batch is durable its projection consumes it, and the event is removed
 /// in a later batch, once exported or delivered. Recovery hands the projections what is left.
 #[derive(Clone, Debug, PartialEq)]
 pub struct OutboxEntry {
     pub id: OutboxId,
     pub tenant: TenantId,
-    /// The run it is about; `None` for a quota alert. Erasing the run removes the entry.
+    /// The run it is about; `None` for a quota alert. Erasing the run removes the event.
     pub run: Option<RunId>,
     pub projection: Projection,
 }
@@ -35,7 +35,7 @@ pub struct OutboxEntry {
 /// The three projections fed through the outbox.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Projection {
-    /// Spans and logs derived from committed entries, for the `SpanExporter`.
+    /// Spans and logs derived from committed events, for the `SpanExporter`.
     Otel {
         spans: Vec<Span>,
         logs: Vec<LogRecord>,
@@ -61,7 +61,7 @@ impl Projection {
 #[derive(Clone, Debug, PartialEq)]
 pub enum OutboxChange {
     Add(Box<OutboxEntry>),
-    /// The entry was exported or delivered. Removing an entry that is not there changes nothing.
+    /// The event was exported or delivered. Removing an event that is not there changes nothing.
     Remove(OutboxId),
 }
 

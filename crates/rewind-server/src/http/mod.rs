@@ -75,7 +75,7 @@ pub(crate) fn router(app: Arc<App>, socket: bool, mcp: Option<Router>) -> Router
         .route(routes::RUN_FAILURES, get(stats::failures))
         .route(routes::RUN, get(runs::get).delete(runs::erase))
         .route(routes::RUN_TRACE, get(runs::trace))
-        .route(routes::RUN_ENTRY, get(runs::entry))
+        .route(routes::RUN_EVENT, get(runs::entry))
         .route(routes::RUN_EVENTS, get(events::stream))
         .route(routes::CHANGES, get(changes::stream))
         .route(routes::RUN_SIGNAL, post(runs::signal))

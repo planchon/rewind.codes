@@ -9,7 +9,7 @@ mod support;
 use std::collections::BTreeMap;
 
 use rewind_core::{
-    ActionSet, Attachments, Code, Command, Completion, Digest, Event, HistoryEntry, JsonValue,
+    ActionSet, Attachments, Code, Command, Completion, Digest, Event, HistoryEvent, JsonValue,
     Lifecycle, RunMode, RunStatus, Seq, WorkflowSchemas, end_signal_name, ended_run,
 };
 use rewind_engine::adapters::StaticTypeChecker;
@@ -33,7 +33,7 @@ async fn status(world: &mut World, run: &RunRef) -> RunStatus {
     world.view(run).await.head.status
 }
 
-fn output(history: &[HistoryEntry]) -> JsonValue {
+fn output(history: &[HistoryEvent]) -> JsonValue {
     history
         .iter()
         .find_map(|entry| match &entry.event {

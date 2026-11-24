@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use rewind_core::{
     AbortKind, Action, ActionFailure, ActionFailureKind, ActionRoute, ActionSet, Annotation,
-    Builtin, Callsite, Code, Command, Completion, Epoch, Event, HistoryEntry, McpServer,
+    Builtin, Callsite, Code, Command, Completion, Epoch, Event, HistoryEvent, McpServer,
     McpTransport, RunId, RunOutcome, RunState, RunStatus, ScriptError, Seed, Seq, Timestamp,
     canonical_json,
 };
@@ -109,7 +109,7 @@ async fn harness_with(limits: SandboxLimits, entropy: u64) -> Harness {
 
 struct Run {
     id: RunRef,
-    history: Vec<HistoryEntry>,
+    history: Vec<HistoryEvent>,
     state: RunState,
 }
 
@@ -414,7 +414,7 @@ async fn crypto_is_chacha20_keyed_by_the_seed() {
 }
 
 #[tokio::test]
-async fn replay_detects_a_changed_script_at_the_diverging_entry() {
+async fn replay_detects_a_changed_code_at_the_diverging_event() {
     let harness = harness().await;
     let run = harness.run(FAN_OUT, json!({ "repo": "acme/api" })).await;
 
@@ -425,7 +425,7 @@ async fn replay_detects_a_changed_script_at_the_diverging_entry() {
     };
     assert_eq!(
         mismatch.to_string(),
-        "history entry 3 is call #3 github.get_issue({\"number\":3,\"repo\":\"acme/api\"}), \
+        "event 3 is call #3 github.get_issue({\"number\":3,\"repo\":\"acme/api\"}), \
          but the code emitted call #3 github.get_issue({\"number\":4,\"repo\":\"acme/api\"})"
     );
 

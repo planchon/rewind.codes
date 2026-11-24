@@ -1,5 +1,5 @@
 {
-  "description": "A fork forced live at an entry calls the action again from there, although its commands still match the parent's; the results before that entry are reused.",
+  "description": "A fork forced live at an event calls the action again from there, although its commands still match the parent's; the results before that event are reused.",
   "actions": {
     "weather.forecast": {
       "$sequence": [

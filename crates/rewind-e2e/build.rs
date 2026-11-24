@@ -43,8 +43,8 @@ fn tests() -> String {
 
 fn sorted_dirs(dir: &Path) -> Vec<std::path::PathBuf> {
     let mut dirs: Vec<_> = fs::read_dir(dir)
-        .map(|entries| {
-            entries
+        .map(|events| {
+            events
                 .filter_map(Result::ok)
                 .map(|entry| entry.path())
                 .filter(|path| path.is_dir())

@@ -26,7 +26,7 @@ use std::collections::BTreeMap;
 use std::future::Future;
 use std::num::NonZeroU16;
 
-use rewind_core::{Digest, HistoryEntry, PartitionId, RunId, Seq, Shape, Timestamp};
+use rewind_core::{Digest, HistoryEvent, PartitionId, RunId, Seq, Shape, Timestamp};
 
 pub use counters::{
     ActionCounts, CounterDelta, Counters, FailureCounts, Gauges, Hour, LATEST_RUNS, LatestRun,
@@ -94,7 +94,7 @@ pub trait PartitionStore: Send + Sync {
 /// The contracts of the reads and of [`commit`](PartitionLog::commit):
 ///
 /// - **Single writer.** The owner is the only writer, so the store checks what a single writer
-///   may get wrong and refuses the batch ([`PartitionError::Conflict`]): entries appended
+///   may get wrong and refuses the batch ([`PartitionError::Conflict`]): events appended
 ///   anywhere but at the attempt's history length; a start key already used in the
 ///   namespace; a consumed inbox item that does not exist; a change to a run that does not exist
 ///   or has been erased. Also refused: a run created twice, an inbox item or an outbox entry
@@ -105,7 +105,7 @@ pub trait PartitionStore: Send + Sync {
 /// - **Ends.** A terminal `Activation` (its head's status is terminal) clears the run's timers
 ///   of the attempt, call tasks and inbox, and its webhook tokens stop resolving; nothing is
 ///   enqueued for an ended attempt (an `Enqueue` changes nothing).
-/// - **Activations** write, with the entries, the payload records of the payloads that left the
+/// - **Activations** write, with the events, the payload records of the payloads that left the
 ///   events, the run's head and summary, its index entries, the counters it moves and its
 ///   outbox entries.
 /// - **Seal and erase.** `Seal` deletes the attempt's history, inbox, call tasks and payload
@@ -113,7 +113,7 @@ pub trait PartitionStore: Send + Sync {
 ///   is kept for the life of the run, so a late retry of a signal is acknowledged
 ///   (`archi/06-storage-and-scale.md`, "Idempotency of the API"). `Erase` deletes everything of
 ///   the run: its records, summary, start key, signal keys, webhook tokens, timers, outbox
-///   entries, and what it held in the gauges. Neither is refused for a run
+///   events, and what it held in the gauges. Neither is refused for a run
 ///   already sealed or erased.
 /// - **Search.** `search` evaluates every term of the query on the summaries of the scope, in
 ///   the order asked, reads at most `budget` summaries, and returns a cursor when it stopped
@@ -156,13 +156,13 @@ pub trait PartitionLog: Send + Sync {
         run: &RunRef,
     ) -> impl Future<Output = Result<Option<IndexedSummary>, PartitionError>> + Send;
 
-    /// The entries of an attempt from index `from`, in order. Empty once the attempt is sealed.
+    /// The events of an attempt from index `from`, in order. Empty once the attempt is sealed.
     fn history(
         &self,
         run: &RunRef,
         attempt: Attempt,
         from: u64,
-    ) -> impl Future<Output = Result<Vec<HistoryEntry>, PartitionError>> + Send;
+    ) -> impl Future<Output = Result<Vec<HistoryEvent>, PartitionError>> + Send;
 
     /// The run's inbox, in the order of the items' ids.
     fn inbox(
@@ -346,7 +346,7 @@ pub enum Change {
         change: TaskChange,
     },
     /// Sets or cancels a timer. A timer of a run needs the run; a webhook's retry, its outbox
-    /// entry.
+    /// event.
     Timer(TimerChange),
     /// An activation of the run failed and committed nothing: its failures + 1. The
     /// [`QUARANTINE_AFTER_FAILURES`]-th in a row quarantines the run (kind `failures`, `error`
@@ -428,9 +428,9 @@ pub struct CreateRun {
     pub head: RunHead,
     /// Unique in the run's namespace for as long as the run is kept.
     pub start_key: Option<String>,
-    /// A fork's copied history: the first entries of the head's attempt, from index 0.
-    pub entries: Vec<HistoryEntry>,
-    /// The payload records of the copied entries.
+    /// A fork's copied history: the first events of the head's attempt, from index 0.
+    pub events: Vec<HistoryEvent>,
+    /// The payload records of the copied events.
     pub payloads: Vec<PayloadRecord>,
     /// The run's summary from its creation, `pending` until its first activation: a pending
     /// run is listed and searched as any other.
@@ -438,17 +438,17 @@ pub struct CreateRun {
 }
 
 /// Everything one activation of a run commits (`archi/02-history.md`, "The commit invariant"):
-/// the entries, complete "trigger → response" groups, and what they caused.
+/// the events, complete "trigger → response" groups, and what they caused.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Activation {
     pub run: RunRef,
     /// The run's attempt: the head's.
     pub attempt: Attempt,
     /// Appended at the attempt's history length.
-    pub entries: Vec<HistoryEntry>,
+    pub events: Vec<HistoryEvent>,
     /// The ids of the inbox items delivered or dropped.
     pub consumed: Vec<u64>,
-    /// The payloads that left the entries: digest, size, preview, the value up to 64 KiB.
+    /// The payloads that left the events: digest, size, preview, the value up to 64 KiB.
     pub payloads: Vec<PayloadRecord>,
     /// The call tasks the new calls created.
     pub tasks: Vec<TaskRecord>,

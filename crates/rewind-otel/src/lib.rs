@@ -4,7 +4,7 @@
 //! Two kinds of telemetry, both over OTLP (gRPC or HTTP with protobuf), in the same traces:
 //!
 //! - **Run telemetry**: what each code did. The projector derives spans and log records from
-//!   committed entries, with deterministic ids, and hands them to [`OtelSpanExporter`], the
+//!   committed events, with deterministic ids, and hands them to [`OtelSpanExporter`], the
 //!   `SpanExporter` port. They are exported as derived.
 //! - **Service telemetry**: what the platform does, from the `tracing` facade of the engine and
 //!   the adapters. [`install`] sets up the process's subscriber; [`ServiceTelemetry`] turns

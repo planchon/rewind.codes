@@ -1,6 +1,6 @@
 //! Domain of Rewind: the run history and the pure logic built on it.
 //!
-//! - [`event`]: the four families of history events and [`HistoryEntry`] (`archi/02-history.md`).
+//! - [`event`]: the four families of history events and [`HistoryEvent`] (`archi/02-history.md`).
 //! - [`Payload`]: a JSON value identified by the digest of its canonical form (RFC 8785).
 //! - [`RunState`]: the state of a run, a pure function of its history.
 //! - [`ReplayCursor`]: the determinism check (`archi/03-execution.md`, "Replay").
@@ -57,7 +57,7 @@ pub use digest::{Digest, InvalidDigest};
 pub use doc::{CodeDoc, MAX_DESCRIPTION_CHARS, MAX_TITLE_CHARS, code_doc};
 pub use event::{
     AbortKind, AbortReason, ActionFailure, ActionFailureKind, ActionOutcome, Annotation, Callsite,
-    CancelReason, Command, Completion, Event, HistoryEntry, Lifecycle, LogLevel, RunMode,
+    CancelReason, Command, Completion, Event, HistoryEvent, Lifecycle, LogLevel, RunMode,
     RunStarted, ScriptError,
 };
 pub use handle::{

@@ -33,7 +33,7 @@ use object_store::{
     PutMultipartOptions, PutOptions, PutPayload, PutResult, RenameOptions,
 };
 use rewind_core::{
-    ActionPolicy, ActionRoute, Command, Completion, Digest, Epoch, Event, HistoryEntry, Lifecycle,
+    ActionPolicy, ActionRoute, Command, Completion, Digest, Epoch, Event, HistoryEvent, Lifecycle,
     PartitionId, RunId, RunMode, RunStarted, RunStatus, Seed, Seq, Timestamp,
 };
 use rewind_engine::ports::partition::{Activation, CreateRun};
@@ -155,16 +155,16 @@ async fn main() {
     let mut warm = Vec::new();
     for run in runs.runs.iter().take(20) {
         let started = Instant::now();
-        let entries = reader.history(run, Attempt::FIRST, 0).await.unwrap();
+        let events = reader.history(run, Attempt::FIRST, 0).await.unwrap();
         cold.push(started.elapsed());
-        assert!(!entries.is_empty());
+        assert!(!events.is_empty());
         let started = Instant::now();
         reader.history(run, Attempt::FIRST, 0).await.unwrap();
         warm.push(started.elapsed());
     }
     let [p50, p90, p99, max] = percentiles(&mut cold);
     println!(
-        "first read of a run's history: p50 {}, p90 {}, p99 {}, max {} ({} entries per history)",
+        "first read of a run's history: p50 {}, p90 {}, p99 {}, max {} ({} events per history)",
         ms(p50),
         ms(p90),
         ms(p99),
@@ -348,7 +348,7 @@ impl Runs {
                 run: self.runs[n].clone(),
                 head: self.heads[n].clone(),
                 start_key: Some(format!("start-{n}")),
-                entries: Vec::new(),
+                events: Vec::new(),
                 payloads: Vec::new(),
                 summary: self.summaries[n].clone(),
             });
@@ -387,12 +387,12 @@ impl Runs {
         let run = self.runs[n].clone();
         let at = Timestamp(now_ms());
         let len = self.heads[n].history_len;
-        let entry = |index: u64, event: Event| HistoryEntry {
+        let entry = |index: u64, event: Event| HistoryEvent {
             index,
             recorded_at: at,
             event,
         };
-        let (entries, consumed, seq) = if len == 0 {
+        let (events, consumed, seq) = if len == 0 {
             (
                 vec![
                     entry(0, Event::Lifecycle(Lifecycle::RunStarted(self.started()))),
@@ -461,7 +461,7 @@ impl Runs {
         let mut head = self.heads[n].clone();
         head.status = RunStatus::Active;
         head.updated_at = at;
-        head.history_len = len + entries.len() as u64;
+        head.history_len = len + events.len() as u64;
         head.waits = vec![Wait {
             kind: WaitKind::Call,
             seq: Some(Seq(seq)),
@@ -491,7 +491,7 @@ impl Runs {
         Activation {
             run: run.clone(),
             attempt: Attempt::FIRST,
-            entries,
+            events,
             consumed,
             payloads: Vec::new(),
             tasks: vec![task],

@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use rewind_core::{Digest, HistoryEntry, PartitionId, RunId, Seq, Shape, Timestamp};
+use rewind_core::{Digest, HistoryEvent, PartitionId, RunId, Seq, Shape, Timestamp};
 
 use crate::ports::partition::{Activation, CreateRun};
 use crate::ports::{
@@ -64,7 +64,7 @@ struct PartitionState {
 struct RunRecords {
     head: RunHead,
     summary: Option<IndexedSummary>,
-    history: BTreeMap<Attempt, Vec<HistoryEntry>>,
+    history: BTreeMap<Attempt, Vec<HistoryEvent>>,
     inbox: BTreeMap<u64, InboxItem>,
     signal_keys: BTreeSet<String>,
     tasks: BTreeMap<Seq, TaskRecord>,
@@ -334,7 +334,7 @@ impl PartitionState {
             run,
             mut head,
             start_key,
-            entries,
+            events,
             payloads,
             summary,
         } = create;
@@ -356,8 +356,8 @@ impl PartitionState {
             }
             self.start_keys.insert(slot, run.id);
         }
-        continue_history(&run, head.attempt, 0, &entries)?;
-        head.history_len = entries.len() as u64;
+        continue_history(&run, head.attempt, 0, &events)?;
+        head.history_len = events.len() as u64;
         head.sealed = None;
         let attempt = head.attempt;
         self.runs.insert(
@@ -365,7 +365,7 @@ impl PartitionState {
             RunRecords {
                 head,
                 summary: Some(summary),
-                history: BTreeMap::from([(attempt, entries)]),
+                history: BTreeMap::from([(attempt, events)]),
                 inbox: BTreeMap::new(),
                 signal_keys: BTreeSet::new(),
                 tasks: BTreeMap::new(),
@@ -384,7 +384,7 @@ impl PartitionState {
         let Activation {
             run,
             attempt,
-            entries,
+            events,
             consumed,
             payloads,
             tasks,
@@ -410,8 +410,8 @@ impl PartitionState {
             )));
         }
         let history = records.history.entry(attempt).or_default();
-        continue_history(&run, attempt, history.len() as u64, &entries)?;
-        history.extend(entries);
+        continue_history(&run, attempt, history.len() as u64, &events)?;
+        history.extend(events);
         head.history_len = history.len() as u64;
         head.sealed = records.head.sealed;
         for id in &consumed {
@@ -734,18 +734,18 @@ impl RunRecords {
     }
 }
 
-/// Refuses entries that do not continue the attempt's history at `len`, index by index.
+/// Refuses events that do not continue the attempt's history at `len`, index by index.
 fn continue_history(
     run: &RunRef,
     attempt: Attempt,
     len: u64,
-    entries: &[HistoryEntry],
+    events: &[HistoryEvent],
 ) -> Result<(), PartitionError> {
-    for (offset, entry) in entries.iter().enumerate() {
+    for (offset, entry) in events.iter().enumerate() {
         let expected = len + offset as u64;
         if entry.index != expected {
             return Err(conflict(format!(
-                "attempt {attempt} of run {run} continues at entry {expected}, not {}",
+                "attempt {attempt} of run {run} continues at event {expected}, not {}",
                 entry.index
             )));
         }
@@ -798,7 +798,7 @@ impl PartitionLog for MemoryPartitionLog {
         run: &RunRef,
         attempt: Attempt,
         from: u64,
-    ) -> Result<Vec<HistoryEntry>, PartitionError> {
+    ) -> Result<Vec<HistoryEvent>, PartitionError> {
         self.read(|state| {
             state
                 .records(run)

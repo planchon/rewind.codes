@@ -19,7 +19,7 @@ use deno_error::JsErrorBox;
 use crate::compile::CODE_SPECIFIER;
 use crate::epochs::Glue;
 
-pub(crate) const ENTRY_SPECIFIER: &str = "rewind:entry";
+pub(crate) const ENTRY_SPECIFIER: &str = "rewind:event";
 /// The name `rewind:actions` had, which code already written imports (R1).
 pub(crate) const OLD_ACTIONS_SPECIFIER: &str = "rewind:tools";
 /// Specifier of a module of mock handlers.

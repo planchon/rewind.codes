@@ -44,7 +44,7 @@ pub const IDEMPOTENCY_KEY: &str = "Idempotency-Key";
 /// On every response: the version of the server's `rewind` binary.
 pub const REWIND_VERSION: &str = "Rewind-Version";
 
-/// On `GET /v1/runs/{id}/events`: a reconnecting client resumes after this entry.
+/// On `GET /v1/runs/{id}/events`: a reconnecting client resumes after this event.
 pub const LAST_EVENT_ID: &str = "Last-Event-ID";
 
 /// The value of an `Idempotency-Key` header: 1 to 255 visible ASCII characters. The agent tools

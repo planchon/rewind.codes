@@ -79,7 +79,7 @@ pub(crate) enum Command {
     Replay(ReplayArgs),
     /// Start a fork of a run with a corrected code.
     Fork(ForkArgs),
-    /// The LLM-readable trace of a run, or one entry in full.
+    /// The LLM-readable trace of a run, or one event in full.
     Trace(TraceArgs),
     /// List runs, most recently started first.
     Runs(RunsArgs),
@@ -267,7 +267,7 @@ pub(crate) struct ReplayArgs {
     /// fork with it would reuse.
     #[arg(long, value_name = "FILE")]
     pub(crate) code: Option<PathBuf>,
-    /// With --code: a fork would go live from this entry.
+    /// With --code: a fork would go live from this event.
     #[arg(long, value_name = "INDEX", requires = "code")]
     pub(crate) at: Option<u64>,
 }
@@ -279,7 +279,7 @@ pub(crate) struct ForkArgs {
     /// The corrected code.
     #[arg(long, value_name = "FILE")]
     pub(crate) code: PathBuf,
-    /// Go live from this history entry even if the commands still match.
+    /// Go live from this event even if the commands still match.
     #[arg(long, value_name = "INDEX")]
     pub(crate) at: Option<u64>,
     /// The fork's input: JSON, or @file.json. The parent's by default.
@@ -293,9 +293,9 @@ pub(crate) struct ForkArgs {
 pub(crate) struct TraceArgs {
     /// The run: its handle, such as dana/triage/06bqx3k9f2mt, or its id.
     pub(crate) run: String,
-    /// One history entry in full, its payload included.
+    /// One event in full, its payload included.
     #[arg(long, value_name = "INDEX")]
-    pub(crate) entry: Option<u64>,
+    pub(crate) event: Option<u64>,
 }
 
 #[derive(Debug, Args)]

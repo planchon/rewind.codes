@@ -71,8 +71,8 @@ async fn histories<L: LegacyRuns, B: LegacyBlobs>(legacy: &L, blobs: &B) -> Hist
             usize::from(run.suffix_len),
         )
         .to_string();
-        let entries = match run.history {
-            LegacyHistory::Entries(entries) => entries,
+        let events = match run.history {
+            LegacyHistory::Events(events) => events,
             LegacyHistory::Archived(document) => blobs
                 .export(&run.run.tenant, document)
                 .await
@@ -82,7 +82,7 @@ async fn histories<L: LegacyRuns, B: LegacyBlobs>(legacy: &L, blobs: &B) -> Hist
         histories.insert(
             run.run.id.to_string(),
             (
-                entries.iter().map(|entry| entry.event.name()).collect(),
+                events.iter().map(|entry| entry.event.name()).collect(),
                 handle,
             ),
         );
@@ -126,7 +126,7 @@ async fn check(url: &str, client: &Client, histories: &Histories) {
         .await;
         assert_eq!((&found.id, &found.handle), (run, handle));
         let export = client.export_run(run, ExportAs::Run).await.unwrap();
-        let read: Vec<String> = export["entries"]
+        let read: Vec<String> = export["events"]
             .as_array()
             .unwrap()
             .iter()
@@ -254,7 +254,7 @@ async fn check(url: &str, client: &Client, histories: &Histories) {
     // The webhook URL the code was given still signals it: its token names no run, and the
     // partition that holds its hash answers.
     let export = client.export_run(WEBHOOK, ExportAs::Run).await.unwrap();
-    let hook = export["entries"]
+    let hook = export["events"]
         .as_array()
         .unwrap()
         .iter()

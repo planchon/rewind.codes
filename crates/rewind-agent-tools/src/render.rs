@@ -433,7 +433,7 @@ fn failure_kind(kind: rewind_api::common::ActionFailureKind) -> &'static str {
     }
 }
 
-/// A page of a long text: the run's output, or an entry.
+/// A page of a long text: the run's output, or an event.
 pub fn describe_page(
     title: &str,
     text: &str,
@@ -458,8 +458,8 @@ pub fn describe_page(
     lines.join("\n")
 }
 
-/// One history entry in full.
-pub fn entry_text(entry: &rewind_api::events::Entry) -> String {
+/// One event in full.
+pub fn event_text(entry: &rewind_api::events::HistoryEvent) -> String {
     let event = serde_json::to_value(&entry.event).unwrap_or(Value::Null);
     format!(
         "{{\"idx\":{},\"recordedAt\":{},\"event\":{}}}",

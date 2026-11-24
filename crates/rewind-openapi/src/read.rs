@@ -16,7 +16,7 @@
 //! Refused (`invalid-action-set`), naming the operation's path: a name that is no action name, two
 //! operations of one name, two parameters of one name or one named `body`, a `$ref` to another
 //! document, an `apiKey` in the query or a cookie or several schemes at once without `auth`, an
-//! `operations` entry the document does not have. Left out (`skipped`): an operation with a body
+//! `operations` event the document does not have. Left out (`skipped`): an operation with a body
 //! other than `application/json`, or with a cookie parameter.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -338,7 +338,7 @@ fn is_action_name(name: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
 }
 
-/// The operations `operations` keeps, each of its entries found.
+/// The operations `operations` keeps, each of its events found.
 fn keep<'a>(
     found: Vec<Found<'a>>,
     operations: Option<&[String]>,

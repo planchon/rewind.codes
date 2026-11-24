@@ -1,6 +1,6 @@
 //! The read model of the run index (`archi/05-testing-and-observability.md`, "Read model",
 //! "Query language"): one summary per run, live or ended, that the run's owner writes in its
-//! partition in the batch that commits what changed the run, an activation's entries among
+//! partition in the batch that commits what changed the run, an activation's events among
 //! them, so a summary is as recent as the partition's last durable batch; and the searches
 //! that read the summaries of the partitions of a scope, in an order, by pages.
 
@@ -17,7 +17,7 @@ use crate::ports::tenancy::{RunRef, TenantId};
 /// its status and mode, what it waits for, how it ended.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RunSnapshot {
-    /// The entries folded.
+    /// The events folded.
     pub history_len: u64,
     pub status: RunStatus,
     /// From `run_started`; `None` before it.
@@ -37,7 +37,7 @@ pub struct Wait {
     pub seq: Option<Seq>,
     /// The signal's name, or the call's action; `None` for a timer.
     pub name: Option<String>,
-    /// `recorded_at` of the entry that opened the wait (`signal_awaited`, `start_timer`,
+    /// `recorded_at` of the event that opened the wait (`signal_awaited`, `start_timer`,
     /// `schedule_call`).
     pub since: Timestamp,
     /// When the wait ends by itself: a timer's due time, a signal's timeout.
@@ -176,7 +176,7 @@ pub struct RunSummary {
     pub code: Digest,
     pub headline: String,
     pub action_set: Digest,
-    /// `pending` until its first activation commits, then `active` until a terminal entry.
+    /// `pending` until its first activation commits, then `active` until a terminal event.
     pub status: RunStatus,
     pub mode: Option<RunMode>,
     pub labels: BTreeMap<String, String>,
@@ -187,15 +187,15 @@ pub struct RunSummary {
     pub started_by: Option<RunId>,
     /// `recorded_at` of `run_started`, once committed.
     pub started_at: Option<Timestamp>,
-    /// `recorded_at` of the terminal entry.
+    /// `recorded_at` of the terminal event.
     pub ended_at: Option<Timestamp>,
-    /// `recorded_at` of the last entry; the run's creation before its first.
+    /// `recorded_at` of the last event; the run's creation before its first.
     pub last_activity_at: Timestamp,
-    /// The `schedule_call` entries of its history.
+    /// The `schedule_call` events of its history.
     pub calls: u64,
-    /// The `call_failed` entries of its history.
+    /// The `call_failed` events of its history.
     pub errors: u64,
-    /// The entries of its history.
+    /// The events of its history.
     pub history_len: u64,
     /// The latest snapshot's waits, in its order, each call's with its task's furthest state.
     pub waits: Vec<Wait>,
@@ -317,7 +317,7 @@ pub enum Predicate {
     Signal(Vec<TextMatch>),
     Started(Range<Timestamp>),
     Ended(Range<Timestamp>),
-    /// `recorded_at` of the run's last entry.
+    /// `recorded_at` of the run's last event.
     Activity(Range<Timestamp>),
     /// From start to end, in milliseconds: ended runs only.
     Duration(Range<u64>),

@@ -1,4 +1,4 @@
-//! What an activation writes beside its entries, derived from the history it extends
+//! What an activation writes beside its events, derived from the history it extends
 //! (`archi/05-testing-and-observability.md`, "Read model", "The projector";
 //! `archi/06-storage-and-scale.md`, "Quotas"): the run's head and summary, the call tasks and
 //! timers of its new commands, the counters it moves, and the projections it feeds.
@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use rewind_core::{
-    ActionSet, Command, Completion, Event, HistoryEntry, JsonValue, Lifecycle, Payload, RunState,
+    ActionSet, Command, Completion, Event, HistoryEvent, JsonValue, Lifecycle, Payload, RunState,
     RunStatus, Seq, Shape, Timestamp,
 };
 
@@ -39,14 +39,14 @@ pub(crate) fn phase_of(task: &TaskRecord) -> TaskPhase {
 /// (each call's with its task's phase), its ending, its counts, the actions it called.
 ///
 /// The counts are those of `previous`, the summary of the history up to its `history_len`,
-/// with the entries after it: an activation counts its new entries only, and its derivation
+/// with the events after it: an activation counts its new events only, and its derivation
 /// costs what it appends and what the run holds pending, never the length of the history.
-/// Without a previous summary (a fork's first activation, a run given up) every entry is
+/// Without a previous summary (a fork's first activation, a run given up) every event is
 /// counted.
 pub(crate) fn summary_of(
     head: &RunHead,
     headline: &str,
-    history: &[HistoryEntry],
+    history: &[HistoryEvent],
     state: &RunState,
     action_set: &ActionSet,
     tasks: &BTreeMap<Seq, TaskRecord>,
@@ -94,7 +94,7 @@ pub(crate) fn summary_of(
         Event::Lifecycle(Lifecycle::RunStarted(_)) => Some(entry.recorded_at),
         _ => None,
     });
-    // Nothing follows the terminal entry of an attempt.
+    // Nothing follows the terminal event of an attempt.
     let ended_at = history
         .last()
         .filter(|entry| entry.event.is_terminal())
@@ -152,17 +152,17 @@ pub(crate) fn pending_summary(head: &RunHead, headline: &str) -> IndexedSummary 
     summary
 }
 
-/// The entries that opened the calls and timers the new entries (`from` on) end or read:
+/// The events that opened the calls and timers the new events (`from` on) end or read:
 /// pending before them, read at their index, or opened among them.
 pub(crate) struct Openings<'h> {
-    history: &'h [HistoryEntry],
+    history: &'h [HistoryEvent],
     before: &'h RunState,
-    new: BTreeMap<Seq, &'h HistoryEntry>,
+    new: BTreeMap<Seq, &'h HistoryEvent>,
 }
 
 impl<'h> Openings<'h> {
-    /// `before` is the run's state after the entries before `from`.
-    pub(crate) fn new(history: &'h [HistoryEntry], from: usize, before: &'h RunState) -> Self {
+    /// `before` is the run's state after the events before `from`.
+    pub(crate) fn new(history: &'h [HistoryEvent], from: usize, before: &'h RunState) -> Self {
         let new = history[from.min(history.len())..]
             .iter()
             .filter_map(|entry| match &entry.event {
@@ -179,8 +179,8 @@ impl<'h> Openings<'h> {
         }
     }
 
-    /// The entry that opened the call or timer `seq`.
-    pub(crate) fn of(&self, seq: Seq) -> Option<&'h HistoryEntry> {
+    /// The event that opened the call or timer `seq`.
+    pub(crate) fn of(&self, seq: Seq) -> Option<&'h HistoryEvent> {
         self.new
             .get(&seq)
             .copied()
@@ -202,7 +202,7 @@ impl<'h> Openings<'h> {
 /// The run's head after an activation that left it in `status`.
 pub(crate) fn head_after(
     head: &RunHead,
-    history: &[HistoryEntry],
+    history: &[HistoryEvent],
     summary: &IndexedSummary,
     released: bool,
 ) -> RunHead {
@@ -225,14 +225,14 @@ pub(crate) fn head_after(
     next
 }
 
-/// The call tasks and timers of the new entries (`from` on): a call still pending at the end of
+/// The call tasks and timers of the new events (`from` on): a call still pending at the end of
 /// the activation, a timer still pending, the cancellation of a timer of an earlier activation,
 /// and the run's deadline once `run_started` is committed. A terminal run has none: its commit
 /// clears them. A task takes its route and policy from the pinned action set; an action the action
 /// set does not have is returned as the error.
 pub(crate) fn effects_of(
     head: &RunHead,
-    history: &[HistoryEntry],
+    history: &[HistoryEvent],
     from: usize,
     state: &rewind_core::RunState,
     action_set: &ActionSet,
@@ -306,10 +306,10 @@ pub(crate) fn effects_of(
     Ok((tasks, timers))
 }
 
-/// The shapes of the results of the new entries, before their payloads leave them.
+/// The shapes of the results of the new events, before their payloads leave them.
 pub(crate) fn shapes_of(
     head: &RunHead,
-    history: &[HistoryEntry],
+    history: &[HistoryEvent],
     from: usize,
     openings: &Openings<'_>,
 ) -> Vec<CounterDelta> {
@@ -332,12 +332,12 @@ pub(crate) fn shapes_of(
     deltas
 }
 
-/// The counters the new entries (`from` on) move, per hour of their `recorded_at`: the run's
+/// The counters the new events (`from` on) move, per hour of their `recorded_at`: the run's
 /// start and end, its duration and failure group, its workflow and code, the calls of each
 /// action; and the CPU time of the activation in the hour of `now`.
 pub(crate) fn counters_of(
     head: &RunHead,
-    history: &[HistoryEntry],
+    history: &[HistoryEvent],
     from: usize,
     openings: &Openings<'_>,
     summary: &IndexedSummary,
@@ -499,27 +499,27 @@ pub(crate) fn redeliveries_counters(
     })
 }
 
-/// The new entries of an activation: `history[from..]`, which take the run from the state
+/// The new events of an activation: `history[from..]`, which take the run from the state
 /// `before` to the state `after`.
 #[derive(Clone, Copy)]
-pub(crate) struct NewEntries<'h> {
-    pub(crate) history: &'h [HistoryEntry],
+pub(crate) struct NewEvents<'h> {
+    pub(crate) history: &'h [HistoryEvent],
     pub(crate) from: usize,
     pub(crate) before: &'h RunState,
     pub(crate) after: &'h RunState,
 }
 
-/// What the new entries feed the projections: the spans and logs that end in them, the log
+/// What the new events feed the projections: the spans and logs that end in them, the log
 /// records named by the activation span `H(run, "activation", from)`, and the lifecycle
 /// webhooks.
 pub(crate) fn projections_of(
     head: &RunHead,
-    new: NewEntries<'_>,
+    new: NewEvents<'_>,
     action_set: &ActionSet,
     payloads: &BTreeMap<rewind_core::Digest, PayloadRecord>,
     telemetry: &TelemetryConfig,
 ) -> Vec<Projection> {
-    let NewEntries {
+    let NewEvents {
         history,
         from,
         before,
@@ -548,15 +548,15 @@ pub(crate) fn projections_of(
     projections
 }
 
-/// What the new entries measure: the run metrics recorded once their batch is durable, for
+/// What the new events measure: the run metrics recorded once their batch is durable, for
 /// every run but a mock run whose telemetry is not exported.
 pub(crate) fn measurements_of(
     head: &RunHead,
-    new: NewEntries<'_>,
+    new: NewEvents<'_>,
     payloads: &BTreeMap<rewind_core::Digest, PayloadRecord>,
     telemetry: &TelemetryConfig,
 ) -> Vec<RunMeasurement> {
-    let NewEntries {
+    let NewEvents {
         history,
         from,
         before,
@@ -578,7 +578,7 @@ pub(crate) fn measurements_of(
 
 /// The runs a history started with a workflow's `start` and whose end it does not hold, by
 /// call, and whether the start was attached (not `detached`).
-pub(crate) fn children_of(history: &[HistoryEntry]) -> Vec<(Seq, rewind_core::RunId, bool)> {
+pub(crate) fn children_of(history: &[HistoryEvent]) -> Vec<(Seq, rewind_core::RunId, bool)> {
     let mut detached: BTreeMap<Seq, bool> = BTreeMap::new();
     for entry in history {
         if let Event::Command(Command::ScheduleCall {
@@ -684,10 +684,10 @@ mod tests {
         ActionSet::new([server], [get, ask]).unwrap()
     }
 
-    /// A long history of every kind of entry: calls completed, failed and left pending; timers
+    /// A long history of every kind of event: calls completed, failed and left pending; timers
     /// fired, cancelled, used as a signal's timeout, timed out, left pending; signals received
     /// and left awaited; logs; then a cancellation the code ends with.
-    fn varied_history(rounds: u32) -> Vec<HistoryEntry> {
+    fn varied_history(rounds: u32) -> Vec<HistoryEvent> {
         let mut events = vec![Event::Lifecycle(Lifecycle::RunStarted(RunStarted {
             code: Digest::of(b"script"),
             action_set: Digest::of(b"action_set"),
@@ -803,7 +803,7 @@ mod tests {
         events
             .into_iter()
             .enumerate()
-            .map(|(index, event)| HistoryEntry {
+            .map(|(index, event)| HistoryEvent {
                 index: index as u64,
                 recorded_at: Timestamp(10 * index as u64),
                 event,
@@ -819,7 +819,7 @@ mod tests {
         }
     }
 
-    /// What one activation derives from the entries `from..to`.
+    /// What one activation derives from the events `from..to`.
     struct Derived {
         summary: IndexedSummary,
         spans: Vec<crate::ports::Span>,
@@ -829,7 +829,7 @@ mod tests {
     }
 
     fn derive(
-        history: &[HistoryEntry],
+        history: &[HistoryEvent],
         from: usize,
         to: usize,
         previous: Option<&IndexedSummary>,
@@ -873,21 +873,21 @@ mod tests {
     }
 
     #[test]
-    fn an_activation_derives_from_its_new_entries_what_the_whole_history_gives() {
+    fn an_activation_derives_from_its_new_events_what_the_whole_history_gives() {
         let history = varied_history(60);
         let whole = derive(&history, 0, history.len(), None);
         let mut whole_hours = BTreeMap::new();
         hours(whole.counters, &mut whole_hours);
         let mut sizes = 0x2545_f491_u64;
-        for chunking in ["one entry", "three entries", "varied"] {
+        for chunking in ["one event", "three events", "varied"] {
             let mut previous = Some(pending_summary(&head(), "headline"));
             let (mut spans, mut measurements, mut shapes) = (Vec::new(), Vec::new(), Vec::new());
             let mut chunked_hours = BTreeMap::new();
             let mut from = 0;
             while from < history.len() {
                 let size = match chunking {
-                    "one entry" => 1,
-                    "three entries" => 3,
+                    "one event" => 1,
+                    "three events" => 3,
                     _ => {
                         sizes = sizes
                             .wrapping_mul(6_364_136_223_846_793_005)

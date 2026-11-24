@@ -5,7 +5,7 @@
 //! returns the archive and that store, over the same backend.
 
 use rewind_core::{
-    ActionSet, Annotation, Code, Digest, Epoch, Event, HistoryEntry, Lifecycle, LogLevel,
+    ActionSet, Annotation, Code, Digest, Epoch, Event, HistoryEvent, Lifecycle, LogLevel,
     PartitionId, RunId, RunMode, RunStarted, Seed, Timestamp, canonical_json,
 };
 use serde_json::json;
@@ -53,18 +53,18 @@ fn sealed(run: &RunRef, attempt: Attempt, logs: u64) -> SealedAttempt {
         expires_at: Timestamp(T0.0 + 86_400_000),
         mode: RunMode::Live,
     };
-    let mut entries = vec![HistoryEntry {
+    let mut events = vec![HistoryEvent {
         index: 0,
         recorded_at: T0,
         event: Event::Lifecycle(Lifecycle::RunStarted(started)),
     }];
     for index in 1..=logs {
-        entries.push(HistoryEntry {
+        events.push(HistoryEvent {
             index,
             recorded_at: Timestamp(T0.0 + index),
             event: Event::Annotation(Annotation::Log {
                 level: LogLevel::Info,
-                message: format!("attempt {attempt}, entry {index}"),
+                message: format!("attempt {attempt}, event {index}"),
                 callsite: None,
             }),
         });
@@ -74,7 +74,7 @@ fn sealed(run: &RunRef, attempt: Attempt, logs: u64) -> SealedAttempt {
         attempt,
         code: code(),
         action_set: action_set(),
-        entries,
+        events,
     }
 }
 

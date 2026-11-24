@@ -21,7 +21,7 @@ use rewind_api::runs::{
 };
 use rewind_api::scripts::{CheckResult, Diagnostic, Location, Severity, TitleSource};
 use rewind_core::{
-    Annotation, Command, Completion, Event, HistoryEntry, Lifecycle, RunOutcome, RunState, Seq,
+    Annotation, Command, Completion, Event, HistoryEvent, Lifecycle, RunOutcome, RunState, Seq,
 };
 use rewind_engine::edge::EdgeError;
 use rewind_engine::ports::link::Refusal;
@@ -197,7 +197,7 @@ pub async fn script_title(
 async fn waiting(
     world: &World,
     run: &RunRef,
-    history: &[HistoryEntry],
+    history: &[HistoryEvent],
     state: &RunState,
 ) -> Result<Vec<Waiting>, EdgeError> {
     let mut calls = BTreeMap::new();
@@ -293,7 +293,7 @@ async fn waiting(
 }
 
 /// The last log lines of the code.
-fn logs(history: &[HistoryEntry]) -> Vec<LogLine> {
+fn logs(history: &[HistoryEvent]) -> Vec<LogLine> {
     let mut lines: Vec<LogLine> = history
         .iter()
         .filter_map(|entry| match &entry.event {
@@ -376,7 +376,7 @@ fn wait_kind(waiting: rewind_engine::ports::WaitingFor) -> WaitKind {
 
 /// How the code failed, with where: the first position in `workflow.ts` of its stack, else of
 /// its message, and the call whose `ActionError` it did not catch.
-fn run_error(error: &rewind_core::ScriptError, history: &[HistoryEntry], source: &str) -> RunError {
+fn run_error(error: &rewind_core::ScriptError, history: &[HistoryEvent], source: &str) -> RunError {
     let location = error
         .stack
         .as_deref()
@@ -395,7 +395,7 @@ fn run_error(error: &rewind_core::ScriptError, history: &[HistoryEntry], source:
 }
 
 /// The call whose `ActionError` the code did not catch, as `ScriptError::failed_call` finds it.
-fn failed_call(history: &[HistoryEntry], seq: Seq) -> Option<FailedCall> {
+fn failed_call(history: &[HistoryEvent], seq: Seq) -> Option<FailedCall> {
     let failure = history.iter().find_map(|entry| match &entry.event {
         Event::Completion(Completion::CallFailed { seq: failed, error }) if *failed == seq => {
             Some(error)

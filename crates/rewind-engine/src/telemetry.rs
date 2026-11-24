@@ -1,15 +1,15 @@
-//! Run telemetry, projected from committed entries (`archi/05-testing-and-observability.md`,
+//! Run telemetry, projected from committed events (`archi/05-testing-and-observability.md`,
 //! "Span model").
 //!
 //! One trace per run. Its id is the harness's when the run was started with a `traceparent`,
 //! the run id otherwise. Span ids are derived from the run (`H` is a truncated SHA-256), so a
 //! span exported again after a crash is the same span, and live service spans can name the
-//! spans of a run's entries as parents before those are exported:
+//! spans of a run's events as parents before those are exported:
 //!
 //! | Span | Id | From → to |
 //! | --- | --- | --- |
-//! | Run | `H(run, "run")` | `run_started` → the terminal entry |
-//! | Activation (service telemetry) | `H(run, "activation", index of its first entry)` | leaving the ready queue → its batch durable |
+//! | Run | `H(run, "run")` | `run_started` → the terminal event |
+//! | Activation (service telemetry) | `H(run, "activation", index of its first event)` | leaving the ready queue → its batch durable |
 //! | Call | `H(run, seq)` | `schedule_call` → its completion |
 //! | Timer | `H(run, seq)` | `start_timer` → `timer_fired` or `cancel_timer` |
 //! | Signal wait | `H(run, index of signal_awaited)` | → `signal_received` or its timeout |
@@ -20,7 +20,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use rewind_core::{
-    Annotation, Callsite, Command, Completion, Digest, Event, HistoryEntry, Lifecycle, Payload,
+    Annotation, Callsite, Command, Completion, Digest, Event, HistoryEvent, Lifecycle, Payload,
     RunId, RunMode, RunState, Seq, Timestamp, canonical_json,
 };
 
@@ -61,13 +61,13 @@ impl Default for TelemetryConfig {
 pub enum SpanKey {
     /// The run span.
     Run,
-    /// An activation: the index of the first entry it committed (`archi/08-decisions.md`,
+    /// An activation: the index of the first event it committed (`archi/08-decisions.md`,
     /// "Taken while writing the object-storage spec").
     Activation(u64),
     /// A call or a timer: its `seq`.
     Command(Seq),
     /// A signal wait: the index of its `signal_awaited`.
-    Entry(u64),
+    Event(u64),
 }
 
 /// `H(run, key)`: the first 8 bytes of a SHA-256 over the run id and the key, with a tag per
@@ -77,7 +77,7 @@ pub fn span_id(run: RunId, key: SpanKey) -> SpanId {
         SpanKey::Run => (b"run", 0),
         SpanKey::Activation(index) => (b"activation", index),
         SpanKey::Command(seq) => (b"seq", u64::from(seq.0)),
-        SpanKey::Entry(index) => (b"idx", index),
+        SpanKey::Event(index) => (b"idx", index),
     };
     let mut bytes = Vec::with_capacity(48);
     bytes.extend_from_slice(b"rewind/span/");
@@ -163,7 +163,7 @@ pub fn call_trace_context(
     }
 }
 
-/// What the span derivation knows of a run besides its entries.
+/// What the span derivation knows of a run besides its events.
 #[derive(Debug, Clone)]
 pub(crate) struct RunTelemetry<'a> {
     pub(crate) head: &'a RunHead,
@@ -175,7 +175,7 @@ pub(crate) struct RunTelemetry<'a> {
 impl RunTelemetry<'_> {
     /// Whether this run's spans and logs are exported: sampled, and not a mock run unless the
     /// configuration asks for it.
-    pub(crate) fn exported(&self, history: &[HistoryEntry]) -> bool {
+    pub(crate) fn exported(&self, history: &[HistoryEvent]) -> bool {
         self.measured(history) && sampled(self.trace().0, self.config)
     }
 
@@ -186,7 +186,7 @@ impl RunTelemetry<'_> {
 
     /// Whether this run's metrics are recorded: not a mock run, whose times are virtual, unless
     /// the configuration exports them. Metrics are never sampled.
-    pub(crate) fn measured(&self, history: &[HistoryEntry]) -> bool {
+    pub(crate) fn measured(&self, history: &[HistoryEvent]) -> bool {
         let mock = history.first().is_some_and(|entry| {
             matches!(&entry.event, Event::Lifecycle(Lifecycle::RunStarted(started))
                 if started.mode == RunMode::Mock)
@@ -194,13 +194,13 @@ impl RunTelemetry<'_> {
         !mock || self.config.export_mock_runs
     }
 
-    /// What the entries within `from..to` measure, given the history up to `to` at least and
-    /// `before`, the run's state after the entries before `from`: the run's start and end, and
+    /// What the events within `from..to` measure, given the history up to `to` at least and
+    /// `before`, the run's state after the events before `from`: the run's start and end, and
     /// the calls that end within the range, timed as their spans are. The calls pending
-    /// before the range are read at their opening entry: the cost is the range's.
+    /// before the range are read at their opening event: the cost is the range's.
     pub(crate) fn measurements<'h>(
         &self,
-        history: &'h [HistoryEntry],
+        history: &'h [HistoryEvent],
         before: &RunState,
         from: u64,
         to: u64,
@@ -254,12 +254,12 @@ impl RunTelemetry<'_> {
     }
 
     /// The spans that end within `from..to`, given the history up to `to` at least and
-    /// `before`, the run's state after the entries before `from`. A span is the same whichever
+    /// `before`, the run's state after the events before `from`. A span is the same whichever
     /// range it is derived in: what was open before the range (calls, timers, signal waits) is
-    /// read at its opening entry, so the cost is the range's.
+    /// read at its opening event, so the cost is the range's.
     pub(crate) fn spans(
         &self,
-        history: &[HistoryEntry],
+        history: &[HistoryEvent],
         before: &RunState,
         from: u64,
         to: u64,
@@ -275,7 +275,7 @@ impl RunTelemetry<'_> {
     /// `activation`.
     pub(crate) fn logs(
         &self,
-        history: &[HistoryEntry],
+        history: &[HistoryEvent],
         from: u64,
         to: u64,
         activation: SpanKey,
@@ -369,7 +369,7 @@ fn call_measurement(
     }
 }
 
-/// How a run ended at its terminal entry, as its span and its metrics say.
+/// How a run ended at its terminal event, as its span and its metrics say.
 fn run_outcome(event: &Event) -> &'static str {
     match event {
         Event::Command(Command::CompleteRun { .. }) => "completed",
@@ -420,7 +420,7 @@ struct OpenWait {
     callsite: Option<Callsite>,
 }
 
-/// A walk through a history that closes spans as their end entries come.
+/// A walk through a history that closes spans as their end events come.
 struct Derivation<'t, 'a> {
     run: &'t RunTelemetry<'a>,
     trace: TraceId,
@@ -450,9 +450,9 @@ impl<'t, 'a> Derivation<'t, 'a> {
         }
     }
 
-    /// The walk as it stands after the entries `before` folds: the run's start, and what is
-    /// open (calls, timers, signal waits), each read at the entry that opened it.
-    fn at(run: &'t RunTelemetry<'a>, history: &[HistoryEntry], before: &RunState) -> Self {
+    /// The walk as it stands after the events `before` folds: the run's start, and what is
+    /// open (calls, timers, signal waits), each read at the event that opened it.
+    fn at(run: &'t RunTelemetry<'a>, history: &[HistoryEvent], before: &RunState) -> Self {
         let mut derivation = Self::new(run);
         if let Some(first) = history.first()
             && before.history_len() > 0
@@ -545,7 +545,7 @@ impl<'t, 'a> Derivation<'t, 'a> {
         });
     }
 
-    fn apply(&mut self, entry: &HistoryEntry, export: bool) {
+    fn apply(&mut self, entry: &HistoryEvent, export: bool) {
         let at = entry.recorded_at;
         match &entry.event {
             Event::Lifecycle(Lifecycle::RunStarted(_)) => self.started_at = at,
@@ -720,7 +720,7 @@ impl<'t, 'a> Derivation<'t, 'a> {
             attributes.insert("rewind.callsite".into(), callsite_attribute(callsite));
         }
         self.span(
-            SpanKey::Entry(wait.index),
+            SpanKey::Event(wait.index),
             format!("signal {}", wait.name),
             SpanKind::Internal,
             (wait.start, end),
@@ -729,8 +729,8 @@ impl<'t, 'a> Derivation<'t, 'a> {
         );
     }
 
-    /// The run ended at `entry`: what is still open ends with it, then the run span.
-    fn end_run(&mut self, entry: &HistoryEntry, export: bool) {
+    /// The run ended at `event`: what is still open ends with it, then the run span.
+    fn end_run(&mut self, entry: &HistoryEvent, export: bool) {
         let at = entry.recorded_at;
         let calls = std::mem::take(&mut self.calls);
         let timers: Vec<Seq> = self.timers.keys().copied().collect();
@@ -799,8 +799,8 @@ impl<'t, 'a> Derivation<'t, 'a> {
     }
 }
 
-/// The entries `from..to` of an attempt's history, whose entries sit at their index.
-fn range(history: &[HistoryEntry], from: u64, to: u64) -> &[HistoryEntry] {
+/// The events `from..to` of an attempt's history, whose events sit at their index.
+fn range(history: &[HistoryEvent], from: u64, to: u64) -> &[HistoryEvent] {
     let to = usize::try_from(to).map_or(history.len(), |to| to.min(history.len()));
     let from = usize::try_from(from).map_or(to, |from| from.min(to));
     &history[from..to]
@@ -858,7 +858,7 @@ mod tests {
             span_id(run, SpanKey::Run),
             span_id(run, SpanKey::Command(Seq(3))),
             span_id(run, SpanKey::Activation(3)),
-            span_id(run, SpanKey::Entry(3)),
+            span_id(run, SpanKey::Event(3)),
             span_id(RunId::from_u128(2), SpanKey::Command(Seq(3))),
         ]
         .into();
@@ -900,7 +900,7 @@ mod tests {
         assert_eq!(context.tracestate.as_deref(), Some("vendor=1"));
     }
 
-    fn history(mode: RunMode, events: Vec<(u64, Event)>) -> Vec<HistoryEntry> {
+    fn history(mode: RunMode, events: Vec<(u64, Event)>) -> Vec<HistoryEvent> {
         let started = Event::Lifecycle(Lifecycle::RunStarted(rewind_core::RunStarted {
             code: Digest::of(b"s"),
             action_set: Digest::of(b"t"),
@@ -913,7 +913,7 @@ mod tests {
         std::iter::once((0, started))
             .chain(events)
             .enumerate()
-            .map(|(index, (at, event))| HistoryEntry {
+            .map(|(index, (at, event))| HistoryEvent {
                 index: index as u64,
                 recorded_at: Timestamp(at),
                 event,
@@ -921,15 +921,15 @@ mod tests {
             .collect()
     }
 
-    /// What the entries `from..to` measure, the run's state before them folded.
+    /// What the events `from..to` measure, the run's state before them folded.
     fn measure(
         telemetry: &RunTelemetry<'_>,
-        entries: &[HistoryEntry],
+        events: &[HistoryEvent],
         from: usize,
         to: usize,
     ) -> Vec<RunMeasurement> {
-        let before = RunState::from_history(&entries[..from]).unwrap();
-        telemetry.measurements(&entries[..to], &before, from as u64, to as u64)
+        let before = RunState::from_history(&events[..from]).unwrap();
+        telemetry.measurements(&events[..to], &before, from as u64, to as u64)
     }
 
     fn schedule(seq: u32, action: &str) -> Event {
@@ -948,7 +948,7 @@ mod tests {
             message: "too slow".into(),
             data: None,
         };
-        let entries = history(
+        let events = history(
             RunMode::Live,
             vec![
                 (0, schedule(1, "github.list_issues")),
@@ -995,14 +995,14 @@ mod tests {
                 error_kind: error_kind.map(str::to_owned),
                 seconds,
             };
-        assert!(telemetry.measured(&entries));
+        assert!(telemetry.measured(&events));
         // The first activation committed the start and the calls; the next ones, the rest.
         assert_eq!(
-            measure(&telemetry, &entries, 0, 4),
+            measure(&telemetry, &events, 0, 4),
             vec![RunMeasurement::Started]
         );
         assert_eq!(
-            measure(&telemetry, &entries, 4, 6),
+            measure(&telemetry, &events, 4, 6),
             vec![
                 call("github.list_issues", "completed", None, 1.5),
                 call("slack.post", "failed", Some("timeout"), 4.0),
@@ -1010,7 +1010,7 @@ mod tests {
         );
         // The call still open when the run ends ends with it.
         assert_eq!(
-            measure(&telemetry, &entries, 6, 7),
+            measure(&telemetry, &events, 6, 7),
             vec![
                 call("slack.post", "no_outcome", None, 5.0),
                 RunMeasurement::Ended {
@@ -1020,8 +1020,8 @@ mod tests {
         );
         // Applied again, an item measures the same.
         assert_eq!(
-            measure(&telemetry, &entries, 6, 7),
-            measure(&telemetry, &entries, 6, 7)
+            measure(&telemetry, &events, 6, 7),
+            measure(&telemetry, &events, 6, 7)
         );
 
         // Mock runs are not measured unless their telemetry is exported; sampling does not

@@ -11,7 +11,7 @@
 //!
 //! - While the code's commands match the parent's, the parent's triggers are copied into the
 //!   fork's history, with their recorded results and `recorded_at`: no action is called again.
-//! - At the first command that differs, at the entry `at`, at the parent's cancellation or
+//! - At the first command that differs, at the event `at`, at the parent's cancellation or
 //!   abort, or at the end of the parent's history, the fork goes live.
 //! - The calls the fork inherited (their commands matched before it went live) and that are
 //!   still pending: the parent's outcome, if it recorded one, is delivered; otherwise the call is
@@ -25,7 +25,7 @@ use std::fmt;
 use std::time::Duration;
 
 use rewind_core::{
-    ActionSet, Attachments, Code, Command, Completion, Event, HistoryEntry, JsonValue, Lifecycle,
+    ActionSet, Attachments, Code, Command, Completion, Event, HistoryEvent, JsonValue, Lifecycle,
     Next, NonDeterminism, Payload, ReplayCursor, Replayed, RunExport, RunId, RunStarted, RunStatus,
     Seq,
 };
@@ -47,7 +47,7 @@ pub struct ForkRun {
     pub parent: RunRef,
     /// The corrected code.
     pub code: Code,
-    /// Go live from this entry of the parent's history, even if the commands still match.
+    /// Go live from this event of the parent's history, even if the commands still match.
     pub at: Option<u64>,
     /// The fork's input; the parent's when `None`.
     pub input: Option<JsonValue>,
@@ -109,11 +109,11 @@ impl From<StoreError> for ForkError {
 pub enum ForkPoint {
     /// The code emitted a command the parent did not: the fork goes live there.
     Diverged(NonDeterminism),
-    /// The entry `at` of the request: the commands still matched.
+    /// The event `at` of the request: the commands still matched.
     At(u64),
-    /// The parent was cancelled at this entry: its history ends there for the fork.
+    /// The parent was cancelled at this event: its history ends there for the fork.
     ParentCancelled(u64),
-    /// The parent was aborted at this entry.
+    /// The parent was aborted at this event.
     ParentAborted(u64),
     /// The code followed the whole history of the parent, its end included when the parent
     /// ended by itself.
@@ -127,11 +127,11 @@ impl fmt::Display for ForkPoint {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ForkPoint::Diverged(mismatch) => write!(f, "it diverges: {mismatch}"),
-            ForkPoint::At(index) => write!(f, "it is forced live at entry {index}"),
+            ForkPoint::At(index) => write!(f, "it is forced live at event {index}"),
             ForkPoint::ParentCancelled(index) => {
-                write!(f, "the parent was cancelled at entry {index}")
+                write!(f, "the parent was cancelled at event {index}")
             }
-            ForkPoint::ParentAborted(index) => write!(f, "the parent was aborted at entry {index}"),
+            ForkPoint::ParentAborted(index) => write!(f, "the parent was aborted at event {index}"),
             ForkPoint::EndOfParent => f.write_str("it follows the parent's whole history"),
             ForkPoint::Stopped => f.write_str("the code could not go on"),
         }
@@ -206,10 +206,10 @@ pub async fn compatibility<X: CodeExecutor>(
     at: Option<u64>,
     limits: &Limits,
 ) -> Result<Compatibility, ForkError> {
-    let Some(HistoryEntry {
+    let Some(HistoryEvent {
         event: Event::Lifecycle(Lifecycle::RunStarted(started)),
         ..
-    }) = export.entries.first()
+    }) = export.events.first()
     else {
         return Err(ForkError::ParentNotStarted(export.run));
     };
@@ -240,7 +240,7 @@ pub async fn compatibility<X: CodeExecutor>(
             compiled: &compiled,
             action_set: &export.action_set,
         },
-        &export.entries,
+        &export.events,
     )
     .await?;
     let mut reused: Vec<Seq> = followed.reused.iter().filter_map(completion_seq).collect();
@@ -273,7 +273,7 @@ pub(crate) async fn follow_parent<X, S, C>(
     with: &FollowWith<'_, X, S, C>,
     batch: &mut Batch<'_>,
     source: ForkSource<'_>,
-    history: &[HistoryEntry],
+    history: &[HistoryEvent],
 ) -> Result<Followed<X::Instance>, EngineError>
 where
     X: CodeExecutor,
@@ -351,7 +351,7 @@ where
             // The code ended as the parent did, its last command matching the parent's; or
             // the host aborted it.
             if batch.state.is_terminal() {
-                let aborted = batch.entries().last().is_some_and(|entry| {
+                let aborted = batch.events().last().is_some_and(|entry| {
                     matches!(entry.event, Event::Lifecycle(Lifecycle::RunAborted(_)))
                 });
                 point = Some(if aborted {
@@ -410,7 +410,7 @@ where
                     point = Some(ForkPoint::Stopped);
                 }
             }
-            tracing::trace!(index, "parent entry followed");
+            tracing::trace!(index, "parent event followed");
         }
         batch.copying = false;
 
@@ -486,7 +486,7 @@ pub(crate) async fn with_values<S: payloads::PayloadSource>(
 /// Whether a history scheduled the call `seq` to `action` with `args`, and recorded no outcome for
 /// it before its cancellation.
 pub(crate) fn left_without_outcome(
-    history: &[HistoryEntry],
+    history: &[HistoryEvent],
     seq: Seq,
     action: &str,
     args: &Payload,
