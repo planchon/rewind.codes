@@ -551,7 +551,7 @@ mod operations {
     use crate::problem::Problem;
     use crate::reading::{ActionStatsFilter, ActionStatsPage, PayloadQuery};
     use crate::runs::{
-        CancelRun, ExportQuery, FailureGroupPage, FailureQuery, ForkRun, GetRunQuery, Run,
+        CancelRun, ExportQuery, FailureQuery, FingerprintPage, ForkRun, GetRunQuery, Run,
         RunFilter, RunPage, RunStats, RunStatsQuery, SignalAccepted, StartRun, Transcript,
     };
     use crate::scripts::{
@@ -852,7 +852,7 @@ mod operations {
         get, path = "/v1/runs/failures", tag = "runs", operation_id = "listRunFailures",
         params(FailureQuery),
         responses(
-            (status = 200, description = "The groups, the largest first.", body = FailureGroupPage),
+            (status = 200, description = "The fingerprints, the largest first.", body = FingerprintPage),
             (status = 400, description = "`q` cannot be read, or holds another term than one `namespace:` of one value (`invalid-query`, with `query`); or the window is invalid.", body = Problem, content_type = "application/problem+json"),
             (status = 403, description = "The caller lacks `runs:read`, or its grant or token is limited to labels, which counters do not know (`forbidden`).", body = Problem, content_type = "application/problem+json"),
         )

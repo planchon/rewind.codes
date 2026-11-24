@@ -21,7 +21,7 @@
 //!
 //! A run keeps its version 7 id. Its head and summary are derived from its history as an
 //! activation derives them; the counters it moves (created, started, ended by status, its calls,
-//! its code, its failure group, the shapes of its results) are written with it, so statistics
+//! its code, its fingerprint, the shapes of its results) are written with it, so statistics
 //! and quotas count it; the CPU time it used is not known per run and is not counted. A task in
 //! flight (claimed, or deferred with a token the run plane cannot route) is written `ready`:
 //! recovery sends it again with delivery + 1, or fails it when its action is not idempotent. A run

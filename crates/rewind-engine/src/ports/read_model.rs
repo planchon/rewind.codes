@@ -125,9 +125,9 @@ pub struct Ending {
     /// The innermost line of `workflow.ts` in the error's stack or message, if any.
     pub line: Option<u32>,
     /// The error's name and its message with the parts that vary replaced by placeholders: what
-    /// the runs of a failure group share, for display.
+    /// the runs of a fingerprint share, for display.
     pub signature: String,
-    /// The failure group: the first 16 hexadecimal digits of the SHA-256 of `signature`.
+    /// The fingerprint: the first 16 hexadecimal digits of the SHA-256 of `signature`.
     pub fingerprint: String,
 }
 

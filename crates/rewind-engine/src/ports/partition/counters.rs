@@ -2,7 +2,7 @@
 //! model", "Statistics"; `archi/06-storage-and-scale.md`, "Quotas").
 //!
 //! - **Counters** are exact, per tenant, namespace and UTC hour, written in the batch of what
-//!   they count: runs created, started and ended, durations, CPU time, failure groups, calls per
+//!   they count: runs created, started and ended, durations, CPU time, fingerprints, calls per
 //!   action, runs per code. A window of hours sums them; a day and a month are windows.
 //! - **Gauges** count what holds now: the active runs, the runs waiting by what they wait for,
 //!   the quarantined runs, the runs kept per code. They follow from the records kept, so
@@ -238,10 +238,10 @@ impl RunCounts {
     }
 }
 
-/// The latest runs of a failure group a counter keeps: [`LATEST_RUNS`] at most.
+/// The latest runs of a fingerprint a counter keeps: [`LATEST_RUNS`] at most.
 pub const LATEST_RUNS: usize = 5;
 
-/// A run that ended badly, as its failure group lists it.
+/// A run that ended badly, as its fingerprint lists it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LatestRun {
     pub run: RunId,
@@ -250,7 +250,7 @@ pub struct LatestRun {
     pub message: String,
 }
 
-/// The runs of a failure group (one fingerprint).
+/// The runs of a fingerprint (one fingerprint).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct FailureCounts {
     /// The error's name and its message with the parts that vary replaced.
@@ -352,7 +352,7 @@ pub struct Counters {
     /// The runs of each namespace. A delta leaves it empty: the store fills it with the delta's
     /// namespace ([`Counters::add_for`]).
     pub namespaces: BTreeMap<NamespaceName, RunCounts>,
-    /// Failure groups, by fingerprint.
+    /// Fingerprints, by fingerprint.
     pub failures: BTreeMap<String, FailureCounts>,
     /// Calls, by action.
     pub actions: BTreeMap<String, ActionCounts>,

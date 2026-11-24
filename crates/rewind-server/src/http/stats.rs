@@ -21,7 +21,7 @@ use rewind_api::common::{Timestamp, timestamp};
 use rewind_api::query::{self, Filter, QueryError};
 use rewind_api::reading::{ActionStats, ActionStatsFilter, ActionStatsPage, Latency};
 use rewind_api::runs::{
-    FacetValue, Facets, FailureGroup, FailureGroupPage, FailureQuery, FailureSample, RunStats,
+    FacetValue, Facets, FailureQuery, FailureSample, Fingerprint, FingerprintPage, RunStats,
     RunStatsQuery, SeriesBucket, StatusCounts,
 };
 use rewind_api::scripts::{RunCounts, ScriptFilter, ScriptPage, ScriptSummary};
@@ -43,9 +43,9 @@ const MAX_BUCKETS: u64 = 500;
 const HOUR_MS: u64 = 3_600_000;
 const PAGE: u32 = 50;
 const MAX_PAGE: u32 = 500;
-/// The labels a failure group lists.
+/// The labels a fingerprint lists.
 const TOP_LABELS: usize = 10;
-/// The latest runs read at once for the labels of a page of failure groups.
+/// The latest runs read at once for the labels of a page of fingerprints.
 const LABEL_READS: usize = 16;
 
 /// The scope of a statistics request: the caller's tenant, or one namespace.
@@ -288,7 +288,7 @@ pub(super) async fn runs(
     }))
 }
 
-/// The labels of each failure group's latest runs, as `key:value`, most runs first, and the
+/// The labels of each fingerprint's latest runs, as `key:value`, most runs first, and the
 /// handle of its latest run: read from the runs' owners, as many at once as [`LABEL_READS`]. A
 /// run that cannot be read (erased since, its partition moving) adds no label, and the latest
 /// is then named by its id.
@@ -335,7 +335,7 @@ async fn latest_labels<'a>(
         .collect()
 }
 
-/// The runs of each error name of the failure groups.
+/// The runs of each error name of the fingerprints.
 fn failure_errors(counters: &Counters) -> BTreeMap<String, u64> {
     let mut errors = BTreeMap::new();
     for group in counters.failures.values() {
@@ -344,12 +344,12 @@ fn failure_errors(counters: &Counters) -> BTreeMap<String, u64> {
     errors
 }
 
-/// `GET /v1/runs/failures`: the failure groups of the window, most runs first.
+/// `GET /v1/runs/failures`: the fingerprints of the window, most runs first.
 pub(super) async fn failures(
     State(app): State<Arc<App>>,
     caller: Caller,
     Query(request): Query<FailureQuery>,
-) -> Result<Json<FailureGroupPage>, ApiError> {
+) -> Result<Json<FingerprintPage>, ApiError> {
     caller.require(Permission::RunsRead)?;
     let scope = scope(&caller, request.q.as_deref())?;
     let (window, hours) = window(request.since, request.until, request.bucket, app.now())?;
@@ -361,7 +361,7 @@ pub(super) async fn failures(
     let series = series(&app, &scope, window, hours).await?;
     let mut groups: Vec<_> = counters.failures.iter().collect();
     groups.sort_by(|(a, x), (b, y)| y.runs.cmp(&x.runs).then_with(|| a.cmp(b)));
-    let total_groups = groups.len() as u64;
+    let total_fingerprints = groups.len() as u64;
     let runs = groups.iter().map(|(_, group)| group.runs).sum();
     let page: Vec<_> = groups.into_iter().take(limit).collect();
     let labels = latest_labels(&app, &caller, page.iter().map(|(_, group)| &group.latest)).await;
@@ -371,7 +371,7 @@ pub(super) async fn failures(
         .filter_map(|((fingerprint, group), (labels, handle))| {
             let latest = group.latest.first()?;
             let ends = group.latest.iter().map(|run| run.ended_at);
-            Some(FailureGroup {
+            Some(Fingerprint {
                 fingerprint: fingerprint.clone(),
                 signature: group.signature.clone(),
                 error: group.error.clone(),
@@ -403,7 +403,7 @@ pub(super) async fn failures(
             })
         })
         .collect();
-    Ok(Json(FailureGroupPage {
+    Ok(Json(FingerprintPage {
         since: request.since.map(|_| timestamp(window.start())),
         until: timestamp(window.end()),
         bucket: hours.map(|hours| {
@@ -412,8 +412,8 @@ pub(super) async fn failures(
             ))
         }),
         runs,
-        total_groups,
-        groups,
+        total_fingerprints,
+        fingerprints: groups,
     }))
 }
 

@@ -2890,7 +2890,31 @@
         ],
         "type": "object"
       },
-      "FailureGroup": {
+      "FailureSample": {
+        "properties": {
+          "handle": {
+            "description": "Its handle, `<namespace>/<origin>/<suffix>`.",
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/RunStatus"
+          }
+        },
+        "required": [
+          "id",
+          "handle",
+          "status",
+          "message"
+        ],
+        "type": "object"
+      },
+      "Fingerprint": {
         "description": "The runs that ended the same way: the same error name, and the same message once numbers,\nids, times and double-quoted strings are set aside.",
         "properties": {
           "error": {
@@ -2967,7 +2991,7 @@
         ],
         "type": "object"
       },
-      "FailureGroupPage": {
+      "FingerprintPage": {
         "properties": {
           "bucket": {
             "type": [
@@ -2975,15 +2999,15 @@
               "null"
             ]
           },
-          "groups": {
+          "fingerprints": {
             "description": "The most runs first, then the latest ending first.",
             "items": {
-              "$ref": "#/components/schemas/FailureGroup"
+              "$ref": "#/components/schemas/Fingerprint"
             },
             "type": "array"
           },
           "runs": {
-            "description": "Runs in every group.",
+            "description": "Runs of every fingerprint.",
             "format": "int64",
             "minimum": 0,
             "type": "integer"
@@ -2995,8 +3019,8 @@
               "null"
             ]
           },
-          "totalGroups": {
-            "description": "Groups in all, beyond `limit` included.",
+          "totalFingerprints": {
+            "description": "Fingerprints in all, beyond `limit` included.",
             "format": "int64",
             "minimum": 0,
             "type": "integer"
@@ -3009,32 +3033,8 @@
         "required": [
           "until",
           "runs",
-          "totalGroups",
-          "groups"
-        ],
-        "type": "object"
-      },
-      "FailureSample": {
-        "properties": {
-          "handle": {
-            "description": "Its handle, `<namespace>/<origin>/<suffix>`.",
-            "type": "string"
-          },
-          "id": {
-            "type": "string"
-          },
-          "message": {
-            "type": "string"
-          },
-          "status": {
-            "$ref": "#/components/schemas/RunStatus"
-          }
-        },
-        "required": [
-          "id",
-          "handle",
-          "status",
-          "message"
+          "totalFingerprints",
+          "fingerprints"
         ],
         "type": "object"
       },
@@ -5771,7 +5771,7 @@
             "type": "integer"
           },
           "fingerprint": {
-            "description": "With `error`: the failure group (`GET /v1/runs/failures`, `fingerprint:` in a query).",
+            "description": "With `error`: the fingerprint (`GET /v1/runs/failures`, `fingerprint:` in a query).",
             "type": [
               "string",
               "null"
@@ -16638,11 +16638,11 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/FailureGroupPage"
+                  "$ref": "#/components/schemas/FingerprintPage"
                 }
               }
             },
-            "description": "The groups, the largest first."
+            "description": "The fingerprints, the largest first."
           },
           "400": {
             "content": {

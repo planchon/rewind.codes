@@ -449,7 +449,7 @@ pub struct RunSummary {
     /// With `error`: the innermost line of `workflow.ts` in the error's stack, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error_line: Option<u32>,
-    /// With `error`: the failure group (`GET /v1/runs/failures`, `fingerprint:` in a query).
+    /// With `error`: the fingerprint (`GET /v1/runs/failures`, `fingerprint:` in a query).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fingerprint: Option<String>,
     /// With `active`: what the run waits for.
@@ -666,26 +666,26 @@ pub struct FailureQuery {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct FailureGroupPage {
+pub struct FingerprintPage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub since: Option<Timestamp>,
     pub until: Timestamp,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(value_type = Option<String>)]
     pub bucket: Option<Duration>,
-    /// Runs in every group.
+    /// Runs of every fingerprint.
     pub runs: u64,
-    /// Groups in all, beyond `limit` included.
-    pub total_groups: u64,
+    /// Fingerprints in all, beyond `limit` included.
+    pub total_fingerprints: u64,
     /// The most runs first, then the latest ending first.
-    pub groups: Vec<FailureGroup>,
+    pub fingerprints: Vec<Fingerprint>,
 }
 
 /// The runs that ended the same way: the same error name, and the same message once numbers,
 /// ids, times and double-quoted strings are set aside.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct FailureGroup {
+pub struct Fingerprint {
     /// 16 hexadecimal digits: `fingerprint:` in a query.
     pub fingerprint: String,
     /// The error's name and message with placeholders (`<n>`, `<id>`, `<uuid>`, `<time>`,

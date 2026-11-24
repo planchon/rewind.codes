@@ -43,7 +43,7 @@ use crate::problem::Problem;
 use crate::reading::{ActionStatsFilter, ActionStatsPage, PayloadQuery};
 use crate::routes;
 use crate::runs::{
-    CancelRun, ExportAs, ExportQuery, FailureGroupPage, FailureQuery, ForkRun, GetRunQuery, Run,
+    CancelRun, ExportAs, ExportQuery, FailureQuery, FingerprintPage, ForkRun, GetRunQuery, Run,
     RunFilter, RunPage, RunStats, RunStatsQuery, SignalAccepted, StartRun, Transcript,
 };
 use crate::scripts::{
@@ -340,7 +340,7 @@ impl Client {
     }
 
     /// `GET /v1/runs/failures`.
-    pub async fn run_failures(&self, query: &FailureQuery) -> Result<FailureGroupPage, Error> {
+    pub async fn run_failures(&self, query: &FailureQuery) -> Result<FingerprintPage, Error> {
         let request = self.request_with(Method::GET, routes::RUN_FAILURES, &[], query)?;
         self.json(request).await
     }

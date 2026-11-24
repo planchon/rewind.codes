@@ -1626,8 +1626,8 @@ async fn runs_are_searched_counted_and_grouped_by_failure() {
         .run_failures(&FailureQuery::default())
         .await
         .unwrap();
-    assert_eq!(failures.total_groups, 1);
-    let group = &failures.groups[0];
+    assert_eq!(failures.total_fingerprints, 1);
+    let group = &failures.fingerprints[0];
     assert_eq!(group.fingerprint, fingerprint);
     assert_eq!(group.signature, "TypeError: bad <n>");
     assert_eq!(group.runs, 2);

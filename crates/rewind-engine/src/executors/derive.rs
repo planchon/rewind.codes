@@ -333,7 +333,7 @@ pub(crate) fn shapes_of(
 }
 
 /// The counters the new events (`from` on) move, per hour of their `recorded_at`: the run's
-/// start and end, its duration and failure group, its workflow and code, the calls of each
+/// start and end, its duration and fingerprint, its workflow and code, the calls of each
 /// action; and the CPU time of the activation in the hour of `now`.
 pub(crate) fn counters_of(
     head: &RunHead,

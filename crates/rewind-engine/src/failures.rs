@@ -1,10 +1,10 @@
-//! Failure groups (`archi/05-testing-and-observability.md`, "Read model"; `archi/08-decisions.md`,
+//! Fingerprints (`archi/05-testing-and-observability.md`, "Read model"; `archi/08-decisions.md`,
 //! "The fingerprint is…").
 //!
 //! A run that failed, was cancelled or was aborted gets a **signature**: its error's name (an
 //! abort's kind) and its message with the parts that vary replaced by placeholders. Its
 //! **fingerprint**, the first 16 hexadecimal digits of the SHA-256 of the signature, names its
-//! failure group: models write a new code for most conversations, so runs are grouped by
+//! fingerprint: models write a new code for most conversations, so runs are grouped by
 //! cause, across workflows. The activation that ends the run computes both, in the batch that
 //! commits its end, so every partition store keeps the same values.
 //!
