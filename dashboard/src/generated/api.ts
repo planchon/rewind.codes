@@ -4558,7 +4558,7 @@ export interface components {
             /**
              * @description How many times each call was delivered, by seq, for the calls delivered more than once: a
              *     call delivered again after a transient failure, or after its worker or dispatcher died.
-             *     Deliveries live in the calls' tasks, not in the history: the read model keeps them.
+             *     Deliveries are kept with the calls, not in the history: the read model keeps them.
              */
             deliveries?: components["schemas"]["Deliveries"][];
             /** Format: date-time */

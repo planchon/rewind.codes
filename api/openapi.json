@@ -5540,7 +5540,7 @@
             "type": "string"
           },
           "deliveries": {
-            "description": "How many times each call was delivered, by seq, for the calls delivered more than once: a\ncall delivered again after a transient failure, or after its worker or dispatcher died.\nDeliveries live in the calls' tasks, not in the history: the read model keeps them.",
+            "description": "How many times each call was delivered, by seq, for the calls delivered more than once: a\ncall delivered again after a transient failure, or after its worker or dispatcher died.\nDeliveries are kept with the calls, not in the history: the read model keeps them.",
             "items": {
               "$ref": "#/components/schemas/Deliveries"
             },
