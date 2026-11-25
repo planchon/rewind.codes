@@ -24,13 +24,13 @@ use rewind_core::{
 };
 use rewind_engine::ports::catalog::{NamespaceFilter, NamespacePage};
 use rewind_engine::ports::{
-    ActionDeclarations, CatalogError, CatalogMigration, CatalogStore, CodeTitle, CompiledCode,
-    ControlPlaneChange, DeleteNamespace, DisplayName, DropNamespace, Labels, Namespace,
-    NamespaceName, NamespaceWrite, NewVersion, NewWorkflow, Quotas, RunRef, ScopeFilter, Secret,
-    StoredActionSet, StoredCode, StoredVersion, StoredWorkflow, Subscription, SuiteChange,
-    SuiteMember, TEST_DELETION_TIMEOUT, TEST_GRACE, Tenant, TenantId, TestRecord, VersionRef,
-    WorkflowCreated, WorkflowFilter, WorkflowPatch, WorkflowScope, WorkflowSource, WorkflowWrite,
-    namespace_partition,
+    ActionDeclarations, CatalogDocuments, CatalogError, CatalogMigration, CatalogStore, CodeTitle,
+    CompiledCode, ControlPlaneChange, DeleteNamespace, DisplayName, DropNamespace, Labels,
+    Namespace, NamespaceName, NamespaceWrite, NewVersion, NewWorkflow, Quotas, RawDocument,
+    RawVersion, RunRef, ScopeFilter, Secret, StoredActionSet, StoredCode, StoredVersion,
+    StoredWorkflow, Subscription, SuiteChange, SuiteMember, TEST_DELETION_TIMEOUT, TEST_GRACE,
+    Tenant, TenantId, TestRecord, VersionRef, WorkflowCreated, WorkflowFilter, WorkflowPatch,
+    WorkflowScope, WorkflowSource, WorkflowWrite, namespace_partition,
 };
 use turso::{Connection, Row, Value};
 
@@ -748,7 +748,7 @@ impl CatalogStore for TursoCatalog {
         let connection = self.store.connection().await?;
         sql::execute(
             &connection,
-            "INSERT OR IGNORE INTO scripts (tenant, digest, source, transpiled, source_map) \
+            "INSERT OR IGNORE INTO code (tenant, digest, source, transpiled, source_map) \
              VALUES (?, ?, ?, ?, ?)",
             vec![
                 tenant(tenant_id),
@@ -770,7 +770,7 @@ impl CatalogStore for TursoCatalog {
         let connection = self.store.connection().await?;
         let row = sql::query_row(
             &connection,
-            "SELECT source, transpiled, source_map FROM scripts WHERE tenant = ? AND digest = ?",
+            "SELECT source, transpiled, source_map FROM code WHERE tenant = ? AND digest = ?",
             vec![tenant(tenant_id), digest(key)],
         )
         .await?;
@@ -799,7 +799,7 @@ impl CatalogStore for TursoCatalog {
         let connection = self.store.connection().await?;
         let inserted = sql::execute(
             &connection,
-            "INSERT OR IGNORE INTO toolsets (tenant, digest, spec, declarations, prompt) \
+            "INSERT OR IGNORE INTO action_sets (tenant, digest, spec, declarations, prompt) \
              VALUES (?, ?, ?, ?, ?)",
             vec![
                 tenant(tenant_id),
@@ -827,7 +827,7 @@ impl CatalogStore for TursoCatalog {
         let connection = self.store.connection().await?;
         let row = sql::query_row(
             &connection,
-            "SELECT spec, declarations, prompt FROM toolsets WHERE tenant = ? AND digest = ?",
+            "SELECT spec, declarations, prompt FROM action_sets WHERE tenant = ? AND digest = ?",
             vec![tenant(tenant_id), digest(key)],
         )
         .await?;
@@ -843,7 +843,7 @@ impl CatalogStore for TursoCatalog {
         let connection = self.store.connection().await?;
         let rows = sql::query(
             &connection,
-            "SELECT digest, spec, declarations, prompt FROM toolsets WHERE tenant = ? \
+            "SELECT digest, spec, declarations, prompt FROM action_sets WHERE tenant = ? \
              ORDER BY digest",
             vec![tenant(tenant_id)],
         )
@@ -1565,7 +1565,7 @@ impl CatalogStore for TursoCatalog {
         let connection = self.store.connection().await?;
         sql::execute(
             &connection,
-            "INSERT OR REPLACE INTO subscriptions (tenant, id, url, secret, events, labels) \
+            "INSERT OR REPLACE INTO subscriptions (tenant, id, url, secret, types, labels) \
              VALUES (?, ?, ?, ?, ?, ?)",
             vec![
                 tenant(&subscription.tenant),
@@ -1588,7 +1588,7 @@ impl CatalogStore for TursoCatalog {
         let connection = self.store.connection().await?;
         let rows = sql::query(
             &connection,
-            "SELECT id, url, secret, events, labels FROM subscriptions WHERE tenant = ? \
+            "SELECT id, url, secret, types, labels FROM subscriptions WHERE tenant = ? \
              ORDER BY id",
             vec![tenant(tenant_id)],
         )
@@ -1983,6 +1983,166 @@ impl CatalogMigration for TursoCatalog {
     async fn drop_code_titles(&self) -> Result<(), CatalogError> {
         let connection = self.store.connection().await?;
         sql::execute(&connection, "DELETE FROM code_titles", Vec::new()).await?;
+        Ok(())
+    }
+}
+
+impl CatalogDocuments for TursoCatalog {
+    async fn raw_action_sets(&self) -> Result<Vec<RawDocument>, CatalogError> {
+        let connection = self.store.connection().await?;
+        let rows = sql::query(
+            &connection,
+            "SELECT tenant, digest, spec FROM action_sets ORDER BY tenant, digest",
+            Vec::new(),
+        )
+        .await?;
+        Ok(rows
+            .iter()
+            .map(|row| {
+                Ok(RawDocument {
+                    tenant: row.tenant(0)?,
+                    digest: row.digest(1)?,
+                    json: row.text(2)?,
+                })
+            })
+            .collect::<Result<_, Error>>()?)
+    }
+
+    async fn replace_action_set(
+        &self,
+        tenant_id: &TenantId,
+        old: Digest,
+        action_set: &ActionSet,
+        declarations: &ActionDeclarations,
+    ) -> Result<(), CatalogError> {
+        let connection = self.store.connection().await?;
+        let connection = &connection;
+        transaction(connection, async {
+            sql::execute(
+                connection,
+                "INSERT OR REPLACE INTO action_sets (tenant, digest, spec, declarations, prompt) \
+                 VALUES (?, ?, ?, ?, ?)",
+                vec![
+                    tenant(tenant_id),
+                    digest(action_set.digest()),
+                    text(rewind_format::encode_action_set(action_set)),
+                    text(declarations.typescript.as_str()),
+                    text(declarations.prompt.as_str()),
+                ],
+            )
+            .await?;
+            if old != action_set.digest() {
+                sql::execute(
+                    connection,
+                    "DELETE FROM action_sets WHERE tenant = ? AND digest = ?",
+                    vec![tenant(tenant_id), digest(old)],
+                )
+                .await?;
+            }
+            Ok::<(), Error>(())
+        })
+        .await?;
+        Ok(())
+    }
+
+    async fn raw_versions(&self) -> Result<Vec<RawVersion>, CatalogError> {
+        let connection = self.store.connection().await?;
+        let rows = sql::query(
+            &connection,
+            "SELECT tenant, workflow, version, digest, document FROM workflow_versions \
+             ORDER BY tenant, workflow, version",
+            Vec::new(),
+        )
+        .await?;
+        Ok(rows
+            .iter()
+            .map(|row| {
+                Ok(RawVersion {
+                    tenant: row.tenant(0)?,
+                    workflow: workflow_id(&row.text(1)?)?,
+                    version: row.u64(2)?,
+                    digest: row.digest(3)?,
+                    json: row.text(4)?,
+                })
+            })
+            .collect::<Result<_, Error>>()?)
+    }
+
+    async fn replace_version(
+        &self,
+        tenant_id: &TenantId,
+        workflow: &WorkflowId,
+        version: u64,
+        document: &WorkflowVersion,
+    ) -> Result<(), CatalogError> {
+        let connection = self.store.connection().await?;
+        sql::execute(
+            &connection,
+            "UPDATE workflow_versions SET digest = ?, document = ? \
+             WHERE tenant = ? AND workflow = ? AND version = ?",
+            vec![
+                digest(document.digest()),
+                text(rewind_format::encode_workflow_version(document)),
+                tenant(tenant_id),
+                text(workflow.as_str()),
+                int(version),
+            ],
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn raw_tests(&self) -> Result<Vec<(TenantId, Digest)>, CatalogError> {
+        let connection = self.store.connection().await?;
+        let rows = sql::query(
+            &connection,
+            "SELECT tenant, digest FROM tests ORDER BY tenant, digest",
+            Vec::new(),
+        )
+        .await?;
+        Ok(rows
+            .iter()
+            .map(|row| Ok((row.tenant(0)?, row.digest(1)?)))
+            .collect::<Result<_, Error>>()?)
+    }
+
+    async fn replace_test(
+        &self,
+        tenant_id: &TenantId,
+        old: Digest,
+        new: Digest,
+        size: u64,
+    ) -> Result<(), CatalogError> {
+        if old == new {
+            return Ok(());
+        }
+        let connection = self.store.connection().await?;
+        let connection = &connection;
+        transaction(connection, async {
+            sql::execute(
+                connection,
+                "INSERT OR IGNORE INTO tests \
+                 (tenant, digest, namespace, size, reserved_at, deletion_started_at) \
+                 SELECT tenant, ?, namespace, ?, reserved_at, deletion_started_at FROM tests \
+                 WHERE tenant = ? AND digest = ?",
+                vec![digest(new), int(size), tenant(tenant_id), digest(old)],
+            )
+            .await?;
+            sql::execute(
+                connection,
+                "UPDATE workflow_tests SET digest = ? WHERE tenant = ? AND digest = ?",
+                vec![digest(new), tenant(tenant_id), digest(old)],
+            )
+            .await?;
+            sql::execute(
+                connection,
+                "DELETE FROM tests WHERE tenant = ? AND digest = ?",
+                vec![tenant(tenant_id), digest(old)],
+            )
+            .await?;
+            Ok::<(), Error>(())
+        })
+        .await?;
         Ok(())
     }
 }

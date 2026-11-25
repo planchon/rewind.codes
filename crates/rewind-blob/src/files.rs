@@ -208,6 +208,20 @@ pub(crate) fn write(staging: &Path, path: &Path, bytes: &[u8]) -> io::Result<()>
     sync_dir(dir)
 }
 
+/// Writes `bytes` at `path` in place of what it holds, through a staging file: what
+/// `rename-data` does to a sealed attempt, the one object written twice.
+pub(crate) fn replace(staging: &Path, path: &Path, bytes: &[u8]) -> io::Result<()> {
+    let dir = parent(path)?;
+    create_dirs(dir)?;
+    let mut staged = tempfile::Builder::new()
+        .prefix("blob-")
+        .tempfile_in(staging)?;
+    staged.write_all(bytes)?;
+    staged.as_file().sync_all()?;
+    staged.persist(path).map_err(|error| error.error)?;
+    sync_dir(dir)
+}
+
 /// Removes a blob; returns whether it existed.
 fn remove(path: &Path) -> io::Result<bool> {
     match fs::remove_file(path) {

@@ -50,7 +50,7 @@ impl TursoCluster {
             for id in 0..partitions.get() {
                 sql::execute(
                     connection,
-                    "INSERT OR IGNORE INTO partitions (id, epoch) VALUES (?, 0)",
+                    "INSERT OR IGNORE INTO partitions (id, generation) VALUES (?, 0)",
                     vec![int(u64::from(id))],
                 )
                 .await?;
@@ -77,7 +77,7 @@ impl TursoCluster {
 async fn read_map(connection: &Connection) -> Result<PartitionMap, Error> {
     let rows = sql::query(
         connection,
-        "SELECT id, node, epoch FROM partitions ORDER BY id",
+        "SELECT id, node, generation FROM partitions ORDER BY id",
         Vec::new(),
     )
     .await?;
@@ -160,7 +160,7 @@ impl Membership for TursoMembership {
                 owner.generation = owner.generation.next();
                 sql::execute(
                     connection,
-                    "UPDATE partitions SET node = ?, epoch = ? WHERE id = ?",
+                    "UPDATE partitions SET node = ?, generation = ? WHERE id = ?",
                     vec![
                         text(node.as_str()),
                         int(owner.generation.0),

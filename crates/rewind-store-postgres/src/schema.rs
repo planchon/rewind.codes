@@ -15,7 +15,7 @@ use sqlx::migrate::{MigrateError, Migration, MigrationSource, MigrationType, Mig
 use crate::Error;
 
 /// The version of the schema this build writes: its latest migration.
-pub const SCHEMA_VERSION: i64 = 16;
+pub const SCHEMA_VERSION: i64 = 17;
 
 /// Migration `n` brings the schema to version `n`. A migration, once released, never changes: a
 /// change of the schema is a new one.
@@ -84,6 +84,7 @@ const MIGRATIONS: [(i64, &str, &str); SCHEMA_VERSION as usize] = [
         "workflow model",
         include_str!("../migrations/0016_workflow_model.sql"),
     ),
+    (17, "rename", include_str!("../migrations/0017_rename.sql")),
 ];
 
 /// The migrations embedded in this build.

@@ -19,6 +19,7 @@ mod commit;
 mod config;
 mod error;
 pub mod keys;
+pub mod rename;
 mod store;
 
 pub use config::{Bucket, Options, S3Bucket, Timers};

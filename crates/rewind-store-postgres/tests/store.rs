@@ -926,7 +926,15 @@ async fn saved_workflows_of_version_15_become_workflows(postgres: &Postgres) {
         "INSERT INTO roles (tenant, name, description, permissions, created_at, updated_at) \
          VALUES ('acme', 'writer', '', '{scripts:write,runs:read}', 1, 1), \
                 ('acme', 'saver', '', '{toolsets:write}', 1, 1), \
-                ('acme', 'reader', '', '{runs:read}', 1, 1)"
+                ('acme', 'reader', '', '{runs:read}', 1, 1), \
+                ('acme', 'worker', '', '{tasks:work,tasks:approve,toolsets:read}', 1, 1)"
+            .to_owned(),
+        "INSERT INTO grants (tenant, principal, role, allowed_labels, granted_by, granted_at) \
+         VALUES ('acme', 'user:user_9', 'reader', '{}', 'user:user_1', 1)"
+            .to_owned(),
+        "INSERT INTO subscriptions (tenant, id, url, secret, events, labels) \
+         VALUES ('acme', 'sub_1', 'https://example.com', 's', \
+                 '[\"credentials.expired\",\"run.completed\",\"run.suspended\"]', '{}')"
             .to_owned(),
         format!(
             "INSERT INTO tokens (hash, tenant, namespace, permissions, labels, expires_at, \
@@ -1098,8 +1106,36 @@ async fn saved_workflows_of_version_15_become_workflows(postgres: &Postgres) {
     );
     assert_eq!(
         role("saver").await,
-        permissions(&["toolsets:write", "workflows:write"])
+        permissions(&["actions:write", "workflows:write"]),
+        "and migration 17 renames toolsets:write"
     );
+    assert_eq!(
+        role("worker").await,
+        permissions(&["actions:read", "calls:approve", "calls:work"]),
+        "migration 17 renames the permissions of calls and actions"
+    );
+    let pool = sqlx::PgPool::connect(&postgres.url(&database))
+        .await
+        .expect("the database");
+    let (principal, granted_by): (String, String) =
+        sqlx::query_as("SELECT principal, granted_by FROM grants WHERE tenant = 'acme'")
+            .fetch_one(&pool)
+            .await
+            .expect("the grant");
+    assert_eq!(
+        (principal.as_str(), granted_by.as_str()),
+        ("member:user_9", "member:user_1"),
+        "a person is a member"
+    );
+    let (types,): (String,) = sqlx::query_as("SELECT types FROM subscriptions WHERE id = 'sub_1'")
+        .fetch_one(&pool)
+        .await
+        .expect("the subscription");
+    assert_eq!(
+        types, r#"["secret.expired","run.completed","run.waiting"]"#,
+        "a subscription lists the new webhook types"
+    );
+    pool.close().await;
     assert_eq!(role("reader").await, permissions(&["runs:read"]));
     assert_eq!(
         store

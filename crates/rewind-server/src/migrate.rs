@@ -277,13 +277,13 @@ fn move_tree(from: &Path, to: &Path) -> std::io::Result<()> {
 }
 
 /// The set-aside runs of the control plane's backend.
-enum Legacy {
+pub(crate) enum Legacy {
     Postgres(PostgresLegacy),
     Turso(TursoLegacy),
 }
 
 impl Legacy {
-    fn of(store: &ControlPlane) -> Result<Self, StartupError> {
+    pub(crate) fn of(store: &ControlPlane) -> Result<Self, StartupError> {
         match store {
             ControlPlane::Postgres(store) => Ok(Self::Postgres(store.legacy())),
             ControlPlane::Turso(store) => Ok(Self::Turso(store.legacy())),

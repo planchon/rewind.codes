@@ -153,7 +153,7 @@ impl PostgresCluster {
     }
 
     /// The cluster of a deployment of `partitions` partitions, on the store's database: the rows
-    /// of the partitions it lacks are created, unowned at generation 0 (the column `epoch`). A database with more
+    /// of the partitions it lacks are created, unowned at generation 0. A database with more
     /// partitions is refused: a partition, once created, holds runs. The liveness locks are
     /// taken in `lock_database` (`--cluster-database`), a database of the same server reached
     /// with the same credentials, where nothing is stored (`archi/06-storage-and-scale.md`,
@@ -286,7 +286,7 @@ async fn members(
 
 async fn read_map(conn: &mut PgConnection, lock: bool) -> Result<PartitionMap, Error> {
     let rows = sqlx::query(&format!(
-        "SELECT id::bigint, node, epoch FROM partitions ORDER BY id{}",
+        "SELECT id::bigint, node, generation FROM partitions ORDER BY id{}",
         if lock { " FOR UPDATE" } else { "" }
     ))
     .fetch_all(&mut *conn)
@@ -604,7 +604,8 @@ impl Membership for PostgresMembership {
                 continue;
             }
             let generation: i64 = sqlx::query_scalar(
-                "UPDATE partitions SET node = $2, epoch = epoch + 1 WHERE id = $1 RETURNING epoch",
+                "UPDATE partitions SET node = $2, generation = generation + 1 WHERE id = $1 \
+                 RETURNING generation",
             )
             .bind(i32::from(partition.get()))
             .bind(node.as_str())

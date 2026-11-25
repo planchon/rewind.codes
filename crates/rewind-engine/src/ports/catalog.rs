@@ -11,7 +11,9 @@ use std::future::Future;
 use std::num::NonZeroU16;
 use std::time::Duration;
 
-use rewind_core::{ActionSet, Code, Digest, PartitionId, RunId, Timestamp, WorkflowId};
+use rewind_core::{
+    ActionSet, Code, Digest, PartitionId, RunId, Timestamp, WorkflowId, WorkflowVersion,
+};
 
 use crate::ports::checker::ActionDeclarations;
 use crate::ports::executor::CompiledCode;
@@ -503,4 +505,70 @@ pub trait CatalogMigration: CatalogStore {
 
     /// Forgets the titles people gave codes, once each became a name or was listed.
     fn drop_code_titles(&self) -> impl Future<Output = Result<(), CatalogError>> + Send;
+}
+
+/// A content-addressed document as the catalog stores it, in the names it was written with.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RawDocument {
+    pub tenant: TenantId,
+    pub digest: Digest,
+    pub json: String,
+}
+
+/// A workflow version as the catalog stores it, in the names its document was written with.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RawVersion {
+    pub tenant: TenantId,
+    pub workflow: WorkflowId,
+    pub version: u64,
+    pub digest: Digest,
+    pub json: String,
+}
+
+/// What `rewind server rename-data` needs of the catalog to give its content-addressed documents
+/// their new names and digests (`archi/06-storage-and-scale.md`, "Rewriting the stored names":
+/// digests): read them as they are stored, whatever names they were written with, and put each
+/// one back under the digest of its new form, every reference to it in the catalog with it.
+pub trait CatalogDocuments: Send + Sync {
+    /// Every pinned action set, every tenant's.
+    fn raw_action_sets(
+        &self,
+    ) -> impl Future<Output = Result<Vec<RawDocument>, CatalogError>> + Send;
+
+    /// Puts the action set stored under `old` back under its new digest, with its declarations,
+    /// and removes `old` when it differs.
+    fn replace_action_set(
+        &self,
+        tenant: &TenantId,
+        old: Digest,
+        action_set: &ActionSet,
+        declarations: &ActionDeclarations,
+    ) -> impl Future<Output = Result<(), CatalogError>> + Send;
+
+    /// Every workflow version, every tenant's.
+    fn raw_versions(&self) -> impl Future<Output = Result<Vec<RawVersion>, CatalogError>> + Send;
+
+    /// Writes a version's new document and digest; its code does not change.
+    fn replace_version(
+        &self,
+        tenant: &TenantId,
+        workflow: &WorkflowId,
+        version: u64,
+        document: &WorkflowVersion,
+    ) -> impl Future<Output = Result<(), CatalogError>> + Send;
+
+    /// The tests the catalog keeps, by tenant and digest: their blobs hold their documents.
+    fn raw_tests(
+        &self,
+    ) -> impl Future<Output = Result<Vec<(TenantId, Digest)>, CatalogError>> + Send;
+
+    /// Moves the row of the test `old`, and the suites' references to it, to `new`, of `size`
+    /// bytes.
+    fn replace_test(
+        &self,
+        tenant: &TenantId,
+        old: Digest,
+        new: Digest,
+        size: u64,
+    ) -> impl Future<Output = Result<(), CatalogError>> + Send;
 }

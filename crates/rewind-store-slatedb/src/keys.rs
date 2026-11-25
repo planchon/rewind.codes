@@ -75,6 +75,35 @@ pub(crate) const SHAPE: u8 = b'X';
 pub(crate) const TENANT_STATE: u8 = b'A';
 pub(crate) const INDEX: u8 = b'Q';
 
+/// Every family of keys.
+pub(crate) const KEY_FAMILIES: [u8; 25] = [
+    HEAD,
+    SUMMARY,
+    HISTORY,
+    INBOX,
+    SIGNAL_KEY,
+    TASK,
+    PAYLOAD,
+    WATCHER,
+    RUN_SIGNAL_URL,
+    RUN_OUTBOX,
+    RUN_START_KEY,
+    LIVE,
+    UNSEALED,
+    TIMER,
+    DUE,
+    SIGNAL_URL,
+    START_KEY,
+    OUTBOX,
+    GAUGES,
+    COUNTED,
+    HOUR,
+    TENANT_HOUR,
+    SHAPE,
+    TENANT_STATE,
+    INDEX,
+];
+
 /// The families of keys a run owns, under `family t r`: what an erasure deletes.
 pub(crate) const RUN_FAMILIES: [u8; 10] = [
     SUMMARY,

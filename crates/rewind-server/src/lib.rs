@@ -44,6 +44,7 @@ pub mod link;
 mod mcp;
 mod migrate;
 mod oauth;
+mod rename;
 mod serve;
 mod streams;
 mod tokens;
@@ -59,6 +60,7 @@ use clap::Parser;
 pub use config::{ConfigError, OtlpArg, ServerArgs};
 pub use connections::{McpCaller, McpOrganization, McpPrincipal};
 pub use migrate::{MigrateArgs, migrate_runs};
+pub use rename::{RenameArgs, RenameReport, WorkflowsSummary, rename_data};
 pub use serve::{
     Rewrapped, Running, StartupError, VERSION, rewrap_data_keys, start, start_in_memory,
     start_with_identity,
@@ -90,10 +92,15 @@ pub fn exit_code(error: &StartupError) -> u8 {
 /// SIGTERM), `POST /v1/server/stop` or the idle timeout stops the server. With
 /// `--rewrap-data-keys`, rewraps the data keys, prints how many it changed, and exits;
 /// `rewind server migrate-runs …` moves the runs of the old tables onto the run plane, prints
-/// what it moved, and exits ([`migrate_runs`]).
+/// what it moved, and exits ([`migrate_runs`]); `rewind server rename-data …` rewrites what the
+/// deployment stored under the names it had before the rename release, prints what it changed,
+/// and exits ([`rename_data`]).
 pub fn main(args: Vec<OsString>) -> ExitCode {
     if args.first().is_some_and(|first| first == "migrate-runs") {
         return migrate::main(args.into_iter().skip(1).collect());
+    }
+    if args.first().is_some_and(|first| first == "rename-data") {
+        return rename::main(args.into_iter().skip(1).collect());
     }
     let args = match ServerArgs::try_parse_from(
         std::iter::once(OsString::from("rewind server")).chain(args),

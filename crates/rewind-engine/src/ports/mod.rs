@@ -72,8 +72,8 @@ pub use access::{
 pub use archive::{ArchiveError, RunArchive, SealedAttempt};
 pub use blob::{BlobError, BlobOwner, BlobStore};
 pub use catalog::{
-    CatalogError, CatalogMigration, CatalogStore, CodeTitle, NamespaceFilter, NamespacePage,
-    TEST_DELETION_TIMEOUT,
+    CatalogDocuments, CatalogError, CatalogMigration, CatalogStore, CodeTitle, NamespaceFilter,
+    NamespacePage, RawDocument, RawVersion, TEST_DELETION_TIMEOUT,
 };
 pub use checker::{
     ActionDeclarations, CheckerError, Diagnostic, DiagnosticSource, Severity, TypeChecker,

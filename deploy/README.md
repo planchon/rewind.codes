@@ -281,6 +281,71 @@ docker compose run --rm node-1 server migrate-runs             # with node-1's o
 docker compose up -d --remove-orphans
 ```
 
+## Rename release
+
+The rename release gives Rewind the vocabulary of `archi/` (a workflow and its code, an action
+set and its actions, a history and its events, a harness action, a call's delivery, the statuses
+`queued`, `running` and `waiting`…), in the API, the SDK and the stored data alike
+(`archi/09-roadmap.md`, "The rename release"). What a deployment stored under the old names is
+rewritten once, offline, by `rewind server rename-data`, with the new build's image, between the
+old nodes stopping and the new ones starting (`archi/06-storage-and-scale.md`, "Rewriting the
+stored names"):
+
+- opening the control plane migrates its schema (Postgres 17, Turso 15): the tables `code` and
+  `action_sets` (were `scripts` and `toolsets`), a partition's `generation`, a subscription's
+  `types` with the webhook types `run.waiting`, `secret.expired` and `action.schema_changed`,
+  the principals `member:` (were `user:`), the permissions `actions:*` and `calls:*`;
+- the command refuses to start while a node serves the deployment, or while runs wait in the
+  tables `migrate-runs` moves; it then rewrites the catalog's tests, workflow versions and pinned
+  action sets, each under the digest of its new form (an old digest stops resolving; names and
+  version numbers keep working), gives every run a workflow and moves each saved workflow by its
+  use, rewrites every record of every partition (a run that was `active` is `running` or
+  `waiting` from the waits its head holds) and every sealed attempt of the archive, and prints
+  what it changed, and the titles it could not turn into names;
+- run again, it finds everything in the new names and says `nothing to rename`; with
+  `--dry-run` it counts what it would change, by kind, and writes nothing.
+
+Code is never rewritten: the runs started before the release replay under the determinism epoch
+1, whose glue still names `ToolError`, `WorkflowError` and `webhook`; new runs start under
+epoch 2. Both epochs are in the new build: no `node-previous` is needed.
+
+**Rehearse it on a copy of production first.** Copy the bucket's prefix and restore the
+database into a scratch deployment, run the command against them, and start a node on the copy:
+
+```sh
+# The bucket: the partitions, the archive and the blobs, into a prefix of their own.
+aws s3 sync s3://$REWIND_S3_BUCKET/ s3://$REWIND_S3_BUCKET-rehearsal/
+# The control plane: a dump of production, restored into a scratch database.
+pg_dump --format=custom "$PRODUCTION_DATABASE_URL" > rewind.dump
+createdb rewind_rehearsal && pg_restore --no-owner --dbname=rewind_rehearsal rewind.dump
+# With the new image, against the copies: count, rename, then run again to see nothing left.
+REHEARSAL="--store postgres://…/rewind_rehearsal --bucket s3://$REWIND_S3_BUCKET-rehearsal"
+docker run --rm --env-file .env rewind:new server rename-data --dry-run $REHEARSAL
+docker run --rm --env-file .env rewind:new server rename-data $REHEARSAL
+docker run --rm --env-file .env rewind:new server rename-data $REHEARSAL   # nothing to rename
+```
+
+Then start one node of the new build on the copy (its own `--node-id`, `--cluster-database`
+and port), and check the runs: `GET /v1/runs?q=status:active` lists the waiting ones with their
+`waitingFor`, a run waiting on a signal ends when it is signalled, and `GET /v1/workflows` lists
+the saved workflows under their names and versions.
+
+**At the release:**
+
+```sh
+docker compose down                                            # every node stops; the data stays
+docker compose run --rm node-1 server rename-data --dry-run   # with node-1's options
+docker compose run --rm node-1 server rename-data
+REWIND_IMAGE=rewind:new docker compose up -d --remove-orphans
+```
+
+On Railway, stop the `node` service (its volume makes a deploy stop the old node first), rename
+the variables the release renamed (`REWIND_ADMIN_ORGANIZATION`, `REWIND_ORGANIZATION_POOLS`,
+`REWIND_QUOTA_WORKFLOWS`, `REWIND_QUOTA_MAX_CODE_LINES`, `REWIND_ALLOW_INTERNAL_ADDRESSES`), run
+`rewind server rename-data` once from a one-off service on the new image with the node's
+variables, then deploy the node on the new image. An embedded server's `.rewind/` is renamed with
+`rewind server rename-data --embedded` while no `rewind` command serves it.
+
 ## Retention
 
 Active runs are never touched. Each tenant's retention applies to its ended runs

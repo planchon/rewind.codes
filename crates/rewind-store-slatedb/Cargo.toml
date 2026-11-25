@@ -13,6 +13,8 @@ rewind-engine.workspace = true
 rewind-format.workspace = true
 # The local-file backend of the embedded partition, beside the workspace's S3 one.
 object_store = { workspace = true, features = ["fs"] }
+# The records `rename-data` reads under the names they were written with.
+serde_json.workspace = true
 slatedb.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["sync", "rt"] }
@@ -23,7 +25,6 @@ rewind-engine = { workspace = true, features = ["conformance"] }
 # The benchmark's object store that counts its requests: object_store's trait is an async_trait.
 async-trait = "0.1"
 futures-util = { workspace = true, features = ["alloc"] }
-serde_json.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "sync", "time"] }
 

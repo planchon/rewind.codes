@@ -48,14 +48,15 @@ use crate::Error;
 use crate::sql::{self, Columns, opt_text, text};
 
 /// The version of the schema this build writes.
-pub const SCHEMA_VERSION: u32 = 14;
+pub const SCHEMA_VERSION: u32 = 15;
 
 /// The `meta` key of the schema version.
 const VERSION_KEY: &str = "schema_version";
 
 /// Migration `n` brings the schema from version `n` to `n + 1`.
-const MIGRATIONS: [&str; SCHEMA_VERSION as usize] =
-    [V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13, V14];
+const MIGRATIONS: [&str; SCHEMA_VERSION as usize] = [
+    V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13, V14, V15,
+];
 
 const V1: &str = r#"
 CREATE TABLE tenants (
@@ -1129,6 +1130,66 @@ WHERE EXISTS (SELECT 1 FROM json_each(token_keys.permissions)
               WHERE value IN ('scripts:write', 'toolsets:write', 'actions:write'));
 "#;
 
+/// The catalog in the words of the rename release (`archi/06-storage-and-scale.md`, "Rewriting the
+/// stored names"), as Postgres's migration 17: the tables of the code and the pinned action sets,
+/// a partition's `generation`, a subscription's `types` and the new names of its webhook types, the
+/// principals `member:` that were `user:`, the permissions renamed. The documents whose digest is
+/// their identity are `rename-data`'s.
+const V15: &str = r#"
+ALTER TABLE scripts RENAME TO code;
+ALTER TABLE toolsets RENAME TO action_sets;
+ALTER TABLE partitions RENAME COLUMN epoch TO generation;
+ALTER TABLE subscriptions RENAME COLUMN events TO types;
+UPDATE subscriptions SET types = replace(replace(replace(types,
+    '"run.suspended"', '"run.waiting"'),
+    '"credentials.expired"', '"secret.expired"'),
+    '"tool.schema_changed"', '"action.schema_changed"');
+UPDATE grants SET principal = 'member:' || substr(principal, 6) WHERE principal LIKE 'user:%';
+UPDATE grants SET granted_by = 'member:' || substr(granted_by, 6) WHERE granted_by LIKE 'user:%';
+UPDATE api_keys SET created_by = 'member:' || substr(created_by, 6) WHERE created_by LIKE 'user:%';
+UPDATE tokens SET created_by = 'member:' || substr(created_by, 6) WHERE created_by LIKE 'user:%';
+UPDATE token_keys SET created_by = 'member:' || substr(created_by, 6) WHERE created_by LIKE 'user:%';
+UPDATE secrets SET created_by = 'member:' || substr(created_by, 6) WHERE created_by LIKE 'user:%';
+UPDATE secrets SET updated_by = 'member:' || substr(updated_by, 6) WHERE updated_by LIKE 'user:%';
+UPDATE workflows SET created_by = 'member:' || substr(created_by, 6) WHERE created_by LIKE 'user:%';
+UPDATE roles SET permissions = (
+    SELECT json_group_array(value) FROM (
+        SELECT DISTINCT CASE value
+            WHEN 'toolsets:read' THEN 'actions:read'
+            WHEN 'toolsets:write' THEN 'actions:write'
+            WHEN 'tasks:work' THEN 'calls:work'
+            WHEN 'tasks:approve' THEN 'calls:approve'
+            ELSE value END AS value
+        FROM json_each(roles.permissions)
+        ORDER BY value))
+WHERE EXISTS (SELECT 1 FROM json_each(roles.permissions)
+              WHERE value IN ('toolsets:read', 'toolsets:write', 'tasks:work', 'tasks:approve'));
+UPDATE tokens SET permissions = (
+    SELECT json_group_array(value) FROM (
+        SELECT DISTINCT CASE value
+            WHEN 'toolsets:read' THEN 'actions:read'
+            WHEN 'toolsets:write' THEN 'actions:write'
+            WHEN 'tasks:work' THEN 'calls:work'
+            WHEN 'tasks:approve' THEN 'calls:approve'
+            ELSE value END AS value
+        FROM json_each(tokens.permissions)
+        ORDER BY value))
+WHERE EXISTS (SELECT 1 FROM json_each(tokens.permissions)
+              WHERE value IN ('toolsets:read', 'toolsets:write', 'tasks:work', 'tasks:approve'));
+UPDATE token_keys SET permissions = (
+    SELECT json_group_array(value) FROM (
+        SELECT DISTINCT CASE value
+            WHEN 'toolsets:read' THEN 'actions:read'
+            WHEN 'toolsets:write' THEN 'actions:write'
+            WHEN 'tasks:work' THEN 'calls:work'
+            WHEN 'tasks:approve' THEN 'calls:approve'
+            ELSE value END AS value
+        FROM json_each(token_keys.permissions)
+        ORDER BY value))
+WHERE EXISTS (SELECT 1 FROM json_each(token_keys.permissions)
+              WHERE value IN ('toolsets:read', 'toolsets:write', 'tasks:work', 'tasks:approve'));
+"#;
+
 /// Brings the database's schema to [`SCHEMA_VERSION`], or refuses a newer one.
 pub(crate) async fn migrate(connection: &Connection) -> Result<(), Error> {
     migrate_to(connection, SCHEMA_VERSION).await
@@ -2087,7 +2148,8 @@ mod tests {
         );
         assert_eq!(
             role("builder").await,
-            permissions(&["runs:read", "toolsets:write", "workflows:write"])
+            permissions(&["actions:write", "runs:read", "workflows:write"]),
+            "and version 15 renames toolsets:write"
         );
         assert_eq!(role("reader").await, permissions(&["runs:read"]));
         assert_eq!(
@@ -2122,7 +2184,7 @@ mod tests {
             .expect("text")
         };
         assert_eq!(
-            stored, r#"["runs:read","toolsets:write","workflows:write"]"#,
+            stored, r#"["actions:write","runs:read","workflows:write"]"#,
             "sorted, as the store writes them"
         );
         let left: Vec<String> = {

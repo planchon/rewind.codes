@@ -1361,6 +1361,52 @@ impl CatalogMigration for Catalog {
     }
 }
 
+impl rewind_engine::ports::CatalogDocuments for Catalog {
+    async fn raw_action_sets(
+        &self,
+    ) -> Result<Vec<rewind_engine::ports::RawDocument>, CatalogError> {
+        catalog!(self, catalog => catalog.raw_action_sets().await)
+    }
+
+    async fn replace_action_set(
+        &self,
+        tenant: &TenantId,
+        old: Digest,
+        action_set: &ActionSet,
+        declarations: &ActionDeclarations,
+    ) -> Result<(), CatalogError> {
+        catalog!(self, catalog => catalog.replace_action_set(tenant, old, action_set, declarations).await)
+    }
+
+    async fn raw_versions(&self) -> Result<Vec<rewind_engine::ports::RawVersion>, CatalogError> {
+        catalog!(self, catalog => catalog.raw_versions().await)
+    }
+
+    async fn replace_version(
+        &self,
+        tenant: &TenantId,
+        workflow: &WorkflowId,
+        version: u64,
+        document: &rewind_core::WorkflowVersion,
+    ) -> Result<(), CatalogError> {
+        catalog!(self, catalog => catalog.replace_version(tenant, workflow, version, document).await)
+    }
+
+    async fn raw_tests(&self) -> Result<Vec<(TenantId, Digest)>, CatalogError> {
+        catalog!(self, catalog => catalog.raw_tests().await)
+    }
+
+    async fn replace_test(
+        &self,
+        tenant: &TenantId,
+        old: Digest,
+        new: Digest,
+        size: u64,
+    ) -> Result<(), CatalogError> {
+        catalog!(self, catalog => catalog.replace_test(tenant, old, new, size).await)
+    }
+}
+
 /// The control plane is its catalog's migration too: what `rewind server rename-data` reads and
 /// writes beyond the catalog ([`rewind_engine::rename::workflows`]).
 impl CatalogMigration for ControlPlane {

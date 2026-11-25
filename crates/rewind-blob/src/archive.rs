@@ -84,6 +84,39 @@ impl FileArchive {
         self.run_directory(run).join(format!("{attempt}.json"))
     }
 
+    /// A sealed attempt's bytes as stored, whatever names they were written with: what
+    /// `rewind server rename-data` reads.
+    pub async fn raw(
+        &self,
+        run: &RunRef,
+        attempt: Attempt,
+    ) -> Result<Option<Vec<u8>>, ArchiveError> {
+        let path = self.path(run, attempt);
+        blocking(move || match fs::read(&path) {
+            Ok(bytes) => Ok(Some(bytes)),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(file_failed("read", &path, &error)),
+        })
+        .await
+    }
+
+    /// Writes a sealed attempt again in place, renamed by `rewind server rename-data`: the one
+    /// time an object of the archive changes.
+    pub async fn replace(
+        &self,
+        run: &RunRef,
+        attempt: Attempt,
+        bytes: Vec<u8>,
+    ) -> Result<(), ArchiveError> {
+        let path = self.path(run, attempt);
+        let staging = self.blobs.staging();
+        blocking(move || {
+            files::replace(&staging, &path, &bytes)
+                .map_err(|error| file_failed("write", &path, &error))
+        })
+        .await
+    }
+
     fn run_directory(&self, run: &RunRef) -> PathBuf {
         self.blobs
             .root()
@@ -169,6 +202,43 @@ impl S3Archive {
     /// The key of a sealed attempt: `runs/{tenant}/{run}/{attempt}.json`.
     pub fn key(run: &RunRef, attempt: Attempt) -> String {
         format!("{}/{attempt}.json", Self::run_prefix(run))
+    }
+
+    /// A sealed attempt's bytes as stored, whatever names they were written with: what
+    /// `rewind server rename-data` reads.
+    pub async fn raw(
+        &self,
+        run: &RunRef,
+        attempt: Attempt,
+    ) -> Result<Option<Vec<u8>>, ArchiveError> {
+        let location = ObjectPath::from(Self::key(run, attempt));
+        let object = match self.blobs.store().get(&location).await {
+            Ok(object) => object,
+            Err(object_store::Error::NotFound { .. }) => return Ok(None),
+            Err(error) => return Err(s3_failed("read", &location, &error)),
+        };
+        let bytes = object
+            .bytes()
+            .await
+            .map_err(|error| s3_failed("read", &location, &error))?;
+        Ok(Some(bytes.to_vec()))
+    }
+
+    /// Writes a sealed attempt again in place, renamed by `rewind server rename-data`: the one
+    /// time an object of the archive changes.
+    pub async fn replace(
+        &self,
+        run: &RunRef,
+        attempt: Attempt,
+        bytes: Vec<u8>,
+    ) -> Result<(), ArchiveError> {
+        let location = ObjectPath::from(Self::key(run, attempt));
+        self.blobs
+            .store()
+            .put_opts(&location, bytes.into(), PutMode::Overwrite.into())
+            .await
+            .map(|_| ())
+            .map_err(|error| s3_failed("write", &location, &error))
     }
 
     /// The prefix of a run's sealed attempts: `runs/{tenant}/{run}`.

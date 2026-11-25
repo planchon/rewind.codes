@@ -1232,3 +1232,49 @@ impl CatalogMigration for MemoryCatalog {
         Ok(())
     }
 }
+
+/// The memory catalog holds nothing written before the rename release: it has no document to
+/// rename.
+impl crate::ports::CatalogDocuments for MemoryCatalog {
+    async fn raw_action_sets(&self) -> Result<Vec<crate::ports::RawDocument>, CatalogError> {
+        Ok(Vec::new())
+    }
+
+    async fn replace_action_set(
+        &self,
+        tenant: &TenantId,
+        _old: Digest,
+        action_set: &rewind_core::ActionSet,
+        declarations: &crate::ports::ActionDeclarations,
+    ) -> Result<(), CatalogError> {
+        self.put_action_set(tenant, action_set, declarations).await
+    }
+
+    async fn raw_versions(&self) -> Result<Vec<crate::ports::RawVersion>, CatalogError> {
+        Ok(Vec::new())
+    }
+
+    async fn replace_version(
+        &self,
+        _tenant: &TenantId,
+        _workflow: &WorkflowId,
+        _version: u64,
+        _document: &rewind_core::WorkflowVersion,
+    ) -> Result<(), CatalogError> {
+        Ok(())
+    }
+
+    async fn raw_tests(&self) -> Result<Vec<(TenantId, Digest)>, CatalogError> {
+        Ok(Vec::new())
+    }
+
+    async fn replace_test(
+        &self,
+        _tenant: &TenantId,
+        _old: Digest,
+        _new: Digest,
+        _size: u64,
+    ) -> Result<(), CatalogError> {
+        Ok(())
+    }
+}

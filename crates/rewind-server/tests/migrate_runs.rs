@@ -27,7 +27,7 @@ use rewind_engine::adapters::SystemEntropy;
 use rewind_engine::ports::legacy::{LegacyBlobs, LegacyHistory, LegacyRuns};
 use rewind_engine::ports::{CatalogMigration, WorkflowScope};
 use rewind_engine::rename::CodeUse;
-use rewind_server::{MigrateArgs, ServerArgs, migrate_runs};
+use rewind_server::{MigrateArgs, RenameArgs, ServerArgs, migrate_runs, rename_data};
 use serde_json::{Value, json};
 use support::{ADMIN_KEY, Postgres, TaskWorker, copy_tree, eventually};
 
@@ -117,10 +117,10 @@ async fn histories<L: LegacyRuns, B: LegacyBlobs>(
     (histories, uses)
 }
 
-/// `rename-data`'s step for the workflows, on the catalog the runs moved beside: every run gets
-/// a workflow, the saved `triage` that one namespace ran becomes that namespace's, and the step
-/// run again changes nothing.
-async fn rename_workflows<C: CatalogMigration>(catalog: &C, uses: &[CodeUse]) {
+/// `rename-data`'s step for the workflows, on the catalog the runs moved beside: every run has
+/// a workflow, the saved `triage` that one namespace ran is that namespace's, and the step run
+/// again changes nothing. `first`: the step has not run yet, and these are its first moves.
+async fn rename_workflows<C: CatalogMigration>(catalog: &C, uses: &[CodeUse], first: bool) {
     let now = rewind_core::Timestamp(1_800_000_000_000);
     let renamed = rewind_engine::rename::workflows(catalog, &SystemEntropy, uses, now)
         .await
@@ -139,15 +139,17 @@ async fn rename_workflows<C: CatalogMigration>(catalog: &C, uses: &[CodeUse]) {
         .map(|used| used.namespace.clone())
         .collect();
     let namespace = ran.into_iter().next().unwrap();
-    assert_eq!(
-        renamed.scoped,
-        [(tenant.clone(), triage.clone(), namespace.clone())],
-        "the saved workflow one namespace ran is that namespace's"
-    );
+    if first {
+        assert_eq!(
+            renamed.scoped,
+            [(tenant.clone(), triage.clone(), namespace.clone())],
+            "the saved workflow one namespace ran is that namespace's"
+        );
+        // Every other code that ran got a workflow of the namespace of its first run.
+        assert!(!renamed.created.is_empty());
+    }
     let moved = catalog.workflow(tenant, &triage).await.unwrap().unwrap();
     assert_eq!(moved.scope, WorkflowScope::Namespace(namespace));
-    // Every other code that ran got a workflow of the namespace of its first run.
-    assert!(!renamed.created.is_empty());
     for (_, created) in &renamed.created {
         assert!(
             matches!(created.scope, WorkflowScope::Namespace(_)),
@@ -172,6 +174,84 @@ async fn rename_workflows<C: CatalogMigration>(catalog: &C, uses: &[CodeUse]) {
         again.scoped.is_empty() && again.created.is_empty(),
         "{again:?}"
     );
+}
+
+/// `rename-data` on what `migrate-runs` moved: a dry run counts and writes nothing; the run gives
+/// every run a workflow (the saved `triage` that one namespace ran moves to it), and puts a
+/// sealed attempt written in the old names back in the new ones; run again, it changes nothing.
+async fn rename(args: impl Fn(bool) -> RenameArgs, uses: &[CodeUse], aged: &Path) {
+    let renamed = std::fs::read(aged).unwrap();
+    std::fs::write(
+        aged,
+        old_names(&String::from_utf8(renamed.clone()).unwrap()),
+    )
+    .unwrap();
+    let dry = rename_data(args(true)).await.unwrap();
+    assert!(dry.dry_run && dry.workflows.is_none(), "{dry:?}");
+    assert_eq!(dry.runs, uses.len() as u64);
+    assert_eq!(dry.sealed_attempts, 1, "{dry:?}");
+    assert_ne!(
+        std::fs::read(aged).unwrap(),
+        renamed,
+        "a dry run writes nothing"
+    );
+    assert_eq!(rename_data(args(true)).await.unwrap(), dry);
+
+    let report = rename_data(args(false)).await.unwrap();
+    let workflows = report.workflows.clone().unwrap();
+    assert_eq!(workflows.scoped, 1, "{report:?}");
+    assert!(workflows.created > 0, "{report:?}");
+    assert_eq!(report.sealed_attempts, 1, "{report:?}");
+    assert_eq!(
+        std::fs::read(aged).unwrap(),
+        renamed,
+        "the sealed attempt reads back as the new build wrote it"
+    );
+
+    let again = rename_data(args(false)).await.unwrap();
+    assert!(!again.changed(), "{again:?}");
+}
+
+/// A sealed attempt as the build before the rename release wrote it: the run export's fields,
+/// its events and its action set in the old names.
+fn old_names(export: &str) -> String {
+    let mut text = export
+        .replacen("\"code\":", "\"script\":", 1)
+        .replacen("\"action_set\":{", "\"toolset\":{", 1)
+        .replacen("\"events\":[", "\"entries\":[", 1)
+        .replace("\"actions\":[", "\"tools\":[")
+        .replace(
+            "\"type\":\"call_completed\"",
+            "\"type\":\"tool_call_completed\"",
+        )
+        .replace("\"type\":\"call_failed\"", "\"type\":\"tool_call_failed\"")
+        .replace("\"idempotent\":true", "\"on_interruption\":\"retry\"")
+        .replace(
+            "\"idempotent\":false",
+            "\"on_interruption\":\"at_most_once\"",
+        )
+        .replace("\"reconnect_timeout_ms\"", "\"heartbeat_timeout_ms\"")
+        .replace("\"type\":\"harness\"", "\"type\":\"host\"");
+    text = text.replace(
+        "{\"type\":\"schedule_call\",\"seq\":",
+        "{\"type\":\"schedule_tool_call\",\"seq\":",
+    );
+    let mut aged = String::new();
+    for line in text.split_inclusive('\n') {
+        if line.contains("\"schedule_tool_call\"") {
+            aged.push_str(&line.replacen("\"action\":", "\"tool\":", 1));
+        } else if line.contains("\"run_started\"") {
+            aged.push_str(&line.replacen("\"code\":", "\"script\":", 1).replacen(
+                "\"action_set\":",
+                "\"toolset\":",
+                1,
+            ));
+        } else {
+            aged.push_str(line);
+        }
+    }
+    assert_ne!(aged, export, "the export holds names to age");
+    aged
 }
 
 fn status(run: &rewind_api::runs::Run) -> RunStatus {
@@ -451,7 +531,32 @@ async fn the_runs_of_an_embedded_directory_move_into_the_run_plane() {
     .await
     .unwrap();
     assert!(store.legacy().runs(None, 1).await.unwrap().is_empty());
-    rename_workflows(&store.catalog(), &uses).await;
+    drop(store);
+    let rename_args = |dry_run: bool| {
+        let mut args = vec![
+            "rewind server rename-data",
+            "--embedded",
+            "--dir",
+            &dir_text,
+        ];
+        if dry_run {
+            args.push("--dry-run");
+        }
+        RenameArgs::try_parse_from(args).unwrap()
+    };
+    rename(
+        rename_args,
+        &uses,
+        &dir.join(format!("runs/local/{COMPLETED}/1.json")),
+    )
+    .await;
+    let store = rewind_store_turso::TursoStore::open(
+        dir.join("control.db"),
+        rewind_store_turso::MasterKey::from_bytes([9; 32]),
+    )
+    .await
+    .unwrap();
+    rename_workflows(&store.catalog(), &uses, false).await;
     drop(store);
 
     // A server on the directory: the runs read back, and the live ones go on.
@@ -588,7 +693,29 @@ async fn the_runs_of_a_postgres_database_move_into_the_partitions_and_the_archiv
         )
         .await
         .unwrap();
-        rename_workflows(&store.catalog(), &uses).await;
+        store.close().await;
+    }
+    let rename_args = |dry_run: bool| {
+        let mut args = options("rewind server rename-data");
+        if dry_run {
+            args.push("--dry-run".into());
+        }
+        RenameArgs::try_parse_from(args).unwrap()
+    };
+    rename(
+        rename_args,
+        &uses,
+        &bucket.join(format!("runs/acme/{COMPLETED}/1.json")),
+    )
+    .await;
+    {
+        let store = rewind_store_postgres::PostgresStore::connect(
+            &rewind_store_postgres::Config::new(postgres.url()),
+            rewind_store_postgres::MasterKey::from_bytes([9; 32]),
+        )
+        .await
+        .unwrap();
+        rename_workflows(&store.catalog(), &uses, false).await;
         store.close().await;
     }
 
@@ -599,5 +726,14 @@ async fn the_runs_of_a_postgres_database_move_into_the_partitions_and_the_archiv
     let server = running.url().unwrap();
     let client = Client::remote(&server, Some(ADMIN_KEY)).unwrap();
     check(&server, &client, &expected).await;
+    // rename-data runs offline: a node that serves the deployment stops it.
+    let refused =
+        rename_data(RenameArgs::try_parse_from(options("rewind server rename-data")).unwrap())
+            .await
+            .unwrap_err();
+    assert!(
+        refused.to_string().contains("serve the deployment"),
+        "{refused}"
+    );
     running.stop().await;
 }

@@ -33,13 +33,13 @@ use rewind_core::{
 };
 use rewind_engine::ports::catalog::{NamespaceFilter, NamespacePage};
 use rewind_engine::ports::{
-    ActionDeclarations, CatalogError, CatalogMigration, CatalogStore, CodeTitle, CompiledCode,
-    ControlPlaneChange, DeleteNamespace, DisplayName, DropNamespace, Labels, Namespace,
-    NamespaceName, NamespaceWrite, NewVersion, NewWorkflow, Quotas, RunRef, ScopeFilter, Secret,
-    StoredActionSet, StoredCode, StoredVersion, StoredWorkflow, Subscription, SuiteChange,
-    SuiteMember, TEST_DELETION_TIMEOUT, TEST_GRACE, Tenant, TenantId, TestRecord, VersionRef,
-    WorkflowCreated, WorkflowFilter, WorkflowPatch, WorkflowScope, WorkflowSource, WorkflowWrite,
-    namespace_partition,
+    ActionDeclarations, CatalogDocuments, CatalogError, CatalogMigration, CatalogStore, CodeTitle,
+    CompiledCode, ControlPlaneChange, DeleteNamespace, DisplayName, DropNamespace, Labels,
+    Namespace, NamespaceName, NamespaceWrite, NewVersion, NewWorkflow, Quotas, RawDocument,
+    RawVersion, RunRef, ScopeFilter, Secret, StoredActionSet, StoredCode, StoredVersion,
+    StoredWorkflow, Subscription, SuiteChange, SuiteMember, TEST_DELETION_TIMEOUT, TEST_GRACE,
+    Tenant, TenantId, TestRecord, VersionRef, WorkflowCreated, WorkflowFilter, WorkflowPatch,
+    WorkflowScope, WorkflowSource, WorkflowWrite, namespace_partition,
 };
 use sqlx::postgres::{PgQueryResult, PgRow};
 use sqlx::{PgConnection, PgPool};
@@ -1390,7 +1390,7 @@ impl CatalogStore for PostgresCatalog {
     ) -> Result<(), CatalogError> {
         // A code is content under its digest, which never changes: no change is sent.
         sqlx::query(
-            "INSERT INTO scripts (tenant, digest, source, transpiled, source_map) \
+            "INSERT INTO code (tenant, digest, source, transpiled, source_map) \
              VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING",
         )
         .bind(tenant(tenant_id))
@@ -1410,7 +1410,7 @@ impl CatalogStore for PostgresCatalog {
         digest: Digest,
     ) -> Result<Option<StoredCode>, CatalogError> {
         let row = sqlx::query(
-            "SELECT source, transpiled, source_map FROM scripts WHERE tenant = $1 AND digest = $2",
+            "SELECT source, transpiled, source_map FROM code WHERE tenant = $1 AND digest = $2",
         )
         .bind(tenant(tenant_id))
         .bind(bytes(digest))
@@ -1441,7 +1441,7 @@ impl CatalogStore for PostgresCatalog {
     ) -> Result<(), CatalogError> {
         let mut tx = self.pool.begin().await.map_err(Error::from)?;
         let inserted = sqlx::query(
-            "INSERT INTO toolsets (tenant, digest, spec, declarations, prompt) \
+            "INSERT INTO action_sets (tenant, digest, spec, declarations, prompt) \
              VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING",
         )
         .bind(tenant(tenant_id))
@@ -1469,7 +1469,7 @@ impl CatalogStore for PostgresCatalog {
         digest: Digest,
     ) -> Result<Option<StoredActionSet>, CatalogError> {
         let row = sqlx::query(
-            "SELECT spec, declarations, prompt FROM toolsets WHERE tenant = $1 AND digest = $2",
+            "SELECT spec, declarations, prompt FROM action_sets WHERE tenant = $1 AND digest = $2",
         )
         .bind(tenant(tenant_id))
         .bind(bytes(digest))
@@ -1486,7 +1486,7 @@ impl CatalogStore for PostgresCatalog {
         tenant_id: &TenantId,
     ) -> Result<Vec<StoredActionSet>, CatalogError> {
         let rows = sqlx::query(
-            "SELECT digest, spec, declarations, prompt FROM toolsets WHERE tenant = $1 \
+            "SELECT digest, spec, declarations, prompt FROM action_sets WHERE tenant = $1 \
              ORDER BY digest",
         )
         .bind(tenant(tenant_id))
@@ -1809,10 +1809,10 @@ impl CatalogStore for PostgresCatalog {
     async fn put_subscription(&self, subscription: &Subscription) -> Result<(), CatalogError> {
         let mut tx = self.pool.begin().await.map_err(Error::from)?;
         sqlx::query(
-            "INSERT INTO subscriptions (tenant, id, url, secret, events, labels) \
+            "INSERT INTO subscriptions (tenant, id, url, secret, types, labels) \
              VALUES ($1, $2, $3, $4, $5, $6::jsonb) \
              ON CONFLICT (tenant, id) DO UPDATE SET url = EXCLUDED.url, \
-                 secret = EXCLUDED.secret, events = EXCLUDED.events, labels = EXCLUDED.labels",
+                 secret = EXCLUDED.secret, types = EXCLUDED.types, labels = EXCLUDED.labels",
         )
         .bind(tenant(&subscription.tenant))
         .bind(subscription.id.as_str())
@@ -1834,7 +1834,7 @@ impl CatalogStore for PostgresCatalog {
 
     async fn subscriptions(&self, tenant_id: &TenantId) -> Result<Vec<Subscription>, CatalogError> {
         let rows = sqlx::query(
-            "SELECT id, url, secret, events, labels::text FROM subscriptions \
+            "SELECT id, url, secret, types, labels::text FROM subscriptions \
              WHERE tenant = $1 ORDER BY id",
         )
         .bind(tenant(tenant_id))
@@ -2150,6 +2150,155 @@ impl CatalogMigration for PostgresCatalog {
             .execute(&self.pool)
             .await
             .map_err(Error::from)?;
+        Ok(())
+    }
+}
+
+impl CatalogDocuments for PostgresCatalog {
+    async fn raw_action_sets(&self) -> Result<Vec<RawDocument>, CatalogError> {
+        let rows =
+            sqlx::query("SELECT tenant, digest, spec FROM action_sets ORDER BY tenant, digest")
+                .fetch_all(&self.pool)
+                .await
+                .map_err(Error::from)?;
+        Ok(rows
+            .iter()
+            .map(|row| {
+                Ok(RawDocument {
+                    tenant: row.tenant(0)?,
+                    digest: row.digest(1)?,
+                    json: row.text(2)?,
+                })
+            })
+            .collect::<Result<_, Error>>()?)
+    }
+
+    async fn replace_action_set(
+        &self,
+        tenant_id: &TenantId,
+        old: Digest,
+        action_set: &ActionSet,
+        declarations: &ActionDeclarations,
+    ) -> Result<(), CatalogError> {
+        let mut tx = self.pool.begin().await.map_err(Error::from)?;
+        sqlx::query(
+            "INSERT INTO action_sets (tenant, digest, spec, declarations, prompt) \
+             VALUES ($1, $2, $3, $4, $5) ON CONFLICT (tenant, digest) DO UPDATE \
+             SET spec = EXCLUDED.spec, declarations = EXCLUDED.declarations, \
+                 prompt = EXCLUDED.prompt",
+        )
+        .bind(tenant(tenant_id))
+        .bind(bytes(action_set.digest()))
+        .bind(rewind_format::encode_action_set(action_set))
+        .bind(declarations.typescript.as_str())
+        .bind(declarations.prompt.as_str())
+        .execute(&mut *tx)
+        .await
+        .map_err(Error::from)?;
+        if old != action_set.digest() {
+            sqlx::query("DELETE FROM action_sets WHERE tenant = $1 AND digest = $2")
+                .bind(tenant(tenant_id))
+                .bind(bytes(old))
+                .execute(&mut *tx)
+                .await
+                .map_err(Error::from)?;
+        }
+        tx.commit().await.map_err(Error::from)?;
+        Ok(())
+    }
+
+    async fn raw_versions(&self) -> Result<Vec<RawVersion>, CatalogError> {
+        let rows = sqlx::query(
+            "SELECT tenant, workflow, version, digest, document FROM workflow_versions \
+             ORDER BY tenant, workflow, version",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(Error::from)?;
+        Ok(rows
+            .iter()
+            .map(|row| {
+                Ok(RawVersion {
+                    tenant: row.tenant(0)?,
+                    workflow: workflow_id(row.text(1)?)?,
+                    version: row.u64(2)?,
+                    digest: row.digest(3)?,
+                    json: row.text(4)?,
+                })
+            })
+            .collect::<Result<_, Error>>()?)
+    }
+
+    async fn replace_version(
+        &self,
+        tenant_id: &TenantId,
+        workflow: &WorkflowId,
+        version: u64,
+        document: &WorkflowVersion,
+    ) -> Result<(), CatalogError> {
+        sqlx::query(
+            "UPDATE workflow_versions SET digest = $4, document = $5 \
+             WHERE tenant = $1 AND workflow = $2 AND version = $3",
+        )
+        .bind(tenant(tenant_id))
+        .bind(workflow.as_str())
+        .bind(int(version))
+        .bind(bytes(document.digest()))
+        .bind(rewind_format::encode_workflow_version(document))
+        .execute(&self.pool)
+        .await
+        .map_err(Error::from)?;
+        Ok(())
+    }
+
+    async fn raw_tests(&self) -> Result<Vec<(TenantId, Digest)>, CatalogError> {
+        let rows = sqlx::query("SELECT tenant, digest FROM tests ORDER BY tenant, digest")
+            .fetch_all(&self.pool)
+            .await
+            .map_err(Error::from)?;
+        Ok(rows
+            .iter()
+            .map(|row| Ok((row.tenant(0)?, row.digest(1)?)))
+            .collect::<Result<_, Error>>()?)
+    }
+
+    async fn replace_test(
+        &self,
+        tenant_id: &TenantId,
+        old: Digest,
+        new: Digest,
+        size: u64,
+    ) -> Result<(), CatalogError> {
+        if old == new {
+            return Ok(());
+        }
+        let mut tx = self.pool.begin().await.map_err(Error::from)?;
+        sqlx::query(
+            "INSERT INTO tests (tenant, digest, namespace, size, reserved_at, deletion_started_at) \
+             SELECT tenant, $3, namespace, $4, reserved_at, deletion_started_at FROM tests \
+             WHERE tenant = $1 AND digest = $2 ON CONFLICT (tenant, digest) DO NOTHING",
+        )
+        .bind(tenant(tenant_id))
+        .bind(bytes(old))
+        .bind(bytes(new))
+        .bind(int(size))
+        .execute(&mut *tx)
+        .await
+        .map_err(Error::from)?;
+        sqlx::query("UPDATE workflow_tests SET digest = $3 WHERE tenant = $1 AND digest = $2")
+            .bind(tenant(tenant_id))
+            .bind(bytes(old))
+            .bind(bytes(new))
+            .execute(&mut *tx)
+            .await
+            .map_err(Error::from)?;
+        sqlx::query("DELETE FROM tests WHERE tenant = $1 AND digest = $2")
+            .bind(tenant(tenant_id))
+            .bind(bytes(old))
+            .execute(&mut *tx)
+            .await
+            .map_err(Error::from)?;
+        tx.commit().await.map_err(Error::from)?;
         Ok(())
     }
 }
