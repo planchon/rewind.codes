@@ -292,7 +292,7 @@ pub(super) async fn get(
     Path(digest): Path<String>,
 ) -> Result<Json<ApiTest>, ApiError> {
     caller.require(Permission::RunsRead)?;
-    let not_found = || ApiError::not_found(format!("no test {digest} for this tenant"));
+    let not_found = || ApiError::not_found(format!("no test {digest} in this organization"));
     let parsed = Digest::from_hex(&digest).map_err(|_| not_found())?;
     let record = app
         .store

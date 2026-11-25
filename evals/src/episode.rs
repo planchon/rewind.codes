@@ -94,7 +94,7 @@ pub struct EpisodeRecord {
     pub iterations: usize,
     /// Workflows submitted (`run_workflow`, `check_workflow`, `test_workflow`, `retry_run`,
     /// `update_workflow`).
-    pub scripts: usize,
+    pub workflows: usize,
     /// Workflows refused by the checks.
     pub refused: usize,
     /// Tests the model wrote, unprompted or not: those it gave `test_workflow` and
@@ -155,7 +155,7 @@ pub async fn run(
         error: None,
         first_check: None,
         iterations: 0,
-        scripts: 0,
+        workflows: 0,
         refused: 0,
         tests_written: 0,
         gate_refusals: 0,
@@ -257,7 +257,7 @@ async fn converse(
                 Err(error) => return Err(format!("the harness failed: {error}")),
             };
             if let Some(verdict) = handled.code {
-                record.scripts += 1;
+                record.workflows += 1;
                 let passed = verdict == CodeVerdict::Passed;
                 if !passed {
                     record.refused += 1;

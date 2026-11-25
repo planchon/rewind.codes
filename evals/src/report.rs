@@ -28,7 +28,7 @@ pub struct Summary {
     /// Model turns per measured episode, on average.
     pub mean_iterations: Option<f64>,
     /// Workflows submitted per measured episode, on average.
-    pub mean_scripts: Option<f64>,
+    pub mean_workflows: Option<f64>,
     /// Of the measured episodes, the share where the model wrote at least one test.
     pub tests_written_rate: Option<f64>,
     /// Fixes the gate refused (a test of a workflow's suite did not pass) per measured
@@ -98,7 +98,7 @@ pub fn summarize(episodes: &[EpisodeRecord]) -> Vec<Summary> {
                     measured.len(),
                 ),
                 mean_iterations: mean(measured.iter().map(|e| e.iterations).sum(), measured.len()),
-                mean_scripts: mean(measured.iter().map(|e| e.scripts).sum(), measured.len()),
+                mean_workflows: mean(measured.iter().map(|e| e.workflows).sum(), measured.len()),
                 tests_written_rate: rate(
                     measured.iter().filter(|e| e.tests_written > 0).count(),
                     measured.len(),
@@ -162,7 +162,7 @@ pub fn markdown(report: &Report, episodes: &[EpisodeRecord]) -> String {
             percent(summary.first_check_pass_rate),
             percent(summary.success_rate),
             decimal(summary.mean_iterations),
-            decimal(summary.mean_scripts),
+            decimal(summary.mean_workflows),
             percent(summary.tests_written_rate),
             decimal(summary.mean_gate_refusals),
             thousands(summary.usage.total_input()),
@@ -252,7 +252,7 @@ mod tests {
             error: error.then(|| "429".into()),
             first_check,
             iterations: 4,
-            scripts: 2,
+            workflows: 2,
             refused: 1,
             tests_written: usize::from(success),
             gate_refusals: 1,

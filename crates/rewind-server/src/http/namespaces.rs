@@ -515,7 +515,7 @@ pub(super) async fn put_ceiling(
     caller.require_operator("set an organization's ceiling")?;
     let missing = || {
         ApiError::not_found(format!(
-            "no tenant {text}: a tenant has a record from its first key, its organization's \
+            "no organization {text}: Rewind records an organization at its first key, its \
              creation, or its first member's request"
         ))
     };

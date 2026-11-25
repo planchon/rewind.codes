@@ -1800,7 +1800,7 @@ describe("the adapters", () => {
     expect(block).toEqual({
       type: "tool_result",
       tool_use_id: "toolu_9",
-      content: `Run ${HANDLE} was aborted by the host (limit_exceeded): the history cap`,
+      content: `Run ${HANDLE} was aborted by the engine (limit_exceeded): the history cap`,
       is_error: true,
     });
     expect(server.requests[0]?.headers["idempotency-key"]).toBe(runKey("toolu_9"));

@@ -237,11 +237,11 @@ fn headline(run: &Run, limits: &Limits) -> String {
         RunStatus::Cancelled => format!("{name} was cancelled."),
         RunStatus::Aborted => match &run.abort {
             Some(abort) => format!(
-                "{name} was aborted by the host ({}): {}",
+                "{name} was aborted by the engine ({}): {}",
                 abort_kind(abort.kind),
                 truncate_end(&abort.message, limits.value)
             ),
-            None => format!("{name} was aborted by the host."),
+            None => format!("{name} was aborted by the engine."),
         },
         RunStatus::Queued => format!("{name} is queued: it has not started executing yet."),
         RunStatus::Running => format!("{name} is still running."),

@@ -31,7 +31,7 @@ pub enum ProblemType {
     /// the organization.
     Forbidden,
     /// 404: no such run, action set, workflow, code, call, payload, subscription, API key, role,
-    /// member or invitation (for this tenant).
+    /// member or invitation (for this organization).
     NotFound,
     /// 409: a signal or a cancellation sent to a run that has ended.
     RunEnded,
@@ -83,7 +83,7 @@ pub enum ProblemType {
     /// that takes none or a secret that does not exist, or the caller may not use it;
     /// `secrets` says which, with the secrets the caller may use instead.
     SecretRequired,
-    /// 429: the namespace or the tenant reached its `active_runs`, `runs_per_month` or
+    /// 429: the namespace or the organization reached its `active_runs`, `runs_per_month` or
     /// `workflows`; `quota` says which, at which scope, and when it frees.
     QuotaExceeded,
     /// 500: a fault of the platform.

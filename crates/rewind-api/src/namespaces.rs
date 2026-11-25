@@ -2,8 +2,8 @@
 //! tokens and the keys that sign them (`archi/06-storage-and-scale.md`, "Namespaces", "Quotas",
 //! "Who calls").
 //!
-//! A namespace isolates one end user of the customer (the tenant): the runs started for them and
-//! everything that follows from those runs. The customer's keys and members reach every
+//! A namespace isolates one end user of the customer (the organization): the runs started for
+//! them and everything that follows from those runs. The customer's keys and members reach every
 //! namespace, and name the one a request acts for with [`crate::headers::NAMESPACE`]; an end
 //! user's token reaches its own namespace only.
 
@@ -22,7 +22,7 @@ use crate::common::{Duration, Labels, Timestamp};
 
 /// A namespace's name: the customer's own id for the end user. 1 to 128 ASCII letters, digits,
 /// `-`, `_`, `.`, `:` and `@`, case-sensitive, not starting with `rewind:`. `*` is not a name: it
-/// stands for the tenant in the store's usage and alerts.
+/// stands for the organization in the store's usage and alerts.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, ToSchema)]
 #[serde(try_from = "String", into = "String")]
 #[schema(value_type = String, pattern = r"^[A-Za-z0-9._:@-]{1,128}$", example = "user_2fQ81")]
@@ -90,9 +90,9 @@ impl From<NamespaceName> for String {
 // -------------------------------------------------------------------------------------------
 // Quotas
 
-/// Limits, each optional: an absent one does not limit. The same shape serves a tenant's
-/// defaults for every namespace, a namespace's exceptions, the limits that apply to a
-/// namespace, and the tenant's ceiling, which bounds its totals.
+/// Limits, each optional: an absent one does not limit. The same shape serves an
+/// organization's defaults for every namespace, a namespace's exceptions, the limits that apply
+/// to a namespace, and the organization's ceiling, which bounds its totals.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Quotas {
@@ -161,7 +161,7 @@ impl fmt::Display for QuotaKind {
 }
 
 /// Which limit a quota belongs to: the namespace's (its exception, else the default), or the
-/// tenant's ceiling.
+/// organization's ceiling.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum QuotaScope {
@@ -169,7 +169,7 @@ pub enum QuotaScope {
     Organization,
 }
 
-/// What a namespace, or the tenant, used in a calendar month.
+/// What a namespace, or the organization, used in a calendar month.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct QuotaUsage {
@@ -205,7 +205,8 @@ pub struct Namespace {
     /// The customer's label for the end user, shown beside the name, which stays its key.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
-    /// The limits that apply: per quota, the namespace's exception, else the tenant's default.
+    /// The limits that apply: per quota, the namespace's exception, else the organization's
+    /// default.
     pub limits: Quotas,
     /// The namespace's exceptions to the defaults.
     pub exceptions: Quotas,
@@ -300,7 +301,7 @@ pub struct NamespaceDetail {
 }
 
 /// `PUT /v1/namespaces/{name}`: creates the namespace, or replaces its exceptions. A quota
-/// absent from `exceptions` follows the tenant's default.
+/// absent from `exceptions` follows the organization's default.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PutNamespace {
@@ -361,7 +362,7 @@ pub struct NamespaceNames {
 }
 
 /// `GET /v1/organization/namespace-defaults`: the limits of every namespace without an
-/// exception, and the tenant's ceiling with its use of the month.
+/// exception, and the organization's ceiling with its use of the month.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct NamespaceDefaults {
@@ -370,7 +371,7 @@ pub struct NamespaceDefaults {
     pub ceiling: Quotas,
     /// The month, `2026-11`.
     pub month: String,
-    /// The tenant's use of the month, across its namespaces.
+    /// The organization's use of the month, across its namespaces.
     pub usage: QuotaUsage,
 }
 
@@ -381,7 +382,8 @@ pub struct PutNamespaceDefaults {
     pub defaults: Quotas,
 }
 
-/// `PUT /v1/organizations/{organization}/quotas`: the operator replaces a tenant's ceiling.
+/// `PUT /v1/organizations/{organization}/quotas`: the operator replaces an organization's
+/// ceiling.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PutCeiling {
@@ -395,7 +397,7 @@ pub struct PutCeiling {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct QuotaAlert {
-    /// The namespace; absent (`null` in the webhook) for the tenant's ceiling.
+    /// The namespace; absent (`null` in the webhook) for the organization's ceiling.
     pub namespace: Option<NamespaceName>,
     pub quota: QuotaKind,
     /// 80 or 100: the share of the limit crossed; for `active_runs`, 100 at the first refusal
@@ -408,7 +410,7 @@ pub struct QuotaAlert {
     /// The calendar month, `2026-11`.
     pub period: String,
     pub raised_at: Timestamp,
-    /// When it was delivered to the tenant's subscriptions.
+    /// When it was delivered to the organization's subscriptions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sent_at: Option<Timestamp>,
 }
@@ -421,7 +423,7 @@ pub struct QuotaAlertQuery {
     /// The calendar month, `2026-11`; the current one by default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub month: Option<String>,
-    /// One namespace's alerts; every alert of the tenant without it.
+    /// One namespace's alerts; every alert of the organization without it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[param(value_type = Option<String>)]
     pub namespace: Option<NamespaceName>,

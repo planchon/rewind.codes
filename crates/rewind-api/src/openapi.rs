@@ -277,8 +277,8 @@ impl Modify for Conventions {
                 HttpBuilder::new()
                     .scheme(HttpAuthScheme::Bearer)
                     .description(Some(
-                        "An API key of the tenant (`rewind_sk_…`), a member's access token from \
-                         `/auth`, an end user's token: opaque (`rewind_nt_…`), or a JWT the \
+                        "An API key of the organization (`rewind_sk_…`), a member's access token \
+                         from `/auth`, an end user's token: opaque (`rewind_nt_…`), or a JWT the \
                          customer signed with a key it registered (`kid` `rk_…`), or a person's \
                          connection (`rewind_ct_…`, with `Rewind-Organization`). The embedded \
                          server's unix socket takes none.",
@@ -361,7 +361,7 @@ const NAMESPACED: [&str; 8] = [
     "/v1/calls",
 ];
 
-/// The paths under `/v1` that act in no tenant: a person's own connections and consents, and
+/// The paths under `/v1` that act in no organization: a person's own connections and consents, and
 /// the onboarding of a member without organization. Every other operation takes
 /// `Rewind-Organization`.
 const UNORGANIZED: [&str; 4] = [
@@ -380,9 +380,9 @@ fn add_organization_header(operation: &mut utoipa::openapi::path::Operation) {
             .required(Required::False)
             .description(Some(
                 "The organization (`org_…`) a connection's request acts in: required on \
-                     the tenant's data with a connection's token (`rewind_ct_…`), which names \
-                     no tenant. Another caller may repeat its own tenant; another is \
-                     `forbidden`.",
+                     the organization's data with a connection's token (`rewind_ct_…`), which \
+                     names no organization. Another caller may repeat its own organization; \
+                     another is `forbidden`.",
             ))
             .schema(Some(utoipa::openapi::schema::Object::with_type(
                 utoipa::openapi::schema::Type::String,
@@ -594,10 +594,10 @@ mod operations {
 
     /// List the action sets
     ///
-    /// The action sets the tenant registered, by id, with their servers and action names.
+    /// The action sets the organization registered, by id, with their servers and action names.
     #[utoipa::path(
         get, path = "/v1/action-sets", tag = "action-sets", operation_id = "listActionSets",
-        responses((status = 200, description = "Every action set of the tenant.", body = ActionSetList))
+        responses((status = 200, description = "Every action set of the organization.", body = ActionSetList))
     )]
     pub(super) fn list_action_sets() {}
 
@@ -883,7 +883,7 @@ mod operations {
             (status = 413, description = "The input is too large (`payload-too-large`).", body = Problem, content_type = "application/problem+json"),
             (status = 422, description = "The code was refused before any run exists (`invalid-code`), with `diagnostics`; or the input does not match the workflow (`invalid-input`).", body = Problem, content_type = "application/problem+json"),
             (status = 409, description = "The namespace is being erased (`namespace-deleting`).", body = Problem, content_type = "application/problem+json"),
-            (status = 429, description = "The namespace or the tenant reached its `active_runs`, `runs_per_month` or `workflows` (`quota-exceeded`).", body = Problem, content_type = "application/problem+json"),
+            (status = 429, description = "The namespace or the organization reached its `active_runs`, `runs_per_month` or `workflows` (`quota-exceeded`).", body = Problem, content_type = "application/problem+json"),
         )
     )]
     pub(super) fn start_run() {}
@@ -903,12 +903,12 @@ mod operations {
     )]
     pub(super) fn list_runs() {}
 
-    /// Statistics of the runs of a namespace or the tenant
+    /// Statistics of the runs of a namespace or the organization
     ///
     /// From the hourly counters, over a window of whole hours: counts by status, a series over
     /// time, durations and facets (status, workflow, namespace) of the runs started in the
     /// window; the runs waiting now by what they wait for, and the quarantined ones. The scope is
-    /// the tenant, or one namespace: a token's, the `Rewind-Namespace` header's, or a single
+    /// the organization, or one namespace: a token's, the `Rewind-Namespace` header's, or a single
     /// `namespace:` term of `q`.
     #[utoipa::path(
         get, path = "/v1/runs/stats", tag = "runs", operation_id = "getRunStats",
@@ -924,7 +924,7 @@ mod operations {
     /// Failures grouped by cause
     ///
     /// From the hourly counters, over a window of whole hours: the failed, cancelled and aborted
-    /// runs of a namespace or the tenant, ended in the window, grouped by fingerprint: across
+    /// runs of a namespace or the organization, ended in the window, grouped by fingerprint: across
     /// workflows, the runs that ended with the same error. The scope as `GET /v1/runs/stats` takes
     /// it.
     #[utoipa::path(
@@ -1118,7 +1118,7 @@ mod operations {
 
     /// Give up a quarantined run
     ///
-    /// The host ends it: `run_aborted` with `non_determinism`, or `internal` after repeated
+    /// The engine ends it: `run_aborted` with `non_determinism`, or `internal` after repeated
     /// failures.
     #[utoipa::path(
         post, path = "/v1/runs/{id}/give-up", tag = "runs", operation_id = "giveUpRun",
@@ -1264,7 +1264,7 @@ mod operations {
     /// List subscriptions
     #[utoipa::path(
         get, path = "/v1/subscriptions", tag = "webhooks", operation_id = "listSubscriptions",
-        responses((status = 200, description = "Every subscription of the tenant, without secrets.", body = SubscriptionList))
+        responses((status = 200, description = "Every subscription of the organization, without secrets.", body = SubscriptionList))
     )]
     pub(super) fn list_subscriptions() {}
 
@@ -1285,7 +1285,7 @@ mod operations {
     /// Latency, errors and redeliveries per action
     ///
     /// From the hourly counters, over a window of whole hours: per action, the calls of the runs of
-    /// a namespace or the tenant, filtered by the start of an action's name. The scope as
+    /// a namespace or the organization, filtered by the start of an action's name. The scope as
     /// `GET /v1/runs/stats` takes it.
     #[utoipa::path(
         get, path = "/v1/actions/stats", tag = "reading", operation_id = "getActionStats",
@@ -1316,10 +1316,11 @@ mod operations {
 
     /// Who calls
     ///
-    /// The tenant, the principal (an API key, or a member with their email, name and picture),
-    /// the grant, and the permissions it holds; for a member, the organization of the session
-    /// and every organization of the user. Over the embedded server's socket: the operator of
-    /// the tenant `local`. Any caller, even a member without organization.
+    /// The organization the caller acts in, the principal (an API key, or a member with their
+    /// email, name and picture), the grant, and the permissions it holds; for a member, the
+    /// organization of the session and every organization of the user. Over the embedded
+    /// server's socket: the operator of the organization `local`. Any caller, even a member
+    /// without organization.
     #[utoipa::path(
         get, path = "/v1/whoami", tag = "organization", operation_id = "whoami",
         responses(
@@ -1332,8 +1333,8 @@ mod operations {
     /// Create an organization
     ///
     /// For a member, even without organization: the organization in the identity provider with
-    /// the caller as a member, then its tenant and the caller's `owner` grant. Switch to it with
-    /// `POST /auth/session`.
+    /// the caller as a member, then its record in Rewind and the caller's `owner` grant. Switch
+    /// to it with `POST /auth/session`.
     #[utoipa::path(
         post, path = "/v1/organizations", tag = "organization", operation_id = "createOrganization",
         request_body = CreateOrganization,
@@ -1538,18 +1539,18 @@ mod operations {
 
     /// List the API keys
     ///
-    /// The tenant's keys, without their secret, each with its role and allowed labels.
+    /// The organization's keys, without their secret, each with its role and allowed labels.
     /// Requires `api_keys:read`.
     #[utoipa::path(
         get, path = "/v1/api-keys", tag = "access", operation_id = "listApiKeys",
-        responses((status = 200, description = "Every key of the tenant, revoked ones included.", body = ApiKeyList))
+        responses((status = 200, description = "Every key of the organization, revoked ones included.", body = ApiKeyList))
     )]
     pub(super) fn list_api_keys() {}
 
     /// Create an API key
     ///
-    /// With a name, a role and allowed labels. The operator may name another tenant. Requires
-    /// `api_keys:write`, and every permission of the role given.
+    /// With a name, a role and allowed labels. The operator may name another organization.
+    /// Requires `api_keys:write`, and every permission of the role given.
     #[utoipa::path(
         post, path = "/v1/api-keys", tag = "access", operation_id = "createApiKey",
         request_body = CreateApiKey,
@@ -1773,7 +1774,7 @@ mod operations {
         request_body = PutCeiling,
         responses(
             (status = 204, description = "Changed."),
-            (status = 404, description = "No such tenant.", body = Problem, content_type = "application/problem+json"),
+            (status = 404, description = "No such organization.", body = Problem, content_type = "application/problem+json"),
         )
     )]
     pub(super) fn put_ceiling() {}

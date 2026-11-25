@@ -330,7 +330,7 @@ async fn keys_are_given_within_what_their_creator_holds() {
         (
             create(Some("beta"), "elsewhere", "harness", &[]),
             ProblemType::Forbidden,
-            "another tenant",
+            "another organization",
         ),
         (
             create(None, "nobody", "no-such-role", &[]),

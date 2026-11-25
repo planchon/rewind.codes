@@ -18,7 +18,7 @@ use super::namespaces::Quotas;
 pub struct TenantId(String);
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("invalid tenant {0:?}: expected 1 to 64 ASCII letters, digits, - and _")]
+#[error("invalid organization id {0:?}: expected 1 to 64 ASCII letters, digits, - and _")]
 pub struct InvalidTenant(pub String);
 
 impl TenantId {

@@ -293,7 +293,7 @@ pub(crate) async fn stored(
         .await?
         .ok_or_else(|| {
             ApiError::not_found(format!(
-                "no action set {id} for this tenant: register it with POST /v1/action-sets"
+                "no action set {id} in this organization: register it with POST /v1/action-sets"
             ))
         })
 }

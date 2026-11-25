@@ -12,7 +12,7 @@
         "type": "string"
       },
       "AbortReason": {
-        "description": "Why the host ended a run (`run_aborted`).",
+        "description": "Why the engine ended a run (`run_aborted`).",
         "properties": {
           "kind": {
             "$ref": "#/components/schemas/AbortKind"
@@ -360,7 +360,7 @@
         "type": "object"
       },
       "ActionSetList": {
-        "description": "`GET /v1/action-sets`: the action sets registered by the tenant, by id.",
+        "description": "`GET /v1/action-sets`: the action sets registered by the organization, by id.",
         "properties": {
           "actionSets": {
             "items": {
@@ -615,7 +615,7 @@
         "type": "object"
       },
       "ApiKeyList": {
-        "description": "`GET /v1/api-keys`: the tenant's keys, revoked ones included, oldest first.",
+        "description": "`GET /v1/api-keys`: the organization's keys, revoked ones included, oldest first.",
         "properties": {
           "keys": {
             "items": {
@@ -778,7 +778,7 @@
                 "type": "string"
               },
               "organizationId": {
-                "description": "The organization of the session, the tenant `/v1` acts in. Absent without one:\ncreate one, or accept an invitation.",
+                "description": "The organization of the session, the one `/v1` acts in. Absent without one:\ncreate one, or accept an invitation.",
                 "type": [
                   "string",
                   "null"
@@ -1384,7 +1384,7 @@
             "description": "The labels of the connection's grant there: what it starts carries them, and it sees\nonly the runs carrying them."
           },
           "id": {
-            "description": "`org_…`, the tenant.",
+            "description": "`org_…`, its id.",
             "type": "string"
           },
           "name": {
@@ -1724,7 +1724,7 @@
             ]
           },
           "role": {
-            "description": "A built-in role, a role of the tenant, or `operator` (only from the operator).",
+            "description": "A built-in role, a role of the organization, or `operator` (only from the operator).",
             "type": "string"
           }
         },
@@ -2380,7 +2380,7 @@
             "type": "object"
           },
           {
-            "description": "The host ended the run.",
+            "description": "The engine ended the run.",
             "properties": {
               "reason": {
                 "$ref": "#/components/schemas/AbortReason"
@@ -3219,7 +3219,7 @@
         "type": "object"
       },
       "Grant": {
-        "description": "What a principal holds in a tenant: a role, and optionally allowed labels.",
+        "description": "What a principal holds in an organization: a role, and optionally allowed labels.",
         "properties": {
           "allowedLabels": {
             "$ref": "#/components/schemas/Labels",
@@ -3424,13 +3424,13 @@
         "type": "object"
       },
       "Identity": {
-        "description": "`GET /v1/whoami`: who calls, and what they may do. Over the embedded server's socket, which\ntakes no token: the operator of the tenant `local`.",
+        "description": "`GET /v1/whoami`: who calls, and what they may do. Over the embedded server's socket, which\ntakes no token: the operator of the organization `local`.",
         "properties": {
           "grant": {
             "oneOf": [
               {
                 "$ref": "#/components/schemas/Grant",
-                "description": "The caller's grant in the tenant. Absent for a member without one, who gets 403 on the\ntenant's data."
+                "description": "The caller's grant in the organization. Absent for a member without one, who gets 403 on\nthe organization's data."
               },
               {
                 "type": "null"
@@ -3438,7 +3438,7 @@
             ]
           },
           "operator": {
-            "description": "The deployment's operator: every permission in its tenant, and the keys of every tenant.",
+            "description": "The deployment's operator: every permission in its organization, and the keys of every\norganization.",
             "type": "boolean"
           },
           "organization": {
@@ -4012,7 +4012,7 @@
           },
           "limits": {
             "$ref": "#/components/schemas/Quotas",
-            "description": "The limits that apply: per quota, the namespace's exception, else the tenant's default."
+            "description": "The limits that apply: per quota, the namespace's exception, else the organization's\ndefault."
           },
           "name": {
             "$ref": "#/components/schemas/NamespaceName"
@@ -4049,7 +4049,7 @@
         "type": "object"
       },
       "NamespaceDefaults": {
-        "description": "`GET /v1/organization/namespace-defaults`: the limits of every namespace without an\nexception, and the tenant's ceiling with its use of the month.",
+        "description": "`GET /v1/organization/namespace-defaults`: the limits of every namespace without an\nexception, and the organization's ceiling with its use of the month.",
         "properties": {
           "ceiling": {
             "$ref": "#/components/schemas/Quotas",
@@ -4064,7 +4064,7 @@
           },
           "usage": {
             "$ref": "#/components/schemas/QuotaUsage",
-            "description": "The tenant's use of the month, across its namespaces."
+            "description": "The organization's use of the month, across its namespaces."
           }
         },
         "required": [
@@ -4175,7 +4175,7 @@
         "type": "object"
       },
       "NamespaceName": {
-        "description": "A namespace's name: the customer's own id for the end user. 1 to 128 ASCII letters, digits,\n`-`, `_`, `.`, `:` and `@`, case-sensitive, not starting with `rewind:`. `*` is not a name: it\nstands for the tenant in the store's usage and alerts.",
+        "description": "A namespace's name: the customer's own id for the end user. 1 to 128 ASCII letters, digits,\n`-`, `_`, `.`, `:` and `@`, case-sensitive, not starting with `rewind:`. `*` is not a name: it\nstands for the organization in the store's usage and alerts.",
         "example": "user_2fQ81",
         "pattern": "^[A-Za-z0-9._:@-]{1,128}$",
         "type": "string"
@@ -4264,10 +4264,10 @@
         "type": "object"
       },
       "Organization": {
-        "description": "An organization: a tenant, with the same id.",
+        "description": "An organization, with the same id in Rewind and in the identity provider.",
         "properties": {
           "id": {
-            "description": "`org_01J…`, also the tenant's id.",
+            "description": "`org_01J…`, the identity provider's id.",
             "type": "string"
           },
           "name": {
@@ -4601,7 +4601,7 @@
             "type": "object"
           },
           {
-            "description": "A person's connection (`rewind_ct_…`): an MCP client acting for the person, in the\norganizations it opens. With `Rewind-Organization`, the identity's tenant, grant and\npermissions are the connection's there.",
+            "description": "A person's connection (`rewind_ct_…`): an MCP client acting for the person, in the\norganizations it opens. With `Rewind-Organization`, the identity's organization, grant\nand permissions are the connection's there.",
             "properties": {
               "client": {
                 "$ref": "#/components/schemas/ConnectionClient"
@@ -4784,7 +4784,7 @@
       },
       "PutCeiling": {
         "additionalProperties": false,
-        "description": "`PUT /v1/organizations/{organization}/quotas`: the operator replaces a tenant's ceiling.",
+        "description": "`PUT /v1/organizations/{organization}/quotas`: the operator replaces an organization's\nceiling.",
         "properties": {
           "ceiling": {
             "$ref": "#/components/schemas/Quotas"
@@ -4797,7 +4797,7 @@
       },
       "PutNamespace": {
         "additionalProperties": false,
-        "description": "`PUT /v1/namespaces/{name}`: creates the namespace, or replaces its exceptions. A quota\nabsent from `exceptions` follows the tenant's default.",
+        "description": "`PUT /v1/namespaces/{name}`: creates the namespace, or replaces its exceptions. A quota\nabsent from `exceptions` follows the organization's default.",
         "properties": {
           "exceptions": {
             "$ref": "#/components/schemas/Quotas"
@@ -4918,7 +4918,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/NamespaceName",
-                "description": "The namespace; absent (`null` in the webhook) for the tenant's ceiling."
+                "description": "The namespace; absent (`null` in the webhook) for the organization's ceiling."
               },
               {
                 "type": "null"
@@ -4937,7 +4937,7 @@
             "type": "string"
           },
           "sentAt": {
-            "description": "When it was delivered to the tenant's subscriptions.",
+            "description": "When it was delivered to the organization's subscriptions.",
             "format": "date-time",
             "type": [
               "string",
@@ -5036,7 +5036,7 @@
         "type": "object"
       },
       "QuotaScope": {
-        "description": "Which limit a quota belongs to: the namespace's (its exception, else the default), or the\ntenant's ceiling.",
+        "description": "Which limit a quota belongs to: the namespace's (its exception, else the default), or the\norganization's ceiling.",
         "enum": [
           "namespace",
           "organization"
@@ -5044,7 +5044,7 @@
         "type": "string"
       },
       "QuotaUsage": {
-        "description": "What a namespace, or the tenant, used in a calendar month.",
+        "description": "What a namespace, or the organization, used in a calendar month.",
         "properties": {
           "activeRuns": {
             "description": "Runs active now.",
@@ -5079,7 +5079,7 @@
       },
       "Quotas": {
         "additionalProperties": false,
-        "description": "Limits, each optional: an absent one does not limit. The same shape serves a tenant's\ndefaults for every namespace, a namespace's exceptions, the limits that apply to a\nnamespace, and the tenant's ceiling, which bounds its totals.",
+        "description": "Limits, each optional: an absent one does not limit. The same shape serves an\norganization's defaults for every namespace, a namespace's exceptions, the limits that apply\nto a namespace, and the organization's ceiling, which bounds its totals.",
         "properties": {
           "activeRuns": {
             "description": "Runs active at once. Starting or forking one more is refused (429).",
@@ -5520,7 +5520,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/AbortReason",
-                "description": "With `aborted`: why the host ended the run."
+                "description": "With `aborted`: why the engine ended the run."
               },
               {
                 "type": "null"
@@ -6420,7 +6420,7 @@
         "description": "`GET /v1/server`: what this server is. Every response also carries the `Rewind-Version`\nheader.",
         "properties": {
           "embedded": {
-            "description": "`rewind server --embedded`: one tenant, `local`, on a unix socket without a key.",
+            "description": "`rewind server --embedded`: one organization, `local`, on a unix socket without a key.",
             "type": "boolean"
           },
           "epochs": {
@@ -8052,7 +8052,7 @@
             "type": "object"
           },
           {
-            "description": "The host ended the run: `data.run.abort` says why.",
+            "description": "The engine ended the run: `data.run.abort` says why.",
             "properties": {
               "data": {
                 "$ref": "#/components/schemas/RunWebhook"
@@ -8172,7 +8172,7 @@
             "type": "object"
           },
           {
-            "description": "A namespace, or the tenant (`namespace` null), crossed 80 % or 100 % of a limit; for\n`active_runs`, a first refusal of the month. Sent once per namespace, quota, month and\nthreshold; its `webhook-id` is `quota.alert:{namespace or *}:{quota}:{period}:{threshold}`.",
+            "description": "A namespace, or the organization (`namespace` null), crossed 80 % or 100 % of a limit; for\n`active_runs`, a first refusal of the month. Sent once per namespace, quota, month and\nthreshold; its `webhook-id` is `quota.alert:{namespace or *}:{quota}:{period}:{threshold}`.",
             "properties": {
               "data": {
                 "$ref": "#/components/schemas/QuotaAlert"
@@ -8641,7 +8641,7 @@
     },
     "securitySchemes": {
       "bearer": {
-        "description": "An API key of the tenant (`rewind_sk_…`), a member's access token from `/auth`, an end user's token: opaque (`rewind_nt_…`), or a JWT the customer signed with a key it registered (`kid` `rk_…`), or a person's connection (`rewind_ct_…`, with `Rewind-Organization`). The embedded server's unix socket takes none.",
+        "description": "An API key of the organization (`rewind_sk_…`), a member's access token from `/auth`, an end user's token: opaque (`rewind_nt_…`), or a JWT the customer signed with a key it registered (`kid` `rk_…`), or a person's connection (`rewind_ct_…`, with `Rewind-Organization`). The embedded server's unix socket takes none.",
         "scheme": "bearer",
         "type": "http"
       },
@@ -10099,11 +10099,11 @@
     },
     "/v1/action-sets": {
       "get": {
-        "description": "The action sets the tenant registered, by id, with their servers and action names.",
+        "description": "The action sets the organization registered, by id, with their servers and action names.",
         "operationId": "listActionSets",
         "parameters": [
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -10121,7 +10121,7 @@
                 }
               }
             },
-            "description": "Every action set of the tenant."
+            "description": "Every action set of the organization."
           },
           "400": {
             "content": {
@@ -10184,7 +10184,7 @@
         "operationId": "createActionSet",
         "parameters": [
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -10328,7 +10328,7 @@
             }
           },
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -10450,7 +10450,7 @@
             }
           },
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -10539,11 +10539,11 @@
     },
     "/v1/actions/stats": {
       "get": {
-        "description": "From the hourly counters, over a window of whole hours: per action, the calls of the runs of\na namespace or the tenant, filtered by the start of an action's name. The scope as\n`GET /v1/runs/stats` takes it.",
+        "description": "From the hourly counters, over a window of whole hours: per action, the calls of the runs of\na namespace or the organization, filtered by the start of an action's name. The scope as\n`GET /v1/runs/stats` takes it.",
         "operationId": "getActionStats",
         "parameters": [
           {
-            "description": "The scope, as a query: one term `namespace:<name>` of one value, or nothing for the\ntenant. Any other term is refused with its position (`invalid-query`).",
+            "description": "The scope, as a query: one term `namespace:<name>` of one value, or nothing for the\norganization. Any other term is refused with its position (`invalid-query`).",
             "in": "query",
             "name": "q",
             "required": false,
@@ -10608,7 +10608,7 @@
             }
           },
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -10687,11 +10687,11 @@
     },
     "/v1/api-keys": {
       "get": {
-        "description": "The tenant's keys, without their secret, each with its role and allowed labels.\nRequires `api_keys:read`.",
+        "description": "The organization's keys, without their secret, each with its role and allowed labels.\nRequires `api_keys:read`.",
         "operationId": "listApiKeys",
         "parameters": [
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -10709,7 +10709,7 @@
                 }
               }
             },
-            "description": "Every key of the tenant, revoked ones included."
+            "description": "Every key of the organization, revoked ones included."
           },
           "400": {
             "content": {
@@ -10768,11 +10768,11 @@
         ]
       },
       "post": {
-        "description": "With a name, a role and allowed labels. The operator may name another tenant. Requires\n`api_keys:write`, and every permission of the role given.",
+        "description": "With a name, a role and allowed labels. The operator may name another organization.\nRequires `api_keys:write`, and every permission of the role given.",
         "operationId": "createApiKey",
         "parameters": [
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -10874,7 +10874,7 @@
             }
           },
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -11019,7 +11019,7 @@
             }
           },
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -11130,7 +11130,7 @@
             }
           },
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -11244,7 +11244,7 @@
             }
           },
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -11374,7 +11374,7 @@
             }
           },
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -11498,7 +11498,7 @@
             }
           },
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -11618,7 +11618,7 @@
             }
           },
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -11723,7 +11723,7 @@
             }
           },
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -11818,7 +11818,7 @@
             }
           },
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -12458,7 +12458,7 @@
             }
           },
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -12550,7 +12550,7 @@
             }
           },
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -12652,7 +12652,7 @@
             }
           },
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -12752,7 +12752,7 @@
             }
           },
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -12872,7 +12872,7 @@
             }
           },
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -12984,7 +12984,7 @@
             }
           },
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -13085,7 +13085,7 @@
             }
           },
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -13187,7 +13187,7 @@
             }
           },
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -13318,7 +13318,7 @@
             }
           },
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -13420,7 +13420,7 @@
             }
           },
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -13520,7 +13520,7 @@
             }
           },
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -13816,7 +13816,7 @@
         "operationId": "updateOrganization",
         "parameters": [
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -13919,7 +13919,7 @@
         "operationId": "listOrganizationConnections",
         "parameters": [
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -14021,7 +14021,7 @@
             }
           },
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -14107,7 +14107,7 @@
         "operationId": "listInvitations",
         "parameters": [
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -14198,7 +14198,7 @@
         "operationId": "createInvitation",
         "parameters": [
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -14320,7 +14320,7 @@
             }
           },
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -14425,7 +14425,7 @@
             }
           },
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -14528,7 +14528,7 @@
         "operationId": "listMembers",
         "parameters": [
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -14630,7 +14630,7 @@
             }
           },
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -14745,7 +14745,7 @@
             }
           },
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -14867,7 +14867,7 @@
             }
           },
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -14948,7 +14948,7 @@
         "operationId": "putNamespaceDefaults",
         "parameters": [
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -15041,7 +15041,7 @@
         "operationId": "listNamespaceNames",
         "parameters": [
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -15133,7 +15133,7 @@
             }
           },
           {
-            "description": "One namespace's alerts; every alert of the tenant without it.",
+            "description": "One namespace's alerts; every alert of the organization without it.",
             "in": "query",
             "name": "namespace",
             "required": false,
@@ -15142,7 +15142,7 @@
             }
           },
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -15225,7 +15225,7 @@
         "operationId": "listSigningKeys",
         "parameters": [
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -15306,7 +15306,7 @@
         "operationId": "rotateSigningKey",
         "parameters": [
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -15389,7 +15389,7 @@
         "operationId": "listTokenKeys",
         "parameters": [
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -15470,7 +15470,7 @@
         "operationId": "createTokenKey",
         "parameters": [
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -15572,7 +15572,7 @@
             }
           },
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -15654,7 +15654,7 @@
     },
     "/v1/organizations": {
       "post": {
-        "description": "For a member, even without organization: the organization in the identity provider with\nthe caller as a member, then its tenant and the caller's `owner` grant. Switch to it with\n`POST /auth/session`.",
+        "description": "For a member, even without organization: the organization in the identity provider with\nthe caller as a member, then its record in Rewind and the caller's `owner` grant. Switch\nto it with `POST /auth/session`.",
         "operationId": "createOrganization",
         "requestBody": {
           "content": {
@@ -15811,7 +15811,7 @@
                 }
               }
             },
-            "description": "No such tenant."
+            "description": "No such organization."
           },
           "500": {
             "content": {
@@ -15872,7 +15872,7 @@
             }
           },
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -15963,7 +15963,7 @@
         "operationId": "listPermissions",
         "parameters": [
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -16046,7 +16046,7 @@
         "operationId": "listRoles",
         "parameters": [
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -16138,7 +16138,7 @@
             }
           },
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -16241,7 +16241,7 @@
             }
           },
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -16504,7 +16504,7 @@
             }
           },
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -16609,7 +16609,7 @@
             }
           },
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -16727,7 +16727,7 @@
                 }
               }
             },
-            "description": "The namespace or the tenant reached its `active_runs`, `runs_per_month` or `workflows` (`quota-exceeded`)."
+            "description": "The namespace or the organization reached its `active_runs`, `runs_per_month` or `workflows` (`quota-exceeded`)."
           },
           "500": {
             "content": {
@@ -16758,11 +16758,11 @@
     },
     "/v1/runs/failures": {
       "get": {
-        "description": "From the hourly counters, over a window of whole hours: the failed, cancelled and aborted\nruns of a namespace or the tenant, ended in the window, grouped by fingerprint: across\nworkflows, the runs that ended with the same error. The scope as `GET /v1/runs/stats` takes\nit.",
+        "description": "From the hourly counters, over a window of whole hours: the failed, cancelled and aborted\nruns of a namespace or the organization, ended in the window, grouped by fingerprint: across\nworkflows, the runs that ended with the same error. The scope as `GET /v1/runs/stats` takes\nit.",
         "operationId": "listRunFailures",
         "parameters": [
           {
-            "description": "The scope, as a query: one term `namespace:<name>` of one value, or nothing for the\ntenant. Any other term is refused with its position (`invalid-query`).",
+            "description": "The scope, as a query: one term `namespace:<name>` of one value, or nothing for the\norganization. Any other term is refused with its position (`invalid-query`).",
             "in": "query",
             "name": "q",
             "required": false,
@@ -16820,7 +16820,7 @@
             }
           },
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -16899,11 +16899,11 @@
     },
     "/v1/runs/stats": {
       "get": {
-        "description": "From the hourly counters, over a window of whole hours: counts by status, a series over\ntime, durations and facets (status, workflow, namespace) of the runs started in the\nwindow; the runs waiting now by what they wait for, and the quarantined ones. The scope is\nthe tenant, or one namespace: a token's, the `Rewind-Namespace` header's, or a single\n`namespace:` term of `q`.",
+        "description": "From the hourly counters, over a window of whole hours: counts by status, a series over\ntime, durations and facets (status, workflow, namespace) of the runs started in the\nwindow; the runs waiting now by what they wait for, and the quarantined ones. The scope is\nthe organization, or one namespace: a token's, the `Rewind-Namespace` header's, or a single\n`namespace:` term of `q`.",
         "operationId": "getRunStats",
         "parameters": [
           {
-            "description": "The scope, as a query: one term `namespace:<name>` of one value, or nothing for the\ntenant. Any other term is refused with its position (`invalid-query`).",
+            "description": "The scope, as a query: one term `namespace:<name>` of one value, or nothing for the\norganization. Any other term is refused with its position (`invalid-query`).",
             "in": "query",
             "name": "q",
             "required": false,
@@ -16961,7 +16961,7 @@
             }
           },
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -17032,7 +17032,7 @@
             "description": "The server cannot serve the request now (`unavailable`)."
           }
         },
-        "summary": "Statistics of the runs of a namespace or the tenant",
+        "summary": "Statistics of the runs of a namespace or the organization",
         "tags": [
           "runs"
         ]
@@ -17062,7 +17062,7 @@
             }
           },
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -17173,7 +17173,7 @@
             }
           },
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -17283,7 +17283,7 @@
             }
           },
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -17453,7 +17453,7 @@
             }
           },
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -17575,7 +17575,7 @@
             }
           },
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -17700,7 +17700,7 @@
             }
           },
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -17822,7 +17822,7 @@
             }
           },
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -17951,7 +17951,7 @@
     },
     "/v1/runs/{id}/give-up": {
       "post": {
-        "description": "The host ends it: `run_aborted` with `non_determinism`, or `internal` after repeated\nfailures.",
+        "description": "The engine ends it: `run_aborted` with `non_determinism`, or `internal` after repeated\nfailures.",
         "operationId": "giveUpRun",
         "parameters": [
           {
@@ -17973,7 +17973,7 @@
             }
           },
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -18094,7 +18094,7 @@
             }
           },
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -18236,7 +18236,7 @@
             }
           },
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -18384,7 +18384,7 @@
             }
           },
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -18477,7 +18477,7 @@
         "operationId": "listSecrets",
         "parameters": [
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -18569,7 +18569,7 @@
             }
           },
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -18662,7 +18662,7 @@
             }
           },
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -18774,7 +18774,7 @@
             }
           },
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -18867,7 +18867,7 @@
         "operationId": "getServer",
         "parameters": [
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -18950,7 +18950,7 @@
         "operationId": "stopServer",
         "parameters": [
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -19025,7 +19025,7 @@
         "operationId": "listSubscriptions",
         "parameters": [
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -19043,7 +19043,7 @@
                 }
               }
             },
-            "description": "Every subscription of the tenant, without secrets."
+            "description": "Every subscription of the organization, without secrets."
           },
           "400": {
             "content": {
@@ -19106,7 +19106,7 @@
         "operationId": "createSubscription",
         "parameters": [
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -19207,7 +19207,7 @@
             }
           },
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -19305,7 +19305,7 @@
             }
           },
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -19436,7 +19436,7 @@
             }
           },
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -19538,7 +19538,7 @@
             }
           },
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -19620,11 +19620,11 @@
     },
     "/v1/whoami": {
       "get": {
-        "description": "The tenant, the principal (an API key, or a member with their email, name and picture),\nthe grant, and the permissions it holds; for a member, the organization of the session\nand every organization of the user. Over the embedded server's socket: the operator of\nthe tenant `local`. Any caller, even a member without organization.",
+        "description": "The organization the caller acts in, the principal (an API key, or a member with their\nemail, name and picture), the grant, and the permissions it holds; for a member, the\norganization of the session and every organization of the user. Over the embedded\nserver's socket: the operator of the organization `local`. Any caller, even a member\nwithout organization.",
         "operationId": "whoami",
         "parameters": [
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -19801,7 +19801,7 @@
             }
           },
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -19894,7 +19894,7 @@
             }
           },
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -20048,7 +20048,7 @@
             }
           },
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -20160,7 +20160,7 @@
             }
           },
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -20304,7 +20304,7 @@
             }
           },
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -20428,7 +20428,7 @@
             }
           },
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -20552,7 +20552,7 @@
             }
           },
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -20696,7 +20696,7 @@
             }
           },
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -20820,7 +20820,7 @@
             }
           },
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,
@@ -20954,7 +20954,7 @@
             }
           },
           {
-            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "description": "The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Organization",
             "required": false,

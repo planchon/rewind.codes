@@ -111,8 +111,8 @@ fn tenant_state_of(caller: &Caller) -> OrganizationId {
 fn signed_in(who: &Who, what: &str) -> Result<SignedIn, ApiError> {
     who.member.clone().ok_or_else(|| {
         ApiError::forbidden(format!(
-            "only a member signed in on the dashboard may {what}: an API key belongs to its \
-             tenant, and has no email nor organizations"
+            "only a member signed in on the dashboard may {what}: an API key belongs to one \
+             organization, and has no email nor organizations"
         ))
     })
 }
@@ -325,8 +325,8 @@ pub(super) async fn update_organization(
         None => {
             let Some(found) = sign_in.identity.organization(&organization).await? else {
                 return Err(ApiError::not_found(format!(
-                    "the tenant {} is not an organization: only an organization has a name and \
-                     a default role",
+                    "{} is not an organization of the identity provider: only those have a name \
+                     and a default role",
                     caller.tenant
                 )));
             };

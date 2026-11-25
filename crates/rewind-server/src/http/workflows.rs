@@ -794,7 +794,7 @@ pub(crate) fn workflow_error(error: WorkflowError) -> ApiError {
         }
         WorkflowError::Secret(error) => error.into(),
         WorkflowError::ActionSetNotFound(digest) => ApiError::not_found(format!(
-            "no action set {digest} for this tenant: register it with POST /v1/action-sets"
+            "no action set {digest} in this organization: register it with POST /v1/action-sets"
         )),
         WorkflowError::InvalidCode(invalid) => {
             rewind_engine::StartError::InvalidCode(invalid).into()

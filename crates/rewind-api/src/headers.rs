@@ -31,10 +31,10 @@ pub const CONNECTION_TOKEN_PREFIX: &str = "rewind_ct_";
 /// repeat it, and naming another is `forbidden`.
 pub const NAMESPACE: &str = "Rewind-Namespace";
 
-/// The organization (the tenant) a connection's request acts in (`archi/06-storage-and-scale.md`,
-/// "Connections"): required on the tenant's data with a connection's token, which names no
-/// tenant; `forbidden` for an organization the connection does not open. Other callers may
-/// repeat their own tenant; naming another is `forbidden`.
+/// The organization a connection's request acts in (`archi/06-storage-and-scale.md`,
+/// "Connections"): required on the organization's data with a connection's token, which names
+/// no organization; `forbidden` for an organization the connection does not open. Other callers
+/// may repeat their own organization; naming another is `forbidden`.
 pub const ORGANIZATION: &str = "Rewind-Organization";
 
 /// On `POST /v1/runs`, `POST /v1/runs/{id}/fork` and `POST /v1/runs/{id}/signals/{name}`

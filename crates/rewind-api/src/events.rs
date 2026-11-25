@@ -58,7 +58,7 @@ pub enum Event {
         expires_at: Timestamp,
         mode: RunMode,
     },
-    /// The host ended the run.
+    /// The engine ended the run.
     RunAborted {
         reason: AbortReason,
     },

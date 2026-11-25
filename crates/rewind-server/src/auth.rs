@@ -251,8 +251,9 @@ impl Caller {
             }
             return Err(ApiError::forbidden(match &self.role {
                 None => format!(
-                    "{who} has no grant in the tenant {}, so no permission: this request needs \
-                     the permission `{permission}`. A grant gives a role to a key or a member",
+                    "{who} has no grant in the organization {}, so no permission: this request \
+                     needs the permission `{permission}`. A grant gives a role to a key or a \
+                     member",
                     self.tenant
                 ),
                 Some(role) => format!(
@@ -715,7 +716,7 @@ pub(crate) async fn tenant_credentials(app: &App, token: &str) -> Result<Credent
         });
     };
     let tenant = organization.tenant().map_err(|_| {
-        unauthorized("the access token's organization is not a valid tenant id: sign in again")
+        unauthorized("the access token names an invalid organization id: sign in again")
     })?;
     app.ensure_tenant(&tenant).await?;
     let caller = Caller::of(&app.store, tenant, Principal::from(&member.user)).await?;

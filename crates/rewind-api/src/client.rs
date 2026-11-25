@@ -158,9 +158,9 @@ impl Client {
         self.namespace.as_ref()
     }
 
-    /// The same client, acting in `organization` (a tenant's id): every request carries
-    /// `Rewind-Organization`. A connection's token needs it on the tenant's data; other callers
-    /// may repeat their own tenant.
+    /// The same client, acting in `organization` (an organization's id): every request carries
+    /// `Rewind-Organization`. A connection's token needs it on the organization's data; other
+    /// callers may repeat their own organization.
     pub fn with_organization(&self, organization: &str) -> Result<Self, Error> {
         let value = HeaderValue::from_str(organization)
             .map_err(|_| Error::invalid("organization", "it holds characters a header cannot"))?;
@@ -930,8 +930,8 @@ impl Client {
 
     /// `GET /organizations/{organization}/jwks.json`: the organization's public keys. The server
     /// answers it without authentication.
-    pub async fn jwks(&self, tenant: &str) -> Result<Jwks, Error> {
-        let request = self.request(Method::GET, routes::JWKS, &[tenant])?;
+    pub async fn jwks(&self, organization: &str) -> Result<Jwks, Error> {
+        let request = self.request(Method::GET, routes::JWKS, &[organization])?;
         self.json(request).await
     }
 
@@ -1016,9 +1016,9 @@ impl Client {
     }
 
     /// `PUT /v1/organizations/{organization}/quotas`: the operator only.
-    pub async fn put_ceiling(&self, tenant: &str, ceiling: &PutCeiling) -> Result<(), Error> {
+    pub async fn put_ceiling(&self, organization: &str, ceiling: &PutCeiling) -> Result<(), Error> {
         let request = self
-            .request(Method::PUT, routes::ORGANIZATION_QUOTAS, &[tenant])?
+            .request(Method::PUT, routes::ORGANIZATION_QUOTAS, &[organization])?
             .json(ceiling);
         self.empty(request).await
     }

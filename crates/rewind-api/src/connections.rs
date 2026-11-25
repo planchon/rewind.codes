@@ -105,7 +105,7 @@ pub struct ConnectionClient {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ConnectionOrganization {
-    /// `org_…`, the tenant.
+    /// `org_…`, its id.
     pub id: String,
     /// Its name; unknown on a server without the identity provider.
     pub name: Option<String>,

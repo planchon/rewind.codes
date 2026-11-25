@@ -414,7 +414,7 @@ export interface paths {
         };
         /**
          * List the action sets
-         * @description The action sets the tenant registered, by id, with their servers and action names.
+         * @description The action sets the organization registered, by id, with their servers and action names.
          */
         get: operations["listActionSets"];
         put?: never;
@@ -481,7 +481,7 @@ export interface paths {
         /**
          * Latency, errors and redeliveries per action
          * @description From the hourly counters, over a window of whole hours: per action, the calls of the runs of
-         *     a namespace or the tenant, filtered by the start of an action's name. The scope as
+         *     a namespace or the organization, filtered by the start of an action's name. The scope as
          *     `GET /v1/runs/stats` takes it.
          */
         get: operations["getActionStats"];
@@ -502,15 +502,15 @@ export interface paths {
         };
         /**
          * List the API keys
-         * @description The tenant's keys, without their secret, each with its role and allowed labels.
+         * @description The organization's keys, without their secret, each with its role and allowed labels.
          *     Requires `api_keys:read`.
          */
         get: operations["listApiKeys"];
         put?: never;
         /**
          * Create an API key
-         * @description With a name, a role and allowed labels. The operator may name another tenant. Requires
-         *     `api_keys:write`, and every permission of the role given.
+         * @description With a name, a role and allowed labels. The operator may name another organization.
+         *     Requires `api_keys:write`, and every permission of the role given.
          */
         post: operations["createApiKey"];
         delete?: never;
@@ -1340,8 +1340,8 @@ export interface paths {
         /**
          * Create an organization
          * @description For a member, even without organization: the organization in the identity provider with
-         *     the caller as a member, then its tenant and the caller's `owner` grant. Switch to it with
-         *     `POST /auth/session`.
+         *     the caller as a member, then its record in Rewind and the caller's `owner` grant. Switch
+         *     to it with `POST /auth/session`.
          */
         post: operations["createOrganization"];
         delete?: never;
@@ -1492,7 +1492,7 @@ export interface paths {
         /**
          * Failures grouped by cause
          * @description From the hourly counters, over a window of whole hours: the failed, cancelled and aborted
-         *     runs of a namespace or the tenant, ended in the window, grouped by fingerprint: across
+         *     runs of a namespace or the organization, ended in the window, grouped by fingerprint: across
          *     workflows, the runs that ended with the same error. The scope as `GET /v1/runs/stats` takes
          *     it.
          */
@@ -1513,11 +1513,11 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Statistics of the runs of a namespace or the tenant
+         * Statistics of the runs of a namespace or the organization
          * @description From the hourly counters, over a window of whole hours: counts by status, a series over
          *     time, durations and facets (status, workflow, namespace) of the runs started in the
          *     window; the runs waiting now by what they wait for, and the quarantined ones. The scope is
-         *     the tenant, or one namespace: a token's, the `Rewind-Namespace` header's, or a single
+         *     the organization, or one namespace: a token's, the `Rewind-Namespace` header's, or a single
          *     `namespace:` term of `q`.
          */
         get: operations["getRunStats"];
@@ -1661,7 +1661,7 @@ export interface paths {
         put?: never;
         /**
          * Give up a quarantined run
-         * @description The host ends it: `run_aborted` with `non_determinism`, or `internal` after repeated
+         * @description The engine ends it: `run_aborted` with `non_determinism`, or `internal` after repeated
          *     failures.
          */
         post: operations["giveUpRun"];
@@ -1955,10 +1955,11 @@ export interface paths {
         };
         /**
          * Who calls
-         * @description The tenant, the principal (an API key, or a member with their email, name and picture),
-         *     the grant, and the permissions it holds; for a member, the organization of the session
-         *     and every organization of the user. Over the embedded server's socket: the operator of
-         *     the tenant `local`. Any caller, even a member without organization.
+         * @description The organization the caller acts in, the principal (an API key, or a member with their
+         *     email, name and picture), the grant, and the permissions it holds; for a member, the
+         *     organization of the session and every organization of the user. Over the embedded
+         *     server's socket: the operator of the organization `local`. Any caller, even a member
+         *     without organization.
          */
         get: operations["whoami"];
         put?: never;
@@ -2354,7 +2355,7 @@ export interface components {
     schemas: {
         /** @enum {string} */
         AbortKind: "limit_exceeded" | "non_determinism" | "cancelled" | "invalid_code" | "internal";
-        /** @description Why the host ended a run (`run_aborted`). */
+        /** @description Why the engine ended a run (`run_aborted`). */
         AbortReason: {
             kind: components["schemas"]["AbortKind"];
             message: string;
@@ -2488,7 +2489,7 @@ export interface components {
             /** @description The workflows its workflows may start, sorted by name. */
             workflows?: components["schemas"]["PinnedWorkflow"][];
         };
-        /** @description `GET /v1/action-sets`: the action sets registered by the tenant, by id. */
+        /** @description `GET /v1/action-sets`: the action sets registered by the organization, by id. */
         ActionSetList: {
             actionSets: components["schemas"]["ActionSetSummary"][];
         };
@@ -2602,7 +2603,7 @@ export interface components {
             /** @description The role of the key's grant. */
             role: string;
         };
-        /** @description `GET /v1/api-keys`: the tenant's keys, revoked ones included, oldest first. */
+        /** @description `GET /v1/api-keys`: the organization's keys, revoked ones included, oldest first. */
         ApiKeyList: {
             keys: components["schemas"]["ApiKey"][];
         };
@@ -2655,7 +2656,7 @@ export interface components {
              */
             expiresAt: string;
             /**
-             * @description The organization of the session, the tenant `/v1` acts in. Absent without one:
+             * @description The organization of the session, the one `/v1` acts in. Absent without one:
              *     create one, or accept an invitation.
              */
             organizationId?: string | null;
@@ -2887,7 +2888,7 @@ export interface components {
              *     only the runs carrying them.
              */
             allowedLabels: components["schemas"]["Labels"];
-            /** @description `org_…`, the tenant. */
+            /** @description `org_…`, its id. */
             id: string;
             /** @description Its name; unknown on a server without the identity provider. */
             name?: string | null;
@@ -3068,7 +3069,7 @@ export interface components {
              *     organization is created with its first key.
              */
             organizationId?: string | null;
-            /** @description A built-in role, a role of the tenant, or `operator` (only from the operator). */
+            /** @description A built-in role, a role of the organization, or `operator` (only from the operator). */
             role: string;
         };
         /**
@@ -3624,7 +3625,7 @@ export interface components {
             /** @description The source's id. */
             run: string;
         };
-        /** @description What a principal holds in a tenant: a role, and optionally allowed labels. */
+        /** @description What a principal holds in an organization: a role, and optionally allowed labels. */
         Grant: {
             /** @description The principal only sees the runs carrying all these labels, and cannot administer. */
             allowedLabels?: components["schemas"]["Labels"];
@@ -3730,11 +3731,14 @@ export interface components {
         };
         /**
          * @description `GET /v1/whoami`: who calls, and what they may do. Over the embedded server's socket, which
-         *     takes no token: the operator of the tenant `local`.
+         *     takes no token: the operator of the organization `local`.
          */
         Identity: {
             grant?: components["schemas"]["Grant"] | null;
-            /** @description The deployment's operator: every permission in its tenant, and the keys of every tenant. */
+            /**
+             * @description The deployment's operator: every permission in its organization, and the keys of every
+             *     organization.
+             */
             operator: boolean;
             organization?: components["schemas"]["OrganizationSettings"] | null;
             /**
@@ -3936,7 +3940,10 @@ export interface components {
              * @description The last run created in it, or the last CPU time counted for it.
              */
             lastActiveAt: string;
-            /** @description The limits that apply: per quota, the namespace's exception, else the tenant's default. */
+            /**
+             * @description The limits that apply: per quota, the namespace's exception, else the organization's
+             *     default.
+             */
             limits: components["schemas"]["Quotas"];
             name: components["schemas"]["NamespaceName"];
             /** @description Its use of the month listed. */
@@ -3952,7 +3959,7 @@ export interface components {
         };
         /**
          * @description `GET /v1/organization/namespace-defaults`: the limits of every namespace without an
-         *     exception, and the tenant's ceiling with its use of the month.
+         *     exception, and the organization's ceiling with its use of the month.
          */
         NamespaceDefaults: {
             /** @description Set by the operator: the customer's offer, on its totals across namespaces. */
@@ -3960,7 +3967,7 @@ export interface components {
             defaults: components["schemas"]["Quotas"];
             /** @description The month, `2026-11`. */
             month: string;
-            /** @description The tenant's use of the month, across its namespaces. */
+            /** @description The organization's use of the month, across its namespaces. */
             usage: components["schemas"]["QuotaUsage"];
         };
         /** @description `GET /v1/namespaces/{name}`: one namespace, its use day by day, its alerts and its tokens. */
@@ -4005,7 +4012,7 @@ export interface components {
         /**
          * @description A namespace's name: the customer's own id for the end user. 1 to 128 ASCII letters, digits,
          *     `-`, `_`, `.`, `:` and `@`, case-sensitive, not starting with `rewind:`. `*` is not a name: it
-         *     stands for the tenant in the store's usage and alerts.
+         *     stands for the organization in the store's usage and alerts.
          * @example user_2fQ81
          */
         NamespaceName: string;
@@ -4051,9 +4058,9 @@ export interface components {
             /** @description `org_…`. */
             id: string;
         };
-        /** @description An organization: a tenant, with the same id. */
+        /** @description An organization, with the same id in Rewind and in the identity provider. */
         Organization: {
-            /** @description `org_01J…`, also the tenant's id. */
+            /** @description `org_01J…`, the identity provider's id. */
             id: string;
             name: string;
         };
@@ -4229,13 +4236,16 @@ export interface components {
             resource_name: string;
             scopes_supported: string[];
         };
-        /** @description `PUT /v1/organizations/{organization}/quotas`: the operator replaces a tenant's ceiling. */
+        /**
+         * @description `PUT /v1/organizations/{organization}/quotas`: the operator replaces an organization's
+         *     ceiling.
+         */
         PutCeiling: {
             ceiling: components["schemas"]["Quotas"];
         };
         /**
          * @description `PUT /v1/namespaces/{name}`: creates the namespace, or replaces its exceptions. A quota
-         *     absent from `exceptions` follows the tenant's default.
+         *     absent from `exceptions` follows the organization's default.
          */
         PutNamespace: {
             exceptions?: components["schemas"]["Quotas"];
@@ -4303,7 +4313,7 @@ export interface components {
             raisedAt: string;
             /**
              * Format: date-time
-             * @description When it was delivered to the tenant's subscriptions.
+             * @description When it was delivered to the organization's subscriptions.
              */
             sentAt?: string | null;
             /**
@@ -4351,11 +4361,11 @@ export interface components {
         };
         /**
          * @description Which limit a quota belongs to: the namespace's (its exception, else the default), or the
-         *     tenant's ceiling.
+         *     organization's ceiling.
          * @enum {string}
          */
         QuotaScope: "namespace" | "organization";
-        /** @description What a namespace, or the tenant, used in a calendar month. */
+        /** @description What a namespace, or the organization, used in a calendar month. */
         QuotaUsage: {
             /**
              * Format: int64
@@ -4376,9 +4386,9 @@ export interface components {
             workflows: number;
         };
         /**
-         * @description Limits, each optional: an absent one does not limit. The same shape serves a tenant's
-         *     defaults for every namespace, a namespace's exceptions, the limits that apply to a
-         *     namespace, and the tenant's ceiling, which bounds its totals.
+         * @description Limits, each optional: an absent one does not limit. The same shape serves an
+         *     organization's defaults for every namespace, a namespace's exceptions, the limits that apply
+         *     to a namespace, and the organization's ceiling, which bounds its totals.
          */
         Quotas: {
             /**
@@ -4910,7 +4920,7 @@ export interface components {
          *     header.
          */
         ServerInfo: {
-            /** @description `rewind server --embedded`: one tenant, `local`, on a unix socket without a key. */
+            /** @description `rewind server --embedded`: one organization, `local`, on a unix socket without a key. */
             embedded: boolean;
             /** @description The determinism epochs this server's executors support. New runs start under the last. */
             epochs: number[];
@@ -6878,7 +6888,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path?: never;
@@ -6886,7 +6896,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Every action set of the tenant. */
+            /** @description Every action set of the organization. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -6946,7 +6956,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path?: never;
@@ -7048,7 +7058,7 @@ export interface operations {
                 format?: "dts" | "prompt";
             };
             header?: {
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path: {
@@ -7133,7 +7143,7 @@ export interface operations {
                 limit?: number;
             };
             header?: {
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path: {
@@ -7214,7 +7224,7 @@ export interface operations {
             query?: {
                 /**
                  * @description The scope, as a query: one term `namespace:<name>` of one value, or nothing for the
-                 *     tenant. Any other term is refused with its position (`invalid-query`).
+                 *     organization. Any other term is refused with its position (`invalid-query`).
                  */
                 q?: string;
                 /** @description Only the actions of this group, their name's prefix (`github` for `github.list_issues`). */
@@ -7231,7 +7241,7 @@ export interface operations {
             header?: {
                 /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
                 "Rewind-Namespace"?: string;
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path?: never;
@@ -7299,7 +7309,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path?: never;
@@ -7307,7 +7317,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Every key of the tenant, revoked ones included. */
+            /** @description Every key of the organization, revoked ones included. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -7367,7 +7377,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path?: never;
@@ -7439,7 +7449,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path: {
@@ -7552,7 +7562,7 @@ export interface operations {
             header?: {
                 /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
                 "Rewind-Namespace"?: string;
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path?: never;
@@ -7631,7 +7641,7 @@ export interface operations {
             header?: {
                 /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
                 "Rewind-Namespace"?: string;
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path: {
@@ -7720,7 +7730,7 @@ export interface operations {
             header?: {
                 /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
                 "Rewind-Namespace"?: string;
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path: {
@@ -7814,7 +7824,7 @@ export interface operations {
             header?: {
                 /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
                 "Rewind-Namespace"?: string;
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path: {
@@ -7907,7 +7917,7 @@ export interface operations {
             header?: {
                 /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
                 "Rewind-Namespace"?: string;
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path: {
@@ -7992,7 +8002,7 @@ export interface operations {
             header?: {
                 /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
                 "Rewind-Namespace"?: string;
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path: {
@@ -8076,7 +8086,7 @@ export interface operations {
             header?: {
                 /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
                 "Rewind-Namespace"?: string;
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path?: never;
@@ -8146,7 +8156,7 @@ export interface operations {
             header?: {
                 /** @description The namespace (the end user) the request acts for. Required with a key or a member's token (400 without it); with an end user's token, its own namespace or nothing. */
                 "Rewind-Namespace"?: string | null;
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path?: never;
@@ -8650,7 +8660,7 @@ export interface operations {
                 limit?: number;
             };
             header?: {
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path?: never;
@@ -8721,7 +8731,7 @@ export interface operations {
                 month?: string;
             };
             header?: {
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path: {
@@ -8801,7 +8811,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path: {
@@ -8885,7 +8895,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path: {
@@ -8963,7 +8973,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path: {
@@ -9056,7 +9066,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path: {
@@ -9127,7 +9137,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path: {
@@ -9222,7 +9232,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path: {
@@ -9302,7 +9312,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path: {
@@ -9384,7 +9394,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path: {
@@ -9468,7 +9478,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path: {
@@ -9715,7 +9725,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path?: never;
@@ -9796,7 +9806,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path?: never;
@@ -9873,7 +9883,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path: {
@@ -9951,7 +9961,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path?: never;
@@ -10028,7 +10038,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path?: never;
@@ -10118,7 +10128,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path: {
@@ -10205,7 +10215,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path: {
@@ -10294,7 +10304,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path?: never;
@@ -10371,7 +10381,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path: {
@@ -10467,7 +10477,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path: {
@@ -10563,7 +10573,7 @@ export interface operations {
                 month?: string;
             };
             header?: {
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path?: never;
@@ -10631,7 +10641,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path?: never;
@@ -10703,7 +10713,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path?: never;
@@ -10772,11 +10782,11 @@ export interface operations {
             query?: {
                 /** @description The calendar month, `2026-11`; the current one by default. */
                 month?: string;
-                /** @description One namespace's alerts; every alert of the tenant without it. */
+                /** @description One namespace's alerts; every alert of the organization without it. */
                 namespace?: string;
             };
             header?: {
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path?: never;
@@ -10844,7 +10854,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path?: never;
@@ -10912,7 +10922,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path?: never;
@@ -10980,7 +10990,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path?: never;
@@ -11048,7 +11058,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path?: never;
@@ -11120,7 +11130,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path: {
@@ -11322,7 +11332,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description No such tenant. */
+            /** @description No such organization. */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -11363,7 +11373,7 @@ export interface operations {
             header?: {
                 /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
                 "Rewind-Namespace"?: string;
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path: {
@@ -11443,7 +11453,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path?: never;
@@ -11511,7 +11521,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path?: never;
@@ -11579,7 +11589,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path: {
@@ -11663,7 +11673,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path: {
@@ -11797,7 +11807,7 @@ export interface operations {
             header?: {
                 /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
                 "Rewind-Namespace"?: string;
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path?: never;
@@ -11869,7 +11879,7 @@ export interface operations {
                 "Idempotency-Key"?: string | null;
                 /** @description The namespace (the end user) the request acts for. Required with a key or a member's token (400 without it); with an end user's token, its own namespace or nothing. */
                 "Rewind-Namespace"?: string | null;
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path?: never;
@@ -11962,7 +11972,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The namespace or the tenant reached its `active_runs`, `runs_per_month` or `workflows` (`quota-exceeded`). */
+            /** @description The namespace or the organization reached its `active_runs`, `runs_per_month` or `workflows` (`quota-exceeded`). */
             429: {
                 headers: {
                     [name: string]: unknown;
@@ -11996,7 +12006,7 @@ export interface operations {
             query?: {
                 /**
                  * @description The scope, as a query: one term `namespace:<name>` of one value, or nothing for the
-                 *     tenant. Any other term is refused with its position (`invalid-query`).
+                 *     organization. Any other term is refused with its position (`invalid-query`).
                  */
                 q?: string;
                 /** @description Runs ended at or after this time, rounded down to the hour. No lower bound by default. */
@@ -12014,7 +12024,7 @@ export interface operations {
             header?: {
                 /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
                 "Rewind-Namespace"?: string;
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path?: never;
@@ -12083,7 +12093,7 @@ export interface operations {
             query?: {
                 /**
                  * @description The scope, as a query: one term `namespace:<name>` of one value, or nothing for the
-                 *     tenant. Any other term is refused with its position (`invalid-query`).
+                 *     organization. Any other term is refused with its position (`invalid-query`).
                  */
                 q?: string;
                 /** @description Runs started at or after this time, rounded down to the hour. No lower bound by default. */
@@ -12102,7 +12112,7 @@ export interface operations {
             header?: {
                 /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
                 "Rewind-Namespace"?: string;
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path?: never;
@@ -12178,7 +12188,7 @@ export interface operations {
             header?: {
                 /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
                 "Rewind-Namespace"?: string;
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path: {
@@ -12260,7 +12270,7 @@ export interface operations {
             header?: {
                 /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
                 "Rewind-Namespace"?: string;
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path: {
@@ -12340,7 +12350,7 @@ export interface operations {
             header?: {
                 /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
                 "Rewind-Namespace"?: string;
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path: {
@@ -12449,7 +12459,7 @@ export interface operations {
                 "Last-Event-ID"?: string | null;
                 /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
                 "Rewind-Namespace"?: string;
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path: {
@@ -12531,7 +12541,7 @@ export interface operations {
             header?: {
                 /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
                 "Rewind-Namespace"?: string;
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path: {
@@ -12618,7 +12628,7 @@ export interface operations {
             header?: {
                 /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
                 "Rewind-Namespace"?: string;
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path: {
@@ -12702,7 +12712,7 @@ export interface operations {
                 "Idempotency-Key"?: string | null;
                 /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
                 "Rewind-Namespace"?: string;
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path: {
@@ -12815,7 +12825,7 @@ export interface operations {
             header?: {
                 /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
                 "Rewind-Namespace"?: string;
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path: {
@@ -12906,7 +12916,7 @@ export interface operations {
             header?: {
                 /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
                 "Rewind-Namespace"?: string;
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path: {
@@ -12999,7 +13009,7 @@ export interface operations {
                 "Idempotency-Key"?: string | null;
                 /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
                 "Rewind-Namespace"?: string;
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path: {
@@ -13115,7 +13125,7 @@ export interface operations {
             header?: {
                 /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
                 "Rewind-Namespace"?: string;
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path: {
@@ -13195,7 +13205,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path?: never;
@@ -13263,7 +13273,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path: {
@@ -13347,7 +13357,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path: {
@@ -13425,7 +13435,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path: {
@@ -13505,7 +13515,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path?: never;
@@ -13573,7 +13583,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path?: never;
@@ -13639,7 +13649,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path?: never;
@@ -13647,7 +13657,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Every subscription of the tenant, without secrets. */
+            /** @description Every subscription of the organization, without secrets. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -13707,7 +13717,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path?: never;
@@ -13779,7 +13789,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path: {
@@ -13859,7 +13869,7 @@ export interface operations {
             header?: {
                 /** @description The namespace (the end user) the request acts for. Required with a key or a member's token (400 without it); with an end user's token, its own namespace or nothing. */
                 "Rewind-Namespace"?: string | null;
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path?: never;
@@ -13951,7 +13961,7 @@ export interface operations {
             header?: {
                 /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
                 "Rewind-Namespace"?: string;
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path: {
@@ -14031,7 +14041,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path: {
@@ -14109,7 +14119,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path?: never;
@@ -14209,7 +14219,7 @@ export interface operations {
             header?: {
                 /** @description The namespace (the end user) the request acts in: a name resolves in it first, then among the organization's workflows; a caller of a namespace sees its workflows and the organization's. */
                 "Rewind-Namespace"?: string | null;
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path?: never;
@@ -14279,7 +14289,7 @@ export interface operations {
             header?: {
                 /** @description The namespace (the end user) the request acts in: a name resolves in it first, then among the organization's workflows; a caller of a namespace sees its workflows and the organization's. */
                 "Rewind-Namespace"?: string | null;
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path?: never;
@@ -14389,7 +14399,7 @@ export interface operations {
             header?: {
                 /** @description The namespace (the end user) the request acts in: a name resolves in it first, then among the organization's workflows; a caller of a namespace sees its workflows and the organization's. */
                 "Rewind-Namespace"?: string | null;
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path: {
@@ -14471,7 +14481,7 @@ export interface operations {
             header?: {
                 /** @description The namespace (the end user) the request acts in: a name resolves in it first, then among the organization's workflows; a caller of a namespace sees its workflows and the organization's. */
                 "Rewind-Namespace"?: string | null;
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path: {
@@ -14575,7 +14585,7 @@ export interface operations {
             header?: {
                 /** @description The namespace (the end user) the request acts in: a name resolves in it first, then among the organization's workflows; a caller of a namespace sees its workflows and the organization's. */
                 "Rewind-Namespace"?: string | null;
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path: {
@@ -14666,7 +14676,7 @@ export interface operations {
             header?: {
                 /** @description The namespace (the end user) the request acts in: a name resolves in it first, then among the organization's workflows; a caller of a namespace sees its workflows and the organization's. */
                 "Rewind-Namespace"?: string | null;
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path: {
@@ -14757,7 +14767,7 @@ export interface operations {
             header?: {
                 /** @description The namespace (the end user) the request acts in: a name resolves in it first, then among the organization's workflows; a caller of a namespace sees its workflows and the organization's. */
                 "Rewind-Namespace"?: string | null;
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path: {
@@ -14866,7 +14876,7 @@ export interface operations {
             header?: {
                 /** @description The namespace a name resolves in first, and the runs recorded. */
                 "Rewind-Namespace"?: string | null;
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path: {
@@ -14952,7 +14962,7 @@ export interface operations {
             header?: {
                 /** @description The namespace (the end user) the request acts in: a name resolves in it first, then among the organization's workflows; a caller of a namespace sees its workflows and the organization's. */
                 "Rewind-Namespace"?: string | null;
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path: {
@@ -15047,7 +15057,7 @@ export interface operations {
             header?: {
                 /** @description The namespace (the end user) the request acts in: a name resolves in it first, then among the organization's workflows; a caller of a namespace sees its workflows and the organization's. */
                 "Rewind-Namespace"?: string | null;
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                /** @description The organization (`org_…`) a connection's request acts in: required on the organization's data with a connection's token (`rewind_ct_…`), which names no organization. Another caller may repeat its own organization; another is `forbidden`. */
                 "Rewind-Organization"?: string;
             };
             path: {

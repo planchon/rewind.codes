@@ -327,7 +327,7 @@ export function accessHandlers(world: World) {
       const caller = guard(world, request, "organization:write");
       if (caller instanceof Response) return caller;
       const org = access.organizations.find((o) => o.id === caller.tenant);
-      if (!org) return problem(404, "not-found", "This tenant is no organization.");
+      if (!org) return problem(404, "not-found", "No organization of the identity provider.");
       const body = await json<{ name?: string | null; defaultRole?: string | null }>(request);
       if (body instanceof Response) return body;
       if (body.name !== undefined && body.name !== null && !body.name.trim())

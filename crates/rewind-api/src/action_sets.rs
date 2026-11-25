@@ -359,7 +359,7 @@ pub struct SkippedOperation {
     pub reason: String,
 }
 
-/// `GET /v1/action-sets`: the action sets registered by the tenant, by id.
+/// `GET /v1/action-sets`: the action sets registered by the organization, by id.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ActionSetList {

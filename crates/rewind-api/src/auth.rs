@@ -126,7 +126,7 @@ pub enum AuthState {
         /// minute left.
         expires_at: Timestamp,
         person: Person,
-        /// The organization of the session, the tenant `/v1` acts in. Absent without one:
+        /// The organization of the session, the one `/v1` acts in. Absent without one:
         /// create one, or accept an invitation.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         organization_id: Option<String>,

@@ -124,8 +124,8 @@ invitation links it "sends": Ada (`ada@example.net`) owns Acme and reads in Glob
 only `agent:triage`, Margaret has no organization and an invitation to Globex, any other email
 meets the waitlist. "Continue with GitHub" signs in as Ada. A run goes on live, and the access
 tokens live 5 minutes, as WorkOS's: the event stream is closed at their expiry and resumed. Each
-run acts for an end user: of the tenant's 1,200 or so namespaces, bob is above his CPU quota and
-at his active runs, chen pays for more (exceptions), dana and user_7Kd02 passed 80 %, erin is
+run acts for an end user: of the organization's 1,200 or so namespaces, bob is above his CPU quota
+and at his active runs, chen pays for more (exceptions), dana and user_7Kd02 passed 80 %, erin is
 blocked. Every run is a run of a workflow: the organization's `triage` has three versions, whose
 suites inherit, add, replace and retire tests with reasons, its latest adding two tests recorded
 from runs, one of them from a namespace no caller may read (its `GET /v1/tests/{digest}` answers

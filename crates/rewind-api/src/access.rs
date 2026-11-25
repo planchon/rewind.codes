@@ -1,5 +1,5 @@
 //! Access (`archi/06-storage-and-scale.md`, "What the caller may do"): the catalog of
-//! permissions, the built-in roles, the roles and grants of a tenant, and API keys.
+//! permissions, the built-in roles, the roles and grants of an organization, and API keys.
 //!
 //! A principal (a member, an API key, an invitation) holds a grant; the grant gives a role and
 //! optionally allowed labels; the role is a set of [`Permission`]s. Every endpoint requires one
@@ -213,7 +213,7 @@ impl Permission {
             Permission::MembersManage => "Change a member's grant, and remove a member.",
             Permission::RolesRead => "List the roles and their permissions.",
             Permission::RolesWrite => "Create, change and delete the organization's own roles.",
-            Permission::ApiKeysRead => "List the tenant's API keys.",
+            Permission::ApiKeysRead => "List the organization's API keys.",
             Permission::ApiKeysWrite => "Create and revoke API keys.",
             Permission::OrganizationWrite => "Rename the organization and set its default role.",
             Permission::NamespacesRead => {
@@ -265,8 +265,8 @@ pub enum BuiltInRole {
     Reader,
 }
 
-/// The role of the deployment's operator: every permission in its own tenant, the keys of every
-/// tenant, and the stop of the embedded server. It is not a role of any organization.
+/// The role of the deployment's operator: every permission in its own organization, the keys of
+/// every organization, and the stop of the embedded server. It is not a role of any organization.
 pub const OPERATOR: &str = "operator";
 
 /// The role a member gets at their first session in an organization, unless the organization
@@ -361,7 +361,7 @@ impl fmt::Display for BuiltInRole {
 }
 
 /// The permissions of a role that is not stored: a built-in role's, or every permission for
-/// `operator`. `None` for any other name, a role of a tenant.
+/// `operator`. `None` for any other name, a role of an organization.
 pub fn fixed_permissions(role: &str) -> Option<&'static [Permission]> {
     if role == OPERATOR {
         return Some(&Permission::ALL);
@@ -476,7 +476,7 @@ pub struct PutRole {
     pub permissions: Vec<Permission>,
 }
 
-/// What a principal holds in a tenant: a role, and optionally allowed labels.
+/// What a principal holds in an organization: a role, and optionally allowed labels.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Grant {
@@ -519,7 +519,7 @@ pub struct CreateApiKey {
     pub organization_id: Option<String>,
     /// What the key is for.
     pub name: String,
-    /// A built-in role, a role of the tenant, or `operator` (only from the operator).
+    /// A built-in role, a role of the organization, or `operator` (only from the operator).
     pub role: String,
     /// The key only sees runs carrying all these labels: an agent's actions see only their own
     /// conversation's runs.
@@ -553,7 +553,7 @@ pub struct ApiKey {
     pub key: Option<String>,
 }
 
-/// `GET /v1/api-keys`: the tenant's keys, revoked ones included, oldest first.
+/// `GET /v1/api-keys`: the organization's keys, revoked ones included, oldest first.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ApiKeyList {

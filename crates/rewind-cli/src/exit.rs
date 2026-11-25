@@ -14,7 +14,7 @@ pub enum Exit {
     Failed,
     /// The run was cancelled.
     Cancelled,
-    /// The run was aborted by the host.
+    /// The run was aborted by the engine.
     Aborted,
     /// The run is still waiting: `--wait` elapsed, or it waits for the outside world.
     Waiting,

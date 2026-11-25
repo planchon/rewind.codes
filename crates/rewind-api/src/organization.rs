@@ -1,7 +1,7 @@
 //! The organization (`archi/06-storage-and-scale.md`, "Tenancy, identity and access"): who
 //! calls, the organizations, their members and invitations.
 //!
-//! A tenant is an organization of the identity provider, with the same id. The provider holds
+//! An organization is the identity provider's, with the same id in Rewind. The provider holds
 //! the users, organizations, memberships and invitations; what a member or an invitation may do
 //! is its [`Grant`], kept by Rewind.
 
@@ -28,11 +28,11 @@ pub struct Person {
     pub picture_url: Option<String>,
 }
 
-/// An organization: a tenant, with the same id.
+/// An organization, with the same id in Rewind and in the identity provider.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Organization {
-    /// `org_01J…`, also the tenant's id.
+    /// `org_01J…`, the identity provider's id.
     pub id: String,
     pub name: String,
 }
@@ -76,8 +76,8 @@ pub enum Principal {
         expires_at: Timestamp,
     },
     /// A person's connection (`rewind_ct_…`): an MCP client acting for the person, in the
-    /// organizations it opens. With `Rewind-Organization`, the identity's tenant, grant and
-    /// permissions are the connection's there.
+    /// organizations it opens. With `Rewind-Organization`, the identity's organization, grant
+    /// and permissions are the connection's there.
     Connection {
         /// `cn_…`.
         id: String,
@@ -97,7 +97,7 @@ pub enum TokenKind {
 }
 
 /// `GET /v1/whoami`: who calls, and what they may do. Over the embedded server's socket, which
-/// takes no token: the operator of the tenant `local`.
+/// takes no token: the operator of the organization `local`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Identity {
@@ -108,13 +108,14 @@ pub struct Identity {
     /// Absent over the embedded server's socket.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub principal: Option<Principal>,
-    /// The caller's grant in the tenant. Absent for a member without one, who gets 403 on the
-    /// tenant's data.
+    /// The caller's grant in the organization. Absent for a member without one, who gets 403 on
+    /// the organization's data.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grant: Option<Grant>,
     /// What the grant's role allows, in the catalog's order.
     pub permissions: Vec<Permission>,
-    /// The deployment's operator: every permission in its tenant, and the keys of every tenant.
+    /// The deployment's operator: every permission in its organization, and the keys of every
+    /// organization.
     pub operator: bool,
     /// For a member: the organization of the session.
     #[serde(default, skip_serializing_if = "Option::is_none")]

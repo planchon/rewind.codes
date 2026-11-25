@@ -160,7 +160,7 @@ pub struct Run {
     /// With `failed` or `cancelled`: how the code failed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<ErrorInfo>,
-    /// With `aborted`: why the host ended the run.
+    /// With `aborted`: why the engine ended the run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub abort: Option<AbortReason>,
     /// With `waiting`: what the run waits for.
@@ -492,8 +492,8 @@ pub struct RunWait {
 /// (`archi/05-testing-and-observability.md`, "Statistics").
 ///
 /// The statistics routes (`GET /v1/runs/stats`, `GET /v1/runs/failures`, `GET /v1/workflows`,
-/// `GET /v1/actions/stats`) take a scope and a window only. The scope is the caller's tenant, or
-/// one namespace: a token's, the `Rewind-Namespace` header's, or the one `q` names with a single
+/// `GET /v1/actions/stats`) take a scope and a window only. The scope is the caller's organization,
+/// or one namespace: a token's, the `Rewind-Namespace` header's, or the one `q` names with a single
 /// `namespace:` term. The window is made of whole hours in UTC: its bounds are rounded out to the
 /// hour. A grant or a token limited to labels reads none of them (`forbidden`): counters do not
 /// know labels.
@@ -502,7 +502,7 @@ pub struct RunWait {
 #[into_params(parameter_in = Query)]
 pub struct RunStatsQuery {
     /// The scope, as a query: one term `namespace:<name>` of one value, or nothing for the
-    /// tenant. Any other term is refused with its position (`invalid-query`).
+    /// organization. Any other term is refused with its position (`invalid-query`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub q: Option<String>,
     /// Runs started at or after this time, rounded down to the hour. No lower bound by default.
@@ -644,7 +644,7 @@ pub struct LabelFacet {
 #[into_params(parameter_in = Query)]
 pub struct FailureQuery {
     /// The scope, as a query: one term `namespace:<name>` of one value, or nothing for the
-    /// tenant. Any other term is refused with its position (`invalid-query`).
+    /// organization. Any other term is refused with its position (`invalid-query`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub q: Option<String>,
     /// Runs ended at or after this time, rounded down to the hour. No lower bound by default.

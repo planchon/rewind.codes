@@ -17,7 +17,7 @@ use crate::common::Timestamp;
 #[into_params(parameter_in = Query)]
 pub struct ActionStatsFilter {
     /// The scope, as a query: one term `namespace:<name>` of one value, or nothing for the
-    /// tenant. Any other term is refused with its position (`invalid-query`).
+    /// organization. Any other term is refused with its position (`invalid-query`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub q: Option<String>,
     /// Only the actions of this group, their name's prefix (`github` for `github.list_issues`).

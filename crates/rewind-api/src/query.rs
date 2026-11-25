@@ -5,7 +5,7 @@
 //! (`@agent:triage`), a field (`status:failed,aborted`, `started:>now-24h`) or text (`refund`,
 //! `"rate limit"`); a leading `-` excludes, a comma inside a term means "or". [`parse`] reads a
 //! query into typed terms, or says which term is wrong and where, for a client to underline it.
-//! The server resolves `now` and limits the query to the caller's tenant and labels.
+//! The server resolves `now` and limits the query to the caller's organization and labels.
 
 use std::fmt;
 use std::ops::Bound;

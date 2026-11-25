@@ -25,7 +25,7 @@ pub(super) async fn payload(
 ) -> Result<Response, ApiError> {
     caller.require(Permission::RunsRead)?;
     let parsed = Digest::from_hex(&digest)
-        .map_err(|_| ApiError::not_found(format!("no payload {digest} for this tenant")))?;
+        .map_err(|_| ApiError::not_found(format!("no payload {digest} in this organization")))?;
     let run = &query.run;
     let view = app.run(&caller, run).await?;
     let value = app

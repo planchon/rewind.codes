@@ -536,7 +536,7 @@ impl From<rewind_core::ActionFailureKind> for ActionFailureKind {
     }
 }
 
-/// Why the host ended a run (`run_aborted`).
+/// Why the engine ended a run (`run_aborted`).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct AbortReason {

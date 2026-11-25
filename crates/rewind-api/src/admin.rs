@@ -19,7 +19,7 @@ pub struct ServerInfo {
     pub partitions: u16,
     /// The nodes of the deployment alive now, executors-only nodes included.
     pub nodes: u32,
-    /// `rewind server --embedded`: one tenant, `local`, on a unix socket without a key.
+    /// `rewind server --embedded`: one organization, `local`, on a unix socket without a key.
     pub embedded: bool,
     /// Time is virtual: timers fire as soon as nothing else can advance.
     pub virtual_time: bool,

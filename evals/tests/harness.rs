@@ -392,7 +392,7 @@ async fn a_script_refused_first_counts_against_the_first_try() {
     let record = &episode.record;
     assert_eq!(record.first_check, Some(false));
     assert_eq!(
-        (record.scripts, record.refused, record.iterations),
+        (record.workflows, record.refused, record.iterations),
         (2, 1, 3)
     );
     let Turn::ToolResults { results } = &episode.turns[2] else {

@@ -154,7 +154,7 @@ pub enum Webhook {
         timestamp: Timestamp,
         data: RunWebhook,
     },
-    /// The host ended the run: `data.run.abort` says why.
+    /// The engine ended the run: `data.run.abort` says why.
     #[serde(rename = "run.aborted")]
     RunAborted {
         timestamp: Timestamp,
@@ -187,7 +187,7 @@ pub enum Webhook {
         timestamp: Timestamp,
         data: SecretExpired,
     },
-    /// A namespace, or the tenant (`namespace` null), crossed 80 % or 100 % of a limit; for
+    /// A namespace, or the organization (`namespace` null), crossed 80 % or 100 % of a limit; for
     /// `active_runs`, a first refusal of the month. Sent once per namespace, quota, month and
     /// threshold; its `webhook-id` is `quota.alert:{namespace or *}:{quota}:{period}:{threshold}`.
     #[serde(rename = "quota.alert")]

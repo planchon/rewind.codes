@@ -125,8 +125,8 @@ function headline(run: Run, limits: Limits): string {
       return `${name} was cancelled.`;
     case "aborted":
       return run.abort
-        ? `${name} was aborted by the host (${run.abort.kind}): ${truncateEnd(run.abort.message, limits.value)}`
-        : `${name} was aborted by the host.`;
+        ? `${name} was aborted by the engine (${run.abort.kind}): ${truncateEnd(run.abort.message, limits.value)}`
+        : `${name} was aborted by the engine.`;
     case "queued":
       return `${name} is queued: it has not started executing yet.`;
     case "running":

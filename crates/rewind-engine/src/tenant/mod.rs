@@ -225,7 +225,7 @@ impl<P: Plane> TenantActor<P> {
                             out.push(reply_admission(
                                 reply,
                                 Err(Refusal::Unavailable(format!(
-                                    "the tenant's limits could not be read: {error}"
+                                    "the organization's limits could not be read: {error}"
                                 ))),
                             ));
                         }

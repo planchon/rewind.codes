@@ -78,8 +78,8 @@ pub(super) async fn create_key(
     };
     if tenant != caller.tenant && !caller.operator() {
         return Err(ApiError::forbidden(format!(
-            "only the deployment's operator creates keys in another tenant: leave `tenant` out \
-             to create a key of {}",
+            "only the deployment's operator creates keys in another organization: leave \
+             `organizationId` out to create a key of {}",
             caller.tenant
         )));
     }
@@ -98,8 +98,8 @@ pub(super) async fn create_key(
     }
     let Some(permissions) = role_permissions(&app.store, &tenant, &request.role).await? else {
         return Err(ApiError::invalid(format!(
-            "role: no role {:?} in the tenant {tenant}: expected owner, harness, worker, reader \
-             or a role of the tenant",
+            "role: no role {:?} in the organization {tenant}: expected owner, harness, worker, \
+             reader or a role of the organization",
             request.role
         )));
     };
@@ -155,8 +155,8 @@ pub(super) async fn revoke_key(
     caller.require(Permission::ApiKeysWrite)?;
     let missing = || {
         ApiError::not_found(format!(
-            "no API key {id} in this tenant, or it is already revoked: GET /v1/api-keys lists \
-             the tenant's keys"
+            "no API key {id} in this organization, or it is already revoked: GET /v1/api-keys \
+             lists the organization's keys"
         ))
     };
     let hash = Digest::from_hex(&id).map_err(|_| missing())?;

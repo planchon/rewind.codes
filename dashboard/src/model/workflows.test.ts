@@ -108,7 +108,7 @@ describe("workflows in a history", () => {
       .call(3, "workflows.triage.start", { input: { repo: "acme/web" } }, 4)
       .ok(1, { runId: CHILD })
       .ok(2, { runId: OTHER })
-      .fail(3, "unavailable", "the tenant has its maximum of active runs")
+      .fail(3, "unavailable", "the organization has its maximum of active runs")
       .awaitSignal(`rewind:ended:${CHILD}`, 6)
       .signal(`rewind:ended:${CHILD}`, {
         status: "failed",
