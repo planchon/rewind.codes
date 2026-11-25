@@ -294,6 +294,16 @@ impl Legacy {
     }
 }
 
+impl Legacy {
+    /// Whether a run still waits in the set-aside tables, read whatever the schema's version.
+    pub(crate) async fn holds_runs(&self) -> Result<bool, LegacyError> {
+        match self {
+            Self::Postgres(legacy) => legacy.holds_runs().await,
+            Self::Turso(legacy) => legacy.holds_runs().await,
+        }
+    }
+}
+
 impl LegacyRuns for Legacy {
     async fn runs(
         &self,

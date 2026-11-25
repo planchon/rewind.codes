@@ -7,7 +7,9 @@
 //! again. The fixtures are as a build of schema version 12 (Postgres) and 10 (Turso) left them,
 //! their documents as `rename-data` writes them: the server runs the migrations that give runs
 //! their handles, those of the run plane and of the workflow model; between the move and the
-//! server, `rename-data`'s step gives every run a workflow.
+//! server, `rename-data`'s step gives every run a workflow. `rename-data` checks a deployment the
+//! build before the rename release left (Postgres 15, Turso 13) on that schema, and migrates it
+//! only once no node serves it and no run waits in the set-aside tables, never in a dry run.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -736,4 +738,253 @@ async fn the_runs_of_a_postgres_database_move_into_the_partitions_and_the_archiv
         "{refused}"
     );
     running.stop().await;
+}
+
+/// The schema of the Postgres database: its latest migration, and whether the names the build
+/// before the rename release used are still there (`partitions.epoch`, `toolsets`).
+fn postgres_schema(postgres: &Postgres) -> (String, String, String) {
+    (
+        postgres.psql_scalar("SELECT max(version) FROM _sqlx_migrations WHERE success"),
+        postgres.psql_scalar(
+            "SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public' \
+             AND table_name = 'partitions' AND column_name = 'epoch'",
+        ),
+        postgres.psql_scalar("SELECT to_regclass('toolsets') IS NOT NULL"),
+    )
+}
+
+/// The production incident of 25 November 2026: `rename-data` ran as a pre-deploy command while
+/// the node of the build before served, and its open migrated the schema under that node, which
+/// then failed on `partitions.generation`. On the schema that build left, a refusal (a node
+/// serves, runs wait in `legacy`) and a dry run leave every name as it was; once the deployment is
+/// ready, `rename-data` migrates the schema and renames.
+#[tokio::test(flavor = "multi_thread")]
+async fn rename_data_checks_a_postgres_deployment_before_it_migrates_the_schema() {
+    use rewind_engine::ports::cluster::Membership as _;
+    use rewind_engine::ports::{Cluster as _, NodeId, NodeInfo};
+
+    let Some(postgres) = Postgres::start() else {
+        return;
+    };
+    postgres.load(&fixture("postgres/dump.sql"));
+    let store = rewind_store_postgres::PostgresStore::connect_as_is(
+        &rewind_store_postgres::Config::new(postgres.url()),
+        rewind_store_postgres::MasterKey::from_bytes([9; 32]),
+    )
+    .await
+    .unwrap();
+    store.migrate_to(15).await.unwrap();
+    let previous = ("15".to_owned(), "1".to_owned(), "t".to_owned());
+    assert_eq!(postgres_schema(&postgres), previous);
+
+    let temp = tempfile::tempdir().unwrap();
+    let bucket = temp.path().join("bucket");
+    std::fs::create_dir_all(&bucket).unwrap();
+    let (url, bucket, key) = (postgres.url(), bucket.display().to_string(), master_key());
+    let args = |dry_run: bool| {
+        let mut args = vec![
+            "rewind server rename-data",
+            "--store",
+            &url,
+            "--bucket",
+            &bucket,
+            "--partitions",
+            "4",
+            "--master-key",
+            &key,
+            "--cluster-secret",
+            CLUSTER_SECRET,
+        ];
+        if dry_run {
+            args.push("--dry-run");
+        }
+        RenameArgs::try_parse_from(args).unwrap()
+    };
+
+    // A node of the build before serves: it joined the cluster and holds its liveness lock.
+    let cluster =
+        rewind_store_postgres::PostgresCluster::open(&store, std::num::NonZeroU16::new(4).unwrap())
+            .await
+            .unwrap();
+    let node = cluster
+        .join(NodeInfo {
+            id: NodeId::new("node").unwrap(),
+            address: "127.0.0.1:1".into(),
+            build: "the build before the rename release".into(),
+            epochs: [rewind_core::Epoch(1)].into(),
+            pool: None,
+            executors_only: false,
+        })
+        .await
+        .unwrap();
+    let refused = rename_data(args(false)).await.unwrap_err();
+    assert!(
+        refused
+            .to_string()
+            .contains("the node(s) node serve the deployment"),
+        "{refused}"
+    );
+    assert_eq!(
+        postgres_schema(&postgres),
+        previous,
+        "the serving node still reads its schema"
+    );
+    let refused = rename_data(args(true)).await.unwrap_err();
+    assert!(
+        refused
+            .to_string()
+            .contains("a dry run applies no migration"),
+        "{refused}"
+    );
+    assert_eq!(
+        postgres_schema(&postgres),
+        previous,
+        "a dry run migrates nothing"
+    );
+    node.leave().await.unwrap();
+
+    // The node stopped; the fixture's runs wait in `legacy`.
+    let refused = rename_data(args(false)).await.unwrap_err();
+    assert!(refused.to_string().contains("runs still wait"), "{refused}");
+    assert_eq!(postgres_schema(&postgres), previous);
+    let refused = rename_data(args(true)).await.unwrap_err();
+    assert!(
+        refused
+            .to_string()
+            .contains("a dry run applies no migration"),
+        "{refused}"
+    );
+    assert_eq!(postgres_schema(&postgres), previous);
+
+    // Once the build before moved them (its `migrate-runs` drops `legacy`), rename-data migrates
+    // the schema, renames, and a dry run on the migrated schema finds nothing left.
+    store.legacy().drop_tables().await.unwrap();
+    store.close().await;
+    let report = rename_data(args(false)).await.unwrap();
+    assert!(report.workflows.is_some(), "{report:?}");
+    assert_eq!(
+        postgres_schema(&postgres),
+        ("17".to_owned(), "0".to_owned(), "f".to_owned())
+    );
+    let dry = rename_data(args(true)).await.unwrap();
+    assert!(dry.dry_run && !dry.changed(), "{dry:?}");
+}
+
+/// The schema of an embedded `control.db`: its version, and whether the names the build before
+/// the rename release used are still there (`partitions.epoch`, `toolsets`).
+async fn turso_schema(path: &Path) -> (u32, bool, bool) {
+    let store = rewind_store_turso::TursoStore::open_as_is(
+        path,
+        rewind_store_turso::MasterKey::from_bytes([9; 32]),
+    )
+    .await
+    .unwrap();
+    let version = store.schema_version().await.unwrap();
+    drop(store);
+    let database = turso::Builder::new_local(path.to_str().unwrap())
+        .build()
+        .await
+        .unwrap();
+    let connection = database.connect().unwrap();
+    let mut rows = connection
+        .query(
+            "SELECT name, sql FROM sqlite_master WHERE type = 'table' \
+             AND name IN ('partitions', 'toolsets')",
+            (),
+        )
+        .await
+        .unwrap();
+    let (mut epoch, mut toolsets) = (false, false);
+    while let Some(row) = rows.next().await.unwrap() {
+        let name = row.get::<String>(0).unwrap();
+        let sql = row.get::<String>(1).unwrap();
+        toolsets |= name == "toolsets";
+        epoch |= name == "partitions" && sql.contains("epoch");
+    }
+    (version, epoch, toolsets)
+}
+
+/// The same on an embedded directory, whose `control.db` the build before the rename release left
+/// at version 13: a refusal (an embedded server holds the directory, runs wait in the tables
+/// `legacy_*`) and a dry run leave every name as it was; once the directory is ready,
+/// `rename-data --embedded` migrates the schema and renames.
+#[tokio::test(flavor = "multi_thread")]
+async fn rename_data_checks_an_embedded_directory_before_it_migrates_the_schema() {
+    use fs4::fs_std::FileExt as _;
+
+    let temp = tempfile::tempdir().unwrap();
+    let dir = temp.path().join(".rewind");
+    copy_tree(&fixture("embedded/rewind"), &dir);
+    let control = dir.join("control.db");
+    std::fs::rename(dir.join("journal.db"), &control).unwrap();
+    let open = || {
+        rewind_store_turso::TursoStore::open_as_is(
+            &control,
+            rewind_store_turso::MasterKey::from_bytes([9; 32]),
+        )
+    };
+    let store = open().await.unwrap();
+    store.migrate_to(13).await.unwrap();
+    drop(store);
+    let previous = (13, true, true);
+    assert_eq!(turso_schema(&control).await, previous);
+
+    let dir_text = dir.display().to_string();
+    let args = |dry_run: bool| {
+        let mut args = vec![
+            "rewind server rename-data",
+            "--embedded",
+            "--dir",
+            &dir_text,
+        ];
+        if dry_run {
+            args.push("--dry-run");
+        }
+        RenameArgs::try_parse_from(args).unwrap()
+    };
+
+    // An embedded server serves the directory: it holds `server.lock`.
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(dir.join("server.lock"))
+        .unwrap();
+    assert!(lock.try_lock_exclusive().unwrap());
+    for dry_run in [false, true] {
+        let refused = rename_data(args(dry_run)).await.unwrap_err();
+        assert_eq!(rewind_server::exit_code(&refused), 75, "{refused}");
+        assert_eq!(turso_schema(&control).await, previous);
+    }
+    drop(lock);
+
+    // The server stopped; the fixture's runs wait in `legacy_*`.
+    let refused = rename_data(args(false)).await.unwrap_err();
+    assert!(refused.to_string().contains("runs still wait"), "{refused}");
+    assert_eq!(turso_schema(&control).await, previous);
+    let refused = rename_data(args(true)).await.unwrap_err();
+    assert!(
+        refused
+            .to_string()
+            .contains("a dry run applies no migration"),
+        "{refused}"
+    );
+    assert_eq!(
+        turso_schema(&control).await,
+        previous,
+        "a dry run migrates nothing"
+    );
+
+    // Once the build before moved them, rename-data migrates the schema and renames.
+    let store = open().await.unwrap();
+    store.legacy().drop_tables().await.unwrap();
+    drop(store);
+    let report = rename_data(args(false)).await.unwrap();
+    assert!(report.workflows.is_some(), "{report:?}");
+    assert_eq!(
+        turso_schema(&control).await,
+        (rewind_store_turso::SCHEMA_VERSION, false, false)
+    );
+    let dry = rename_data(args(true)).await.unwrap();
+    assert!(dry.dry_run && !dry.changed(), "{dry:?}");
 }

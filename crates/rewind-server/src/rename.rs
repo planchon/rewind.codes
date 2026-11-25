@@ -8,9 +8,13 @@
 //! rewind server rename-data [--dry-run] --embedded [--dir .rewind]
 //! ```
 //!
-//! It opens the control plane, whose schema migration renames what SQL can rename (tables,
-//! columns, principals, permissions, subscriptions), and refuses to go on while a node serves the
-//! deployment or runs still wait in the tables `migrate-runs` moves. Then, in order:
+//! It opens the control plane as it is and checks the deployment on the schema it finds, before
+//! it migrates anything: the schema is the one the build before the rename release left (Postgres
+//! 15, Turso 13) or a later one of this build, no node serves the deployment (an embedded server
+//! holds its directory's lock), and no run waits in the tables `migrate-runs` moves. A refusal
+//! leaves the schema as it was, so a node of the build before that still serves goes on serving.
+//! Then it migrates the schema, which renames what SQL can rename (tables, columns, principals,
+//! permissions, subscriptions), and, in order:
 //!
 //! ```text
 //! the partitions, read          ─► each run: its code, action set, secrets, labels, version,
@@ -25,7 +29,9 @@
 //!
 //! A code's text is never rewritten, nor the prefixes `rewind_wh_` and `rewind_tk_`, nor the
 //! handles given. Run again, it finds every record in the new names and changes nothing, and says
-//! so. `--dry-run` reads everything, counts what it would change by kind, and writes nothing.
+//! so. `--dry-run` applies no migration and writes nothing: it reads the catalog in this build's
+//! schema, so on a schema not migrated yet it refuses and says so; on a migrated one it reads
+//! everything and counts what it would change, by kind.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
@@ -37,11 +43,9 @@ use rewind_core::{
     WorkflowVersion,
 };
 use rewind_engine::adapters::{SystemClock, SystemEntropy};
-use rewind_engine::ports::cluster::Membership;
-use rewind_engine::ports::legacy::LegacyRuns;
 use rewind_engine::ports::{
-    ActionDeclarations, BlobOwner, BlobStore, CatalogDocuments, Clock, Cluster, NamespaceName,
-    NodeId, NodeInfo, PartitionLog, PartitionStore, TenantId,
+    ActionDeclarations, BlobOwner, BlobStore, CatalogDocuments, Clock, NamespaceName, NodeId,
+    PartitionLog, PartitionStore, TenantId,
 };
 use rewind_engine::rename::{CodeUse, DroppedTitle, WorkflowsRenamed};
 use rewind_format::rename::{PinnedVersion, Renames};
@@ -57,6 +61,14 @@ use crate::serve::StartupError;
 use crate::wiring::bucket::{self, Archives};
 use crate::wiring::control::ControlPlane;
 
+/// The schema version the build before the rename release left on Postgres: its nodes in `nodes`
+/// (version 14), its set-aside runs in the schema `legacy` (version 15).
+const POSTGRES_BEFORE_RELEASE: i64 = 15;
+
+/// The schema version the build before the rename release left on Turso: its set-aside runs in
+/// the tables `legacy_*`.
+const TURSO_BEFORE_RELEASE: i64 = 13;
+
 /// `rewind server rename-data`.
 #[derive(Debug, Clone, Parser)]
 #[command(
@@ -64,11 +76,13 @@ use crate::wiring::control::ControlPlane;
     about = "Rewrites, once, what the deployment stored under the names it had before the rename \
              release: the partitions and the archive, the catalog's action sets, workflow \
              versions and tests (each with its new digest), every run's workflow. Run it while no \
-             node serves, after `migrate-runs`. Run again, it changes nothing.",
+             node serves, after `migrate-runs`: it checks both before it migrates the schema. Run \
+             again, it changes nothing.",
     version
 )]
 pub struct RenameArgs {
-    /// Read everything and print what would change, by kind, without writing anything.
+    /// Read everything and print what would change, by kind, without writing anything: no
+    /// schema migration either, so the database must have this build's schema already.
     #[arg(long)]
     pub dry_run: bool,
 
@@ -225,6 +239,8 @@ fn print(report: &RenameReport) {
 pub async fn rename_data(args: RenameArgs) -> Result<RenameReport, StartupError> {
     let RenameArgs { dry_run, server } = args;
     if server.embedded {
+        // An embedded server that serves the directory holds its lock: taking it is the first
+        // check, before the database is opened.
         let dir = server.dir.clone();
         let directory = Directory::open(&dir)?;
         if dir.join("journal.db").exists() {
@@ -237,18 +253,32 @@ pub async fn rename_data(args: RenameArgs) -> Result<RenameReport, StartupError>
         }
         let config = server.resolve()?;
         let keys = MasterKeyRing::new(directory.master_key);
-        let store = ControlPlane::open(&config.store, &keys).await?;
-        let report = renamed(&store, &config, dry_run).await;
-        store.close().await;
-        return report;
+        return checked(&config, &keys, dry_run).await;
     }
     let config = server.resolve()?;
     let keys = config
         .master_keys
         .clone()
         .ok_or_else(|| StartupError::Config("rename-data needs --master-key".into()))?;
-    let store = ControlPlane::open(&config.store, &keys).await?;
-    let report = renamed(&store, &config, dry_run).await;
+    checked(&config, &keys, dry_run).await
+}
+
+/// Opens the control plane as it is, checks the deployment on that schema, migrates it (not in a
+/// dry run), then renames.
+async fn checked(
+    config: &crate::config::Config,
+    keys: &MasterKeyRing,
+    dry_run: bool,
+) -> Result<RenameReport, StartupError> {
+    let store = ControlPlane::open_as_is(&config.store, keys).await?;
+    let report = async {
+        ready(&store, config, dry_run).await?;
+        if !dry_run {
+            store.migrate().await.map_err(setup)?;
+        }
+        renamed(&store, config, dry_run).await
+    }
+    .await;
     store.close().await;
     report
 }
@@ -257,46 +287,62 @@ fn setup(error: impl std::fmt::Display) -> StartupError {
     StartupError::Setup(error.to_string())
 }
 
-/// Refuses a deployment a node serves, or whose old tables still hold runs.
-async fn ready(store: &ControlPlane, config: &crate::config::Config) -> Result<(), StartupError> {
-    let legacy = Legacy::of(store)?;
-    match legacy.runs(None, 1).await {
-        Ok(runs) if runs.is_empty() => {}
-        Ok(_) | Err(_) => {
-            return Err(setup(
-                "runs still wait in the tables `migrate-runs` moves: move them with \
-                 `rewind server migrate-runs` of the build before the rename release first",
-            ));
-        }
+/// Checks the deployment on its schema as it is, before anything is migrated or written: the
+/// schema is the build's before the rename release or a later one of this build (and, for a dry
+/// run, which migrates nothing, this build's), no node serves the deployment, and no run waits in
+/// the tables `migrate-runs` moves.
+async fn ready(
+    store: &ControlPlane,
+    config: &crate::config::Config,
+    dry_run: bool,
+) -> Result<(), StartupError> {
+    let schema = store.schema_version().await.map_err(setup)?;
+    if schema.found > schema.build {
+        return Err(setup(format!(
+            "the database has schema version {}, newer than this build's {}: it was migrated by \
+             a newer build",
+            schema.found, schema.build
+        )));
     }
-    let cluster = store
-        .cluster(config.partitions, &config.cluster_database)
+    let before_release = match store {
+        ControlPlane::Postgres(_) => POSTGRES_BEFORE_RELEASE,
+        ControlPlane::Turso(_) => TURSO_BEFORE_RELEASE,
+        ControlPlane::Memory(_) => 0,
+    };
+    if schema.found > 0 && schema.found < before_release {
+        return Err(setup(format!(
+            "the database has schema version {}, older than the build before the rename \
+             release's ({before_release}): deploy that build and move the runs with its \
+             `rewind server migrate-runs` first",
+            schema.found
+        )));
+    }
+    if dry_run && schema.found != schema.build {
+        return Err(setup(format!(
+            "a dry run applies no migration and reads the catalog in this build's schema \
+             (version {}), and the database is at version {}: nothing was changed. Rehearse on a \
+             copy of the data, or run rename-data without --dry-run once no node serves",
+            schema.build, schema.found
+        )));
+    }
+    let serving = store
+        .nodes_alive(&config.cluster_database)
         .await
         .map_err(setup)?;
-    let me = NodeInfo {
-        id: NodeId::new(format!("rename-data-{}", std::process::id())).map_err(setup)?,
-        address: String::new(),
-        build: crate::VERSION.to_owned(),
-        epochs: BTreeSet::new(),
-        pool: None,
-        executors_only: true,
-    };
-    let membership = cluster.join(me.clone()).await.map_err(setup)?;
-    let serving: Vec<NodeId> = membership
-        .nodes()
-        .await
-        .map_err(setup)?
-        .into_iter()
-        .map(|node| node.id)
-        .filter(|id| *id != me.id)
-        .collect();
-    membership.leave().await.map_err(setup)?;
     if !serving.is_empty() {
         let names: Vec<String> = serving.iter().map(ToString::to_string).collect();
         return Err(setup(format!(
-            "the node(s) {} serve the deployment: stop them first, rename-data runs offline",
+            "the node(s) {} serve the deployment: stop them first, rename-data runs offline \
+             (nothing was changed)",
             names.join(", ")
         )));
+    }
+    if Legacy::of(store)?.holds_runs().await.map_err(setup)? {
+        return Err(setup(
+            "runs still wait in the tables `migrate-runs` moves: move them with \
+             `rewind server migrate-runs` of the build before the rename release first (nothing \
+             was changed)",
+        ));
     }
     Ok(())
 }
@@ -347,7 +393,6 @@ async fn renamed(
     config: &crate::config::Config,
     dry_run: bool,
 ) -> Result<RenameReport, StartupError> {
-    ready(store, config).await?;
     let opened = bucket::open(&config.bucket)?;
     let catalog = store.catalog();
     let mut report = RenameReport {

@@ -29,7 +29,9 @@
 //!
 //! The schema is versioned. Its migrations are embedded in the binary and applied when the
 //! database is opened; a database written by a newer build is refused
-//! ([`Error::NewerSchema`]).
+//! ([`Error::NewerSchema`]). A database opened as it is ([`TursoStore::open_as_is`]) keeps the
+//! schema it has until it is asked to migrate: `rewind server rename-data` checks the directory
+//! first.
 
 #![forbid(unsafe_code)]
 
@@ -134,6 +136,20 @@ impl TursoStore {
         path: impl AsRef<Path>,
         master_keys: impl Into<MasterKeys>,
     ) -> Result<Self, Error> {
+        let store = Self::open_as_is(path, master_keys).await?;
+        store.migrate_to(SCHEMA_VERSION).await?;
+        Ok(store)
+    }
+
+    /// Opens the database at `path`, creating an empty one if needed, and leaves its schema as it
+    /// is, whatever its version. What reads any schema works on it
+    /// ([`schema_version`](Self::schema_version), [`TursoLegacy::holds_runs`]: the checks
+    /// `rewind server rename-data` makes before it migrates); everything else expects
+    /// [`SCHEMA_VERSION`], which [`migrate_to`](Self::migrate_to) brings.
+    pub async fn open_as_is(
+        path: impl AsRef<Path>,
+        master_keys: impl Into<MasterKeys>,
+    ) -> Result<Self, Error> {
         let path = path.as_ref();
         let utf8 = path
             .to_str()
@@ -141,7 +157,6 @@ impl TursoStore {
         let database = turso::Builder::new_local(utf8).build().await?;
         let connection = database.connect()?;
         connection.busy_timeout(BUSY_TIMEOUT)?;
-        schema::migrate(&connection).await?;
         Ok(Self {
             inner: Arc::new(Inner {
                 _database: database,
@@ -152,7 +167,17 @@ impl TursoStore {
         })
     }
 
-    /// The schema version of the open database: always [`SCHEMA_VERSION`] once opened.
+    /// Brings the schema to `version`, at most [`SCHEMA_VERSION`], applying the migrations it
+    /// lacks in order, each in its own transaction; a database whose schema is newer than this
+    /// build's is refused. A test builds the schema an older build left with a `version` below
+    /// this build's.
+    pub async fn migrate_to(&self, version: u32) -> Result<(), Error> {
+        let connection = self.connection().await?;
+        schema::migrate_to(&connection, version).await
+    }
+
+    /// The schema version of the database, 0 for a new one: always [`SCHEMA_VERSION`] once
+    /// [`open`](Self::open) returned.
     pub async fn schema_version(&self) -> Result<u32, Error> {
         let connection = self.connection().await?;
         schema::version(&connection).await

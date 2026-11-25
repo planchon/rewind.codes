@@ -67,6 +67,8 @@ rmcp = { workspace = true, features = ["server", "transport-streamable-http-serv
 tempfile.workspace = true
 # The logs of the process, captured by the end-to-end tests of secrets to look for a value.
 tracing-subscriber = { version = "0.3", default-features = false, features = ["std", "fmt", "registry"] }
+# The schema of an embedded `control.db`, read as it is by the tests of `rename-data`.
+turso = { version = "=0.8.3", default-features = false }
 
 [[test]]
 name = "integration"

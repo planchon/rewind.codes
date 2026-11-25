@@ -391,6 +391,30 @@ async fn fill(connection: &Connection, run: &mut LegacyRun) -> Result<(), Error>
 }
 
 impl TursoLegacy {
+    /// Whether the tables `legacy_*` still hold a run, read whatever the schema's version (a page
+    /// of runs reads their workflows in the workflow model of version 14): `rewind server
+    /// rename-data` asks before it migrates the schema.
+    pub async fn holds_runs(&self) -> Result<bool, LegacyError> {
+        let connection = self.store.connection().await?;
+        let present = sql::query_row(
+            &connection,
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'legacy_journal_runs'",
+            Vec::new(),
+        )
+        .await?
+        .is_some();
+        if !present {
+            return Ok(false);
+        }
+        Ok(sql::query_row(
+            &connection,
+            "SELECT 1 FROM legacy_journal_runs LIMIT 1",
+            Vec::new(),
+        )
+        .await?
+        .is_some())
+    }
+
     async fn page(&self, after: Option<RunId>, count: usize) -> Result<Vec<LegacyRun>, Error> {
         let connection = self.store.connection().await?;
         let present = sql::query_row(

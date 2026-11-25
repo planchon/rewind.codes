@@ -30,7 +30,9 @@
 //!
 //! The schema is versioned: its migrations are embedded in the binary and applied when the store
 //! connects, under an advisory lock so that servers starting together migrate once; a database
-//! migrated by a newer build is refused ([`Error::NewerSchema`]).
+//! migrated by a newer build is refused ([`Error::NewerSchema`]). A store connected as it is
+//! ([`PostgresStore::connect_as_is`]) leaves the schema as it found it until it is asked to
+//! migrate: `rewind server rename-data` checks the deployment first.
 
 #![forbid(unsafe_code)]
 
@@ -184,6 +186,20 @@ impl PostgresStore {
         config: &Config,
         master_keys: impl Into<MasterKeys>,
     ) -> Result<Self, Error> {
+        let store = Self::connect_as_is(config, master_keys).await?;
+        store.migrate_to(SCHEMA_VERSION).await?;
+        Ok(store)
+    }
+
+    /// Connects to the database and leaves its schema as it is, whatever its version: connecting
+    /// writes nothing. What reads any schema works on it ([`schema_version`](Self::schema_version),
+    /// [`PostgresCluster::alive`], [`PostgresLegacy::holds_runs`]: the checks `rewind server
+    /// rename-data` makes before it migrates); everything else expects [`SCHEMA_VERSION`], which
+    /// [`migrate_to`](Self::migrate_to) brings.
+    pub async fn connect_as_is(
+        config: &Config,
+        master_keys: impl Into<MasterKeys>,
+    ) -> Result<Self, Error> {
         let master_keys = master_keys.into();
         let options = PgConnectOptions::from_str(&config.url)
             .map_err(|err| Error::InvalidUrl(err.to_string()))?
@@ -195,11 +211,18 @@ impl PostgresStore {
             .acquire_timeout(config.acquire_timeout)
             .connect_with(options)
             .await?;
-        schema::migrate(&pool).await?;
         Ok(Self { pool, master_keys })
     }
 
-    /// The schema version of the database: always [`SCHEMA_VERSION`] once connected.
+    /// Brings the schema to `version`, at most [`SCHEMA_VERSION`], applying the migrations it
+    /// lacks in order; a database whose schema is newer than this build's is refused. A test
+    /// builds the schema an older build left with a `version` below this build's.
+    pub async fn migrate_to(&self, version: i64) -> Result<(), Error> {
+        schema::migrate(&self.pool, version).await
+    }
+
+    /// The schema version of the database, 0 for a database never migrated: always
+    /// [`SCHEMA_VERSION`] once [`connect`](Self::connect) returned.
     pub async fn schema_version(&self) -> Result<i64, Error> {
         Ok(schema::applied_version(&self.pool).await?.unwrap_or(0))
     }

@@ -258,6 +258,24 @@ fn task_from_row(row: &PgRow) -> Result<LegacyTask, Error> {
 }
 
 impl PostgresLegacy {
+    /// Whether the schema `legacy` still holds a run, read whatever the schema's version (a page
+    /// of runs reads their workflows in the workflow model of version 16): `rewind server
+    /// rename-data` asks before it migrates the schema.
+    pub async fn holds_runs(&self) -> Result<bool, LegacyError> {
+        let present: bool = sqlx::query_scalar("SELECT to_regclass('legacy.runs') IS NOT NULL")
+            .fetch_one(&self.pool)
+            .await
+            .map_err(Error::from)?;
+        if !present {
+            return Ok(false);
+        }
+        let holds: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM legacy.runs)")
+            .fetch_one(&self.pool)
+            .await
+            .map_err(Error::from)?;
+        Ok(holds)
+    }
+
     async fn page(&self, after: Option<RunId>, limit: usize) -> Result<Vec<LegacyRun>, Error> {
         let present: bool = sqlx::query_scalar("SELECT to_regclass('legacy.runs') IS NOT NULL")
             .fetch_one(&self.pool)

@@ -80,6 +80,17 @@ impl StoreLocation {
     }
 }
 
+fn backend(error: impl std::fmt::Display) -> StoreError {
+    StoreError::Backend(error.to_string())
+}
+
+/// The schema version a database has, and the one this build writes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SchemaVersion {
+    pub(crate) found: i64,
+    pub(crate) build: i64,
+}
+
 /// The control plane of this server: access and secrets, and the catalog and cluster it gives.
 #[derive(Debug, Clone)]
 pub(crate) enum ControlPlane {
@@ -115,10 +126,30 @@ impl Default for MemoryControlPlane {
 }
 
 impl ControlPlane {
-    /// Opens the control plane at `location`, whose secrets are encrypted under `master_keys`.
+    /// Opens the control plane at `location`, whose secrets are encrypted under `master_keys`,
+    /// and brings its schema to this build's.
     pub(crate) async fn open(
         location: &StoreLocation,
         master_keys: &MasterKeyRing,
+    ) -> Result<Self, ConfigError> {
+        Self::connect(location, master_keys, true).await
+    }
+
+    /// Opens the control plane at `location` and leaves its schema as it is, whatever its
+    /// version: what `rewind server rename-data` checks before it migrates reads it so
+    /// ([`schema_version`](Self::schema_version), [`nodes_alive`](Self::nodes_alive), the
+    /// set-aside runs); everything else needs [`migrate`](Self::migrate) first.
+    pub(crate) async fn open_as_is(
+        location: &StoreLocation,
+        master_keys: &MasterKeyRing,
+    ) -> Result<Self, ConfigError> {
+        Self::connect(location, master_keys, false).await
+    }
+
+    async fn connect(
+        location: &StoreLocation,
+        master_keys: &MasterKeyRing,
+        migrate: bool,
     ) -> Result<Self, ConfigError> {
         match location {
             StoreLocation::Turso(path) => {
@@ -136,7 +167,12 @@ impl ControlPlane {
                             .copied()
                             .map(MasterKey::from_bytes),
                     );
-                let store = TursoStore::open(path, keys).await.map_err(|error| {
+                let store = if migrate {
+                    TursoStore::open(path, keys).await
+                } else {
+                    TursoStore::open_as_is(path, keys).await
+                }
+                .map_err(|error| {
                     ConfigError::new(format!("cannot open {}: {error}", path.display()))
                 })?;
                 Ok(Self::Turso(store))
@@ -151,12 +187,62 @@ impl ControlPlane {
                             .copied()
                             .map(MasterKey::from_bytes),
                     );
-                let store = PostgresStore::connect(&rewind_store_postgres::Config::new(url), keys)
-                    .await
-                    .map_err(|error| ConfigError::new(format!("Postgres: {error}")))?;
+                let config = rewind_store_postgres::Config::new(url);
+                let store = if migrate {
+                    PostgresStore::connect(&config, keys).await
+                } else {
+                    PostgresStore::connect_as_is(&config, keys).await
+                }
+                .map_err(|error| ConfigError::new(format!("Postgres: {error}")))?;
                 Ok(Self::Postgres(store))
             }
             StoreLocation::Memory => Ok(Self::Memory(Arc::new(MemoryControlPlane::default()))),
+        }
+    }
+
+    /// The schema version of the database, 0 for one never migrated, and this build's: they
+    /// differ only for a control plane opened as it is. The in-memory control plane has none.
+    pub(crate) async fn schema_version(&self) -> Result<SchemaVersion, StoreError> {
+        match self {
+            ControlPlane::Turso(store) => Ok(SchemaVersion {
+                found: i64::from(store.schema_version().await.map_err(backend)?),
+                build: i64::from(rewind_store_turso::SCHEMA_VERSION),
+            }),
+            ControlPlane::Postgres(store) => Ok(SchemaVersion {
+                found: store.schema_version().await.map_err(backend)?,
+                build: rewind_store_postgres::SCHEMA_VERSION,
+            }),
+            ControlPlane::Memory(_) => Ok(SchemaVersion { found: 0, build: 0 }),
+        }
+    }
+
+    /// Brings the schema of a control plane opened as it is to this build's.
+    pub(crate) async fn migrate(&self) -> Result<(), StoreError> {
+        match self {
+            ControlPlane::Turso(store) => store
+                .migrate_to(rewind_store_turso::SCHEMA_VERSION)
+                .await
+                .map_err(backend),
+            ControlPlane::Postgres(store) => store
+                .migrate_to(rewind_store_postgres::SCHEMA_VERSION)
+                .await
+                .map_err(backend),
+            ControlPlane::Memory(_) => Ok(()),
+        }
+    }
+
+    /// The nodes that serve the deployment, read without joining its cluster and without
+    /// writing anything, whatever the schema's version: on Postgres, the nodes that hold their
+    /// liveness lock in `lock_database`. On Turso the members live in the one process that opened
+    /// the database, so none is found from another (the embedded directory's lock keeps a second
+    /// process out); in memory, none either.
+    pub(crate) async fn nodes_alive(
+        &self,
+        lock_database: &str,
+    ) -> Result<Vec<NodeId>, ClusterError> {
+        match self {
+            ControlPlane::Postgres(store) => PostgresCluster::alive(store, lock_database).await,
+            ControlPlane::Turso(_) | ControlPlane::Memory(_) => Ok(Vec::new()),
         }
     }
 

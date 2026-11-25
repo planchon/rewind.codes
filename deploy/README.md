@@ -294,21 +294,26 @@ rewritten once, offline, by `rewind server rename-data`, with the new build's im
 old nodes stopping and the new ones starting (`archi/06-storage-and-scale.md`, "Rewriting the
 stored names"):
 
-- opening the control plane migrates its schema (Postgres 17, Turso 15): the tables `code` and
-  `action_sets` (were `scripts` and `toolsets`), a partition's `generation`, the quotas
-  `workflows` and `max_code_lines` (were `scripts` and `max_script_lines`), a subscription's
-  `types` with the webhook types `run.waiting`, `secret.expired` and `action.schema_changed`,
-  the principals `member:` (were `user:`), the permissions `actions:*` and `calls:*`;
-- the command refuses to start while a node serves the deployment, or while runs wait in the
-  tables `migrate-runs` moves; it then rewrites the catalog's tests, workflow versions and pinned
-  action sets, each under the digest of its new form (an old digest stops resolving; names and
-  version numbers keep working), gives every run a workflow and moves each saved workflow by its
-  use, rewrites every record of every partition (a run that was `active` is `running` or
-  `waiting` from the waits its head holds) and every sealed attempt of the archive, and prints
-  what it changed, and the titles it could not turn into names;
-- run again, it finds everything in the new names and says `nothing to rename`; with
-  `--dry-run` it counts what it would change, by kind, and writes nothing (the step that gives
-  runs their workflows writes as it goes, so a dry run leaves it out and says so).
+- the command first checks the deployment on the schema it finds, and refuses, changing
+  nothing, while a node serves the deployment, while runs wait in the tables `migrate-runs`
+  moves, or when the schema is older than the build before the release's (Postgres 15, Turso
+  13);
+- then it migrates the schema (Postgres 17, Turso 15): the tables `code` and `action_sets` (were
+  `scripts` and `toolsets`), a partition's `generation`, the quotas `workflows` and
+  `max_code_lines` (were `scripts` and `max_script_lines`), a subscription's `types` with the
+  webhook types `run.waiting`, `secret.expired` and `action.schema_changed`, the principals
+  `member:` (were `user:`), the permissions `actions:*` and `calls:*`;
+- it rewrites the catalog's tests, workflow versions and pinned action sets, each under the
+  digest of its new form (an old digest stops resolving; names and version numbers keep
+  working), gives every run a workflow and moves each saved workflow by its use, rewrites every
+  record of every partition (a run that was `active` is `running` or `waiting` from the waits
+  its head holds) and every sealed attempt of the archive, and prints what it changed, and the
+  titles it could not turn into names;
+- run again, it finds everything in the new names and says `nothing to rename`. `--dry-run`
+  applies no migration and writes nothing: it reads the catalog in the new schema, so on the
+  schema the build before left it refuses and says so; on a migrated schema it counts what it
+  would change, by kind (the step that gives runs their workflows writes as it goes, so a dry run
+  leaves it out and says so). The rehearsal on a copy is the dry run of the whole.
 
 **Runs not yet moved to partitions come first.** A deployment whose Postgres still holds runs
 in its schema `legacy` (one that skipped the deploy that moves runs to partitions, or whose
@@ -338,9 +343,8 @@ aws s3 sync s3://$REWIND_S3_BUCKET/ s3://$REWIND_S3_BUCKET-rehearsal/
 # The control plane: a dump of production, restored into a scratch database.
 pg_dump --format=custom "$PRODUCTION_DATABASE_URL" > rewind.dump
 createdb rewind_rehearsal && pg_restore --no-owner --dbname=rewind_rehearsal rewind.dump
-# With the new image, against the copies: count, rename, then run again to see nothing left.
+# With the new image, against the copies: rename, then run again to see nothing left.
 REHEARSAL="--store postgres://…/rewind_rehearsal --bucket s3://$REWIND_S3_BUCKET-rehearsal"
-docker run --rm --env-file .env rewind:new server rename-data --dry-run $REHEARSAL
 docker run --rm --env-file .env rewind:new server rename-data $REHEARSAL
 docker run --rm --env-file .env rewind:new server rename-data $REHEARSAL   # nothing to rename
 ```
@@ -354,17 +358,28 @@ the saved workflows under their names and versions.
 
 ```sh
 docker compose down                                            # every node stops; the data stays
-docker compose run --rm node-1 server rename-data --dry-run   # with node-1's options
-docker compose run --rm node-1 server rename-data
+REWIND_IMAGE=rewind:new docker compose run --rm node-1 server rename-data   # node-1's options
 REWIND_IMAGE=rewind:new docker compose up -d --remove-orphans
 ```
 
-On Railway, stop the `node` service (its volume makes a deploy stop the old node first), rename
-the variables the release renamed (`REWIND_ADMIN_ORGANIZATION`, `REWIND_ORGANIZATION_POOLS`,
-`REWIND_QUOTA_WORKFLOWS`, `REWIND_QUOTA_MAX_CODE_LINES`, `REWIND_ALLOW_INTERNAL_ADDRESSES`), run
-`rewind server rename-data` once from a one-off service on the new image with the node's
-variables, then deploy the node on the new image. An embedded server's `.rewind/` is renamed with
-`rewind server rename-data --embedded` while no `rewind` command serves it.
+On Railway, a pre-deploy command runs **before** Railway stops the running deployment (the
+node's volume only makes it stop the old node before the new container starts): at production's
+rename release, `rename-data` as the node's pre-deploy command thus ran while the old node served
+and migrated the schema under it before refusing, and the old node failed ("column epoch does not
+exist") until it was stopped. The command now checks before it migrates; still, in order:
+
+1. Stop the node: `railway down --service node` removes its running deployment.
+2. Rename the variables the release renamed (`REWIND_ADMIN_ORGANIZATION`,
+   `REWIND_ORGANIZATION_POOLS`, `REWIND_QUOTA_WORKFLOWS`, `REWIND_QUOTA_MAX_CODE_LINES`,
+   `REWIND_ALLOW_INTERNAL_ADDRESSES`): set the new names with `--skip-deploys`. The old names
+   cannot be deleted so (`railway variable delete` has no `--skip-deploys`): delete them at the
+   next deploy; the new build does not read them.
+3. Deploy the node on the new image with `rewind server rename-data` as its one-time pre-deploy
+   command (or `railway redeploy` the image already built), read what it printed in the deploy's
+   logs, then remove the pre-deploy command.
+
+An embedded server's `.rewind/` is renamed with `rewind server rename-data --embedded` while no
+`rewind` command serves it.
 
 ## Retention
 

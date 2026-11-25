@@ -1,7 +1,8 @@
 //! The schema, versioned: migrations are embedded in the binary and applied by sqlx's migrator
-//! when the store connects, each in its own transaction, under an advisory lock so that servers
-//! starting together migrate once. The migrator records each migration with its checksum in
-//! `_sqlx_migrations`, and refuses a migration changed since it was applied.
+//! when the store connects (or, for a store connected as it is, when it is asked to), each in its
+//! own transaction, under an advisory lock so that servers starting together migrate once. The
+//! migrator records each migration with its checksum in `_sqlx_migrations`, and refuses a
+//! migration changed since it was applied.
 //!
 //! A database whose latest migration is above [`SCHEMA_VERSION`] was migrated by a newer build,
 //! and is refused rather than misread.
@@ -87,9 +88,9 @@ const MIGRATIONS: [(i64, &str, &str); SCHEMA_VERSION as usize] = [
     (17, "rename", include_str!("../migrations/0017_rename.sql")),
 ];
 
-/// The migrations embedded in this build.
+/// The migrations embedded in this build, up to version `.0`.
 #[derive(Debug)]
-struct Embedded;
+struct Embedded(i64);
 
 impl<'s> MigrationSource<'s> for Embedded {
     fn resolve(
@@ -101,9 +102,11 @@ impl<'s> MigrationSource<'s> for Embedded {
                 + 's,
         >,
     > {
-        Box::pin(async {
+        let up_to = self.0;
+        Box::pin(async move {
             Ok(MIGRATIONS
                 .iter()
+                .filter(|(version, _, _)| *version <= up_to)
                 .map(|(version, description, sql)| {
                     Migration::new(
                         *version,
@@ -118,8 +121,9 @@ impl<'s> MigrationSource<'s> for Embedded {
     }
 }
 
-/// Brings the database's schema to [`SCHEMA_VERSION`], or refuses a newer one.
-pub(crate) async fn migrate(pool: &PgPool) -> Result<(), Error> {
+/// Brings the database's schema to `target`, at most [`SCHEMA_VERSION`], or refuses a schema newer
+/// than [`SCHEMA_VERSION`].
+pub(crate) async fn migrate(pool: &PgPool, target: i64) -> Result<(), Error> {
     let newer = |found| Error::NewerSchema {
         found,
         supported: SCHEMA_VERSION,
@@ -129,7 +133,8 @@ pub(crate) async fn migrate(pool: &PgPool) -> Result<(), Error> {
     {
         return Err(newer(found));
     }
-    let migrator = Migrator::new(Embedded)
+    let target = target.min(SCHEMA_VERSION);
+    let migrator = Migrator::new(Embedded(target))
         .await
         .map_err(|err| Error::Migration(err.to_string()))?;
     migrator.run(pool).await.map_err(|err| match err {
@@ -137,10 +142,7 @@ pub(crate) async fn migrate(pool: &PgPool) -> Result<(), Error> {
         MigrateError::VersionMissing(found) => newer(found),
         other => Error::Migration(other.to_string()),
     })?;
-    tracing::debug!(
-        version = SCHEMA_VERSION,
-        "the Postgres schema is up to date"
-    );
+    tracing::debug!(version = target, "the Postgres schema is up to date");
     Ok(())
 }
 

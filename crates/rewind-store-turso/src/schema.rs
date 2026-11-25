@@ -1197,13 +1197,8 @@ WHERE EXISTS (SELECT 1 FROM json_each(token_keys.permissions)
               WHERE value IN ('toolsets:read', 'toolsets:write', 'tasks:work', 'tasks:approve'));
 "#;
 
-/// Brings the database's schema to [`SCHEMA_VERSION`], or refuses a newer one.
-pub(crate) async fn migrate(connection: &Connection) -> Result<(), Error> {
-    migrate_to(connection, SCHEMA_VERSION).await
-}
-
 /// Brings the database's schema to `target`, at most [`SCHEMA_VERSION`], or refuses a newer one.
-async fn migrate_to(connection: &Connection, target: u32) -> Result<(), Error> {
+pub(crate) async fn migrate_to(connection: &Connection, target: u32) -> Result<(), Error> {
     sql::execute(
         connection,
         "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT",
@@ -1270,8 +1265,18 @@ async fn saved_workflow_ids(connection: &Connection) -> Result<(), Error> {
     Ok(())
 }
 
-/// The schema version recorded in `meta`; 0 for a new database.
+/// The schema version recorded in `meta`; 0 for a new database, which has no `meta` yet.
 pub(crate) async fn version(connection: &Connection) -> Result<u32, Error> {
+    let has_meta = sql::query_row(
+        connection,
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'meta'",
+        Vec::new(),
+    )
+    .await?
+    .is_some();
+    if !has_meta {
+        return Ok(0);
+    }
     match meta(connection, VERSION_KEY).await? {
         None => Ok(0),
         Some(value) => value

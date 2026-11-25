@@ -198,6 +198,39 @@ impl PostgresCluster {
         })
     }
 
+    /// The nodes alive in the cluster on the store's database, read without joining it and
+    /// without writing anything, whatever the schema's version: the rows of `nodes` (version 14)
+    /// whose node holds its lock in `lock_database`; none before the table exists. `rewind server
+    /// rename-data` reads them before it migrates the schema, which a serving node of the build
+    /// before could not read.
+    pub async fn alive(
+        store: &PostgresStore,
+        lock_database: &str,
+    ) -> Result<Vec<NodeId>, ClusterError> {
+        let present: bool = sqlx::query_scalar("SELECT to_regclass('nodes') IS NOT NULL")
+            .fetch_one(&store.pool)
+            .await
+            .map_err(failed)?;
+        if !present {
+            return Ok(Vec::new());
+        }
+        let ids: Vec<String> = sqlx::query_scalar(&format!(
+            "SELECT n.id FROM nodes n WHERE {} ORDER BY n.id",
+            holds_lock(
+                "('rewind node/' || current_database()::text || '/')",
+                "$1",
+                "n.id"
+            )
+        ))
+        .bind(lock_database)
+        .fetch_all(&store.pool)
+        .await
+        .map_err(failed)?;
+        ids.into_iter()
+            .map(|id| NodeId::new(id).map_err(|err| failed(Error::Corrupt(err.to_string()))))
+            .collect()
+    }
+
     /// The options of a dedicated connection to the control plane's database, named for
     /// `pg_stat_activity`.
     fn dedicated(&self, purpose: &str) -> PgConnectOptions {

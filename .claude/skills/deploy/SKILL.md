@@ -64,29 +64,41 @@ railway up --service edge --ci --message "$sha"   # only when deploy/railway/edg
 `--ci` streams the build and returns when it ends. A build that fails leaves the running node as
 it was: read the build log, fix on main, start again at step 1. A deploy that needs a one-time
 pre-deploy command (as `rewind server migrate-runs` once did) sets it on the service for that
-deploy and removes it after.
+deploy and removes it after. Railway runs a pre-deploy command before it stops the running
+deployment, volume or not: a command that must not run beside the node (`rename-data`) needs the
+node down first, `railway down --service node`.
 
 ### The rename release
 
 The rename release renames what the deployment stored, offline, once (deploy/README.md, "Rename
 release"; `archi/06-storage-and-scale.md`, "Rewriting the stored names"). It needs the release
 gate's GO, and a rehearsal on a copy of production first (the bucket's prefix and a dump of the
-database, as deploy/README.md shows), with `rename-data --dry-run`, `rename-data`, then
-`rename-data` again saying `nothing to rename`. Tell the owner the API is down for the whole
-rewrite, not 10 s. Then, after the owner's yes:
+database, as deploy/README.md shows), with `rename-data`, then `rename-data` again saying
+`nothing to rename` (`--dry-run` applies no migration, so it refuses on the schema the build
+before left: the rehearsal is the dry run). Tell the owner the API is down for the whole rewrite,
+not 10 s. Then, after the owner's yes:
 
-1. Stop the `node` service: `rename-data` refuses a deployment a node serves.
+1. Stop the node: `railway down --service node`, which removes its running deployment. A
+   pre-deploy command runs before Railway stops the running deployment: at the release's deploy
+   (25 November 2026), `rename-data` as the pre-deploy command ran beside the old node and
+   migrated the schema under it before refusing, and the old node answered 503 ("column epoch
+   does not exist") until `railway down`. `rename-data` now checks before it migrates and
+   refuses without changing anything while a node serves, but it only runs with the node down.
 2. Rename the node's variables the release renamed, those it has
    (`railway variable list --service node --kv`): `REWIND_ADMIN_TENANT` to
    `REWIND_ADMIN_ORGANIZATION`, `REWIND_TENANT_POOLS` to `REWIND_ORGANIZATION_POOLS`,
    `REWIND_QUOTA_SCRIPTS` to `REWIND_QUOTA_WORKFLOWS`, `REWIND_QUOTA_MAX_SCRIPT_LINES` to
    `REWIND_QUOTA_MAX_CODE_LINES`, `REWIND_ALLOW_INTERNAL_TOOLS` to
-   `REWIND_ALLOW_INTERNAL_ADDRESSES`. The new build does not read the old names.
-3. Run `rewind server rename-data --dry-run`, then `rewind server rename-data`, once, from a
-   one-off service on the new image with the node's variables; read what it prints (the counts,
-   the titles it could not turn into names), and remove the service.
-4. Deploy the node on the new image (`railway up --service node`, above), then check (step 5),
-   with `GET /v1/workflows` listing the saved workflows under their names and versions.
+   `REWIND_ALLOW_INTERNAL_ADDRESSES`: set the new names with `--skip-deploys`. The new build does
+   not read the old names, which cannot be deleted without a deploy (`railway variable delete`
+   has no `--skip-deploys`): delete them at the next deploy. Production still has
+   `REWIND_ADMIN_TENANT` (25 November 2026): remove it at the next deploy.
+3. Deploy the node on the new image with `rewind server rename-data` as its one-time pre-deploy
+   command: `railway up --service node` (above), or `railway redeploy --service node` when the
+   new image is already built. Read what it printed in the deploy's logs (the counts, the titles
+   it could not turn into names), then remove the pre-deploy command.
+4. Check (step 5), with `GET /v1/workflows` listing the saved workflows under their names and
+   versions.
 
 ## 5. Check
 

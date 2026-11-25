@@ -4769,6 +4769,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "turso",
  "uuid",
 ]
 
