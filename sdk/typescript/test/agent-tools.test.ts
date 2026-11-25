@@ -384,7 +384,7 @@ describe("run_workflow", () => {
 
   it("says what a waiting run waits for", async () => {
     const waiting = run({
-      status: "active",
+      status: "waiting",
       waitingFor: [
         { kind: "signal", name: "approval", callsite: { line: 8, column: 26 }, timeoutAt: "2026-11-15T10:00:00Z" },
         {
@@ -405,7 +405,7 @@ describe("run_workflow", () => {
     expect(result.isError).toBe(false);
     expect(result.content).toBe(
       [
-        `Run ${HANDLE} is suspended, waiting for:`,
+        `Run ${HANDLE} is waiting for:`,
         '- the signal "approval" at workflow.ts:8:26, until 2026-11-15T10:00:00Z (then it gets undefined): send it with signal_run',
         "- the call 4 to github.delete_repo: it waits for the harness's approval",
         "- a timer, firing at 2026-11-20T00:00:00Z",
@@ -761,7 +761,7 @@ describe("the tools that take a run id", () => {
   it("get_run: the state and the transcript, after waiting when asked", async () => {
     serveRun(
       run({
-        status: "active",
+        status: "waiting",
         waitingFor: [
           {
             kind: "call",
@@ -779,8 +779,7 @@ describe("the tools that take a run id", () => {
     expect(result.isError).toBe(false);
     expect(result.content).toBe(
       [
-        `Run ${HANDLE} is still running.`,
-        "Waiting for:",
+        `Run ${HANDLE} is waiting for:`,
         "- the call 2 to slack.post: in progress (delivery 2)",
         "Transcript:",
         "#0 run_started\n#1 call github.get_issue → error",
@@ -810,13 +809,13 @@ describe("the tools that take a run id", () => {
   });
 
   it("get_run: no output to page through before the run completes", async () => {
-    serveRun(run({ status: "active" }));
+    serveRun(run({ status: "waiting" }));
     const result = await tools.handle("get_run", { run_id: RUN_ID, offset: 0 });
     expect(result).toMatchObject({ isError: true, content: expect.stringContaining("has no output to page through") });
   });
 
   it("signal_run: sends the signal once per tool call", async () => {
-    serveRun(run({ status: "active" }));
+    serveRun(run({ status: "waiting" }));
     let sent = 0;
     server.on("POST", "/v1/runs/{id}/signals/{name}", (request) => {
       sent += 1;
@@ -839,7 +838,7 @@ describe("the tools that take a run id", () => {
   });
 
   it("signal_run: a run of a workflow refuses a signal it does not declare", async () => {
-    serveRun(run({ status: "active", workflow: TRIAGE }));
+    serveRun(run({ status: "waiting", workflow: TRIAGE }));
     server.on(
       "POST",
       "/v1/runs/{id}/signals/{name}",
@@ -879,7 +878,7 @@ describe("the tools that take a run id", () => {
   });
 
   it("cancel_run: cancels and returns the run's state", async () => {
-    serveRun(run({ status: "active" }));
+    serveRun(run({ status: "waiting" }));
     server.on(
       "POST",
       "/v1/runs/{id}/cancel",
@@ -1021,7 +1020,7 @@ describe("the other tools", () => {
             id: "r2",
             handle: "user_2fQ81/wf-7k2m9q/06bqx3k9f2mv",
             namespace: NAMESPACE,
-            status: "active",
+            status: "waiting",
             errors: 0,
             historyLen: 3,
             labels: LABELS,
@@ -1042,7 +1041,7 @@ describe("the other tools", () => {
     expect(result.content).toBe(
       [
         "1 run, most recent first:",
-        `- user_2fQ81/wf-7k2m9q/06bqx3k9f2mv: active, started 2026-11-12T10:00:00Z, 1 call, a run of the workflow ${ID}@v1, started by r1`,
+        `- user_2fQ81/wf-7k2m9q/06bqx3k9f2mv: waiting, started 2026-11-12T10:00:00Z, 1 call, a run of the workflow ${ID}@v1, started by r1`,
       ].join("\n"),
     );
   });
@@ -1230,7 +1229,7 @@ describe("the other tools", () => {
         passed: true,
         tests: [
           { name: "a", passed: true, status: "completed", calls: {}, failures: [], transcript: "#0" },
-          { name: "b", passed: true, status: "active", calls: {}, failures: [], transcript: "#0" },
+          { name: "b", passed: true, status: "waiting", calls: {}, failures: [], transcript: "#0" },
         ],
       }),
     );
@@ -1385,6 +1384,27 @@ describe("update_workflow", () => {
       isError: true,
     });
     // No version after a refused name.
+    expect(server.requests.map((r) => r.method)).toEqual(["PATCH", "PATCH"]);
+
+    // The tests are read as the API reads them before anything changes: no name without them.
+    const unreadable = await tools.handle("update_workflow", {
+      workflow: ID,
+      name: "renamed",
+      replace: [{ name: "test 0", reason: "it waits now", expect: { status: "active" } }],
+    });
+    expect(unreadable).toEqual({
+      content:
+        "update_workflow failed: the body is not valid: unknown variant `active`, expected one of `queued`, `running`, `waiting`, `completed`, `failed`, `cancelled`, `aborted`",
+      isError: true,
+    });
+    const inline = await tools.handle("update_workflow", {
+      workflow: ID,
+      description: "Triage.",
+      tests: [{ name: "a", world: { tools: {} } }],
+    });
+    expect(inline.content).toBe(
+      "update_workflow failed: the body is not valid: data did not match any variant of untagged enum TestInput",
+    );
     expect(server.requests.map((r) => r.method)).toEqual(["PATCH", "PATCH"]);
 
     expect((await tools.handle("update_workflow", { workflow: ID })).content).toBe(

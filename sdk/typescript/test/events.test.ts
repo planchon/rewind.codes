@@ -177,7 +177,7 @@ describe("approvals", () => {
 function runWaiting() {
   return run({
     namespace: NAMESPACE,
-    status: "active",
+    status: "waiting",
     historyLen: 5,
     waitingFor: [
       {

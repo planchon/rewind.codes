@@ -77,7 +77,7 @@ const WAIT = {
 
 const STATUS = {
   type: "string",
-  enum: ["pending", "active", "completed", "failed", "cancelled", "aborted"],
+  enum: ["queued", "running", "waiting", "completed", "failed", "cancelled", "aborted"],
 };
 
 /** What a run reads: the secrets it uses, by MCP server or API. */
@@ -136,9 +136,9 @@ const EXPECT = {
   properties: {
     status: {
       type: "string",
-      enum: ["completed", "failed", "cancelled", "aborted", "active"],
+      enum: ["completed", "failed", "cancelled", "aborted", "waiting"],
       description:
-        'How the run ended; "active" for a run that can go no further in virtual time without the outside world (one waiting for a signal no test sends, for example).',
+        'How the run ended; "waiting" for a run that can go no further in virtual time without the outside world (one waiting for a signal no test sends, for example).',
     },
     output: {
       description:
@@ -215,7 +215,7 @@ const INLINE_TEST = {
         handlers: {
           type: "string",
           description:
-            'TypeScript handlers, for answers computed from the args: a module that imports nothing and default-exports its handlers by action name or by group, such as `export default { "github.get_issue": ({ number }) => ({ number, state: "open" }) }`. What a handler throws fails the call. Tried after `tools`.',
+            'TypeScript handlers, for answers computed from the args: a module that imports nothing and default-exports its handlers by action name or by group, such as `export default { "github.get_issue": ({ number }) => ({ number, state: "open" }) }`. What a handler throws fails the call. Tried after `actions`.',
         },
       },
       additionalProperties: false,
@@ -231,7 +231,7 @@ const INLINE_TEST = {
           when: {
             type: "string",
             description:
-              '"blocked" (the default): once the run can go no further without it. Or a duration of virtual time after the start, such as "2h".',
+              '"waiting" (the default): once the run waits for something other than a timer, which virtual time moves by itself. Or a duration of virtual time after the start, such as "2h".',
           },
         },
         required: ["name"],

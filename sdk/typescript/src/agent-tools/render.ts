@@ -79,11 +79,12 @@ export function describeRun(run: Run, extras: RunExtras, limits: Limits): string
         lines.push(...errorSection(run.error, limits));
       }
       break;
-    case "active":
+    case "waiting":
       lines.push(...waitingSection(run));
       break;
     case "aborted":
-    case "pending":
+    case "queued":
+    case "running":
       break;
   }
   if (extras.transcript !== undefined) {
@@ -126,21 +127,16 @@ function headline(run: Run, limits: Limits): string {
       return run.abort
         ? `${name} was aborted by the host (${run.abort.kind}): ${truncateEnd(run.abort.message, limits.value)}`
         : `${name} was aborted by the host.`;
-    case "pending":
-      return `${name} is pending: it has not started executing yet.`;
-    case "active":
+    case "queued":
+      return `${name} is queued: it has not started executing yet.`;
+    case "running":
+      return `${name} is still running.`;
+    case "waiting":
       if (run.quarantine) {
         return `${name} is quarantined (${run.quarantine.cause}): ${truncateEnd(run.quarantine.reason, limits.value)}. It waits for the platform to be fixed; it is not a fault of the code.`;
       }
-      return isSuspended(run) ? `${name} is suspended, waiting for:` : `${name} is still running.`;
+      return `${name} is waiting for:`;
   }
-}
-
-/** Waiting for something other than calls in flight: a signal, a timer, the harness. */
-export function isSuspended(run: Run): boolean {
-  return (run.waitingFor ?? []).some(
-    (waiting) => waiting.kind !== "call" || !["ready", "claimed", "done"].includes(waiting.state),
-  );
 }
 
 function waitingSection(run: Run): string[] {
@@ -148,11 +144,7 @@ function waitingSection(run: Run): string[] {
   if (waiting.length === 0 || run.quarantine) {
     return [];
   }
-  const lines = isSuspended(run) ? [] : ["Waiting for:"];
-  for (const item of waiting) {
-    lines.push(`- ${describeWaiting(item)}`);
-  }
-  return lines;
+  return waiting.filter((item) => item.kind !== "quarantined").map((item) => `- ${describeWaiting(item)}`);
 }
 
 function describeWaiting(waiting: Waiting): string {
@@ -187,6 +179,8 @@ function describeWaiting(waiting: Waiting): string {
           return `${call}: answered, about to be delivered`;
       }
     }
+    case "quarantined":
+      return "its release from quarantine";
   }
 }
 
@@ -849,9 +843,10 @@ function statusPhrase(status: RunStatus): string {
       return "was cancelled";
     case "aborted":
       return "was aborted";
-    case "pending":
+    case "queued":
       return "never started";
-    case "active":
+    case "running":
+    case "waiting":
       return "was still waiting at the end of the test";
   }
 }

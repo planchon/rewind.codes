@@ -4612,11 +4612,14 @@ export interface components {
             traceId: string;
             /** Format: date-time */
             updatedAt: string;
-            /** @description With `active`: what the run waits for. */
+            /** @description With `waiting`: what the run waits for. */
             waitingFor?: components["schemas"]["Waiting"][];
             workflow?: components["schemas"]["RunWorkflow"] | null;
         };
-        /** @description A number of runs per status. */
+        /**
+         * @description A number of runs per status, from the hourly counters: those started and not ended are
+         *     active (queued, running or waiting), the others by how they ended.
+         */
         RunCounts: {
             /** Format: int64 */
             aborted: number;
@@ -4628,8 +4631,6 @@ export interface components {
             completed: number;
             /** Format: int64 */
             failed: number;
-            /** Format: int64 */
-            pending: number;
         };
         /**
          * @description `live`: actions are really called and time is real. `test`: actions are answered by cassettes
@@ -4673,11 +4674,11 @@ export interface components {
             waiting: components["schemas"]["WaitCounts"];
         };
         /**
-         * @description The status of a run, a function of its history (`archi/02-history.md`, "Run state").
-         *     Quarantine is not a status: see `Run.quarantine`.
+         * @description The status of a run (`archi/02-history.md`, "Run state"): queued, running or waiting while
+         *     it is active, then how it ended. A quarantined run is `waiting`, for its quarantine.
          * @enum {string}
          */
-        RunStatus: "pending" | "active" | "completed" | "failed" | "cancelled" | "aborted";
+        RunStatus: "queued" | "running" | "waiting" | "completed" | "failed" | "cancelled" | "aborted";
         /** @description A run in a list, from the read model. */
         RunSummary: {
             actionSet: string;
@@ -4722,11 +4723,12 @@ export interface components {
             /** @description For a run a code started, that run. */
             startedBy?: string | null;
             status: components["schemas"]["RunStatus"];
-            /** @description With `active`: what the run waits for. */
+            /** @description With `waiting`: what the run waits for. */
             waitingFor?: components["schemas"]["RunWait"][];
             /**
              * Format: date-time
-             * @description With `active`: when the run wakes by itself, if a timer or a signal's timeout wakes it.
+             * @description While it is active: when the run wakes by itself, if a timer or a signal's timeout wakes
+             *     it.
              */
             wakesAt?: string | null;
             workflow?: components["schemas"]["RunWorkflow"] | null;
@@ -5123,11 +5125,13 @@ export interface components {
              */
             seq: number;
         };
+        /**
+         * @description The runs by status: the active ones now (queued, running, waiting), from the gauges, and the
+         *     ended ones of the window, from the counters.
+         */
         StatusCounts: {
             /** Format: int64 */
             aborted: number;
-            /** Format: int64 */
-            active: number;
             /** Format: int64 */
             cancelled: number;
             /** Format: int64 */
@@ -5135,7 +5139,11 @@ export interface components {
             /** Format: int64 */
             failed: number;
             /** Format: int64 */
-            pending: number;
+            queued: number;
+            /** Format: int64 */
+            running: number;
+            /** Format: int64 */
+            waiting: number;
         };
         /**
          * @description One message of the stream. On the wire, each is a server-sent event whose `event` field is
@@ -5376,8 +5384,9 @@ export interface components {
             name: string;
             payload?: unknown;
             /**
-             * @description When it is sent: `"blocked"` (the default) once the run can go no further without the
-             *     outside world; or a duration of virtual time after the start, such as `"2h"`.
+             * @description When it is sent: `"waiting"` (the default) once the run waits for something other than a
+             *     timer, which virtual time moves by itself; or a duration of virtual time after the start,
+             *     such as `"2h"`.
              */
             when?: string | null;
         };
@@ -5480,13 +5489,13 @@ export interface components {
             /** Format: int64 */
             approval: number;
             /** Format: int64 */
-            call: number;
-            /** Format: int64 */
             deferred: number;
             /** Format: int64 */
             harness: number;
             /** Format: int64 */
             parked: number;
+            /** Format: int64 */
+            quarantined: number;
             /** Format: int64 */
             signal: number;
             /** Format: int64 */
@@ -5496,8 +5505,8 @@ export interface components {
          * @description What a waiting run waits for (`archi/05-testing-and-observability.md`, "Read model").
          * @enum {string}
          */
-        WaitKind: "signal" | "timer" | "call" | "harness" | "approval" | "parked" | "deferred";
-        /** @description Something an active run waits for. */
+        WaitKind: "signal" | "timer" | "harness" | "approval" | "parked" | "deferred" | "quarantined";
+        /** @description Something a waiting run waits for. */
         Waiting: {
             action: string;
             /** @description The call's arguments: what the harness approves or rejects. */
@@ -5534,6 +5543,15 @@ export interface components {
              * @description When the wait gives up and returns `undefined`, if it has a timeout.
              */
             timeoutAt?: string | null;
+        } | {
+            cause: components["schemas"]["QuarantineCause"];
+            /** @enum {string} */
+            kind: "quarantined";
+            /**
+             * Format: date-time
+             * @description When it was quarantined.
+             */
+            since: string;
         };
         /** @description `POST /auth/waitlist`. */
         WaitlistRequest: {
@@ -11746,7 +11764,7 @@ export interface operations {
                  *     to the most recently started (`wakes`: the first started).
                  */
                 sort?: "started" | "oldest" | "activity" | "wakes" | "duration" | "calls";
-                status?: "pending" | "active" | "completed" | "failed" | "cancelled" | "aborted";
+                status?: "queued" | "running" | "waiting" | "completed" | "failed" | "cancelled" | "aborted";
                 /** @description Only runs carrying this label, as `key:value`. Repeat to require several. */
                 label?: string[];
                 /** @description Only runs that called this action. */
@@ -11756,7 +11774,7 @@ export interface operations {
                  *     with this error name (`TypeError`, `DeadlockError`…).
                  */
                 error?: string;
-                /** @description Only quarantined runs, or only runs that are not. */
+                /** @description Only quarantined runs (`waiting:quarantined`), or only runs that are not. */
                 quarantined?: boolean;
                 /** @description Only forks of this run: its id or its handle. */
                 source?: string;

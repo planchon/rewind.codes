@@ -40,6 +40,7 @@ import {
   type OpenAIFunctionCallOutput,
   type OpenAIResponsesTool,
 } from "./adapters.js";
+import { unreadableBody } from "./bodies.js";
 import { OUTPUT_LIMIT, truncateEnd, truncateMiddle } from "./bound.js";
 import {
   AGENT_TOOL_NAMES,
@@ -413,6 +414,7 @@ export class AgentTools {
         request.actionSet = this.options.actionSet;
       }
     }
+    readBodies(tests ?? [], [], []);
     if (tests !== undefined && tests.length > 0) {
       request.tests = tests;
     }
@@ -476,7 +478,7 @@ export class AgentTools {
   private async listRuns(input: Values, options: HandleOptions): Promise<AgentToolResult> {
     const status = input["status"] ?? undefined;
     if (status !== undefined && !isStatus(status)) {
-      throw new InputError("`status` must be one of pending, active, completed, failed, cancelled, aborted.");
+      throw new InputError("`status` must be one of queued, running, waiting, completed, failed, cancelled, aborted.");
     }
     const page = await this.client.runs.list({
       labels: this.options.labels,
@@ -605,6 +607,8 @@ export class AgentTools {
     const tests = optionalTests(input, "tests") ?? [];
     const replace = optionalReplacements(input) ?? [];
     const retire = optionalRetirements(input) ?? [];
+    // The bodies, as the API reads them, before anything changes.
+    readBodies(tests, replace, retire);
     const patched = Object.keys(patch).length > 0;
     const interfaced = schemaInput !== undefined || schemaOutput !== undefined || signals !== undefined;
     const versioned = code !== undefined || interfaced || secrets !== undefined;
@@ -890,6 +894,22 @@ function parseInput(name: AgentToolName, input: unknown): Values {
 }
 
 /** A problem the model can fix: a 4xx but 401. */
+/**
+ * What the API answers to a body it cannot read: the tools read the model's tests as the API reads them, and say the
+ * same, before they send anything.
+ */
+function readBodies(tests: unknown[], replace: unknown[], retire: unknown[]): void {
+  const problem = unreadableBody(tests, replace, retire);
+  if (problem !== undefined) {
+    throw new RewindApiError({
+      type: "urn:rewind:problem:invalid-request",
+      title: "Invalid request",
+      status: 400,
+      detail: `the body is not valid: ${problem}`,
+    });
+  }
+}
+
 function isRefusal(error: RewindApiError): boolean {
   return error.status !== 401 && error.status < 500;
 }
@@ -1105,7 +1125,8 @@ function isObject(value: unknown): value is Values {
 
 function isStatus(value: unknown): value is RunStatus {
   return (
-    typeof value === "string" && ["pending", "active", "completed", "failed", "cancelled", "aborted"].includes(value)
+    typeof value === "string" &&
+    ["queued", "running", "waiting", "completed", "failed", "cancelled", "aborted"].includes(value)
   );
 }
 

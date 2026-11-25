@@ -82,7 +82,7 @@ fn wait() -> Value {
 fn status() -> Value {
     json!({
         "type": "string",
-        "enum": ["pending", "active", "completed", "failed", "cancelled", "aborted"]
+        "enum": ["queued", "running", "waiting", "completed", "failed", "cancelled", "aborted"]
     })
 }
 
@@ -147,8 +147,8 @@ fn expect() -> Value {
         "properties": {
             "status": {
                 "type": "string",
-                "enum": ["completed", "failed", "cancelled", "aborted", "active"],
-                "description": "How the run ended; \"active\" for a run that can go no further in virtual time without the outside world (one waiting for a signal no test sends, for example)."
+                "enum": ["completed", "failed", "cancelled", "aborted", "waiting"],
+                "description": "How the run ended; \"waiting\" for a run that can go no further in virtual time without the outside world (one waiting for a signal no test sends, for example)."
             },
             "output": {
                 "description": "Values the output must contain: objects are compared key by key, recursively, so give only the keys that matter; other values must be equal."
@@ -218,7 +218,7 @@ fn inline_test() -> Value {
                     },
                     "handlers": {
                         "type": "string",
-                        "description": "TypeScript handlers, for answers computed from the args: a module that imports nothing and default-exports its handlers by action name or by group, such as `export default { \"github.get_issue\": ({ number }) => ({ number, state: \"open\" }) }`. What a handler throws fails the call. Tried after `tools`."
+                        "description": "TypeScript handlers, for answers computed from the args: a module that imports nothing and default-exports its handlers by action name or by group, such as `export default { \"github.get_issue\": ({ number }) => ({ number, state: \"open\" }) }`. What a handler throws fails the call. Tried after `actions`."
                     }
                 },
                 "additionalProperties": false
@@ -233,7 +233,7 @@ fn inline_test() -> Value {
                         "payload": { "description": "Any JSON value." },
                         "when": {
                             "type": "string",
-                            "description": "\"blocked\" (the default): once the run can go no further without it. Or a duration of virtual time after the start, such as \"2h\"."
+                            "description": "\"waiting\" (the default): once the run waits for something other than a timer, which virtual time moves by itself. Or a duration of virtual time after the start, such as \"2h\"."
                         }
                     },
                     "required": ["name"],

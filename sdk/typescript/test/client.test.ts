@@ -223,12 +223,12 @@ describe("the client", () => {
 
   it("returns the run as the server answered it, still waiting when the wait passed, without asking again", async () => {
     server
-      .on("POST", "/v1/runs", json(run({ status: "active" }), 201))
-      .on("GET", "/v1/runs/{id}", json(run({ status: "active" })));
+      .on("POST", "/v1/runs", json(run({ status: "waiting" }), 201))
+      .on("GET", "/v1/runs/{id}", json(run({ status: "waiting" })));
     const started = await rewind.runs.start({ code: "x", wait: 30 });
-    expect(started.status).toBe("active");
+    expect(started.status).toBe("waiting");
     const read = await rewind.runs.get(RUN_ID, { wait: "1h" });
-    expect(read.status).toBe("active");
+    expect(read.status).toBe("waiting");
     expect(server.requests).toHaveLength(2);
   });
 
@@ -460,7 +460,7 @@ describe("the client", () => {
         "/v1/runs/{id}/fork",
         json(run({ id: "fork-1", source: { run: RUN_ID, handle: HANDLE, at: 5 } }), 201),
       )
-      .on("POST", "/v1/runs/{id}/release", json(run({ status: "active" })))
+      .on("POST", "/v1/runs/{id}/release", json(run({ status: "waiting" })))
       .on("POST", "/v1/runs/{id}/give-up", json(run({ status: "aborted" })))
       .on("DELETE", "/v1/runs/{id}", noContent);
     expect((await rewind.runs.cancel(RUN_ID, { reason: "not needed", wait: "5s" })).status).toBe("cancelled");
@@ -501,7 +501,7 @@ describe("the client", () => {
         json({ idx: 1, recordedAt: "t", event: { type: "timer_fired", seq: 1 } }),
       )
       .on("GET", "/v1/runs/{id}/export", json({ v: 1 }))
-      .on("POST", "/v1/runs/{id}/release", json(run({ status: "active" })))
+      .on("POST", "/v1/runs/{id}/release", json(run({ status: "waiting" })))
       .on("POST", "/v1/runs/{id}/give-up", json(run({ status: "aborted" })))
       .on("DELETE", "/v1/runs/{id}", noContent);
     expect((await rewind.runs.get(HANDLE)).handle).toBe(HANDLE);
@@ -559,7 +559,7 @@ describe("the client", () => {
       "/v1/test",
       json({
         passed: true,
-        tests: [{ name: "waits", passed: true, status: "active", calls: {}, failures: [], transcript: "" }],
+        tests: [{ name: "waits", passed: true, status: "waiting", calls: {}, failures: [], transcript: "" }],
       }),
     );
     const checked = await rewind.workflows.check({ code: "x", actionSet: ACTION_SET });
@@ -567,7 +567,7 @@ describe("the client", () => {
     expect(checked.workflow).toEqual(found);
     expect(server.requests[0]?.body).toEqual({ code: "x", actionSet: ACTION_SET });
     const tests = [
-      { name: "waits", signals: [{ name: "approval", when: "2h" }], expect: { status: "active" as const } },
+      { name: "waits", signals: [{ name: "approval", when: "2h" }], expect: { status: "waiting" as const } },
       "9f".repeat(32),
       { test: "9f".repeat(32), expect: { status: "completed" as const } },
     ];
@@ -647,7 +647,7 @@ describe("the client", () => {
       name,
       createdAt: "2026-11-12T10:00:00Z",
       latest: version(),
-      runs: { pending: 0, active: 1, completed: 4, failed: 0, cancelled: 0, aborted: 0 },
+      runs: { active: 1, completed: 4, failed: 0, cancelled: 0, aborted: 0 },
       actions: ["github.list_issues"],
     });
     server.on("GET", "/v1/workflows", (request) =>

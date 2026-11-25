@@ -440,7 +440,7 @@ impl<A: Api> Session<'_, A> {
             None | Some(Value::Null) => None,
             Some(value) => Some(serde_json::from_value::<RunStatus>(value.clone()).map_err(|_| {
                 InputError::new(
-                    "`status` must be one of pending, active, completed, failed, cancelled, aborted.",
+                    "`status` must be one of queued, running, waiting, completed, failed, cancelled, aborted.",
                 )
             })?),
         };

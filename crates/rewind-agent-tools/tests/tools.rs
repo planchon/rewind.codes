@@ -887,6 +887,26 @@ async fn update_workflow_names_and_describes_a_workflow_without_a_version() {
         "no version after a refused name"
     );
 
+    // The tests are read as the API reads them before anything changes: no name without them.
+    let unreadable = tools
+        .handle(
+            "update_workflow",
+            &json!({
+                "workflow": ID,
+                "name": "renamed",
+                "replace": [{ "name": "test 0", "reason": "it waits now", "expect": { "status": "active" } }]
+            }),
+            &call("c4"),
+        )
+        .await
+        .unwrap();
+    assert!(unreadable.is_error);
+    assert_eq!(
+        unreadable.content,
+        "update_workflow failed: the body is not valid: unknown variant `active`, expected one of `queued`, `running`, `waiting`, `completed`, `failed`, `cancelled`, `aborted`"
+    );
+    assert_eq!(fake.operations(), ["update_workflow", "update_workflow"]);
+
     let nothing = tools
         .handle("update_workflow", &json!({ "workflow": ID }), &call("c3"))
         .await
