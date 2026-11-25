@@ -1240,10 +1240,10 @@ impl PostgresCatalog {
         }
         let namespace = match exceptions {
             Some(exceptions) => {
-                let [cpu, active, runs, scripts, ttl, lines] = quota_values(exceptions);
+                let [cpu, active, runs, workflows, ttl, lines] = quota_values(exceptions);
                 sqlx::query(
                     "UPDATE namespaces SET cpu_per_month_ms = $3, active_runs = $4, \
-                     runs_per_month = $5, scripts = $6, max_ttl_ms = $7, max_script_lines = $8 \
+                     runs_per_month = $5, workflows = $6, max_ttl_ms = $7, max_code_lines = $8 \
                      WHERE tenant = $1 AND name = $2",
                 )
                 .bind(tenant(tenant_id))
@@ -1251,7 +1251,7 @@ impl PostgresCatalog {
                 .bind(cpu)
                 .bind(active)
                 .bind(runs)
-                .bind(scripts)
+                .bind(workflows)
                 .bind(ttl)
                 .bind(lines)
                 .execute(&mut *tx)

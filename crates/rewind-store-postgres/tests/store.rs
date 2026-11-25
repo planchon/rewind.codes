@@ -932,6 +932,13 @@ async fn saved_workflows_of_version_15_become_workflows(postgres: &Postgres) {
         "INSERT INTO grants (tenant, principal, role, allowed_labels, granted_by, granted_at) \
          VALUES ('acme', 'user:user_9', 'reader', '{}', 'user:user_1', 1)"
             .to_owned(),
+        // Quotas of workflows and code lines, in the columns that said scripts.
+        "INSERT INTO tenants (id, retention_ms, scripts, max_script_lines, default_scripts, \
+         default_max_script_lines) VALUES ('acme', 1000, 5, 300, 2, 100)"
+            .to_owned(),
+        "INSERT INTO namespaces (tenant, name, scripts, max_script_lines, created_at, \
+         last_active_at, partition) VALUES ('acme', 'alice', 3, 200, 1, 1, 0)"
+            .to_owned(),
         "INSERT INTO subscriptions (tenant, id, url, secret, events, labels) \
          VALUES ('acme', 'sub_1', 'https://example.com', 's', \
                  '[\"credentials.expired\",\"run.completed\",\"run.suspended\"]', '{}')"
@@ -1113,6 +1120,32 @@ async fn saved_workflows_of_version_15_become_workflows(postgres: &Postgres) {
         role("worker").await,
         permissions(&["actions:read", "calls:approve", "calls:work"]),
         "migration 17 renames the permissions of calls and actions"
+    );
+    // Migration 17 renames the quotas' columns, their values kept.
+    let tenant = catalog
+        .get_tenant(&acme)
+        .await
+        .expect("get_tenant")
+        .expect("the tenant");
+    assert_eq!(
+        (tenant.quotas.workflows, tenant.quotas.max_code_lines),
+        (Some(5), Some(300))
+    );
+    assert_eq!(
+        (
+            tenant.namespace_defaults.workflows,
+            tenant.namespace_defaults.max_code_lines
+        ),
+        (Some(2), Some(100))
+    );
+    let alice = catalog
+        .get_namespace(&acme, &NamespaceName::new("alice").expect("a name"))
+        .await
+        .expect("get_namespace")
+        .expect("the namespace");
+    assert_eq!(
+        (alice.exceptions.workflows, alice.exceptions.max_code_lines),
+        (Some(3), Some(200))
     );
     let pool = sqlx::PgPool::connect(&postgres.url(&database))
         .await

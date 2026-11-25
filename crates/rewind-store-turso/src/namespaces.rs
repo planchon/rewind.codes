@@ -15,9 +15,9 @@ pub(crate) fn quota_columns(prefix: &str) -> String {
         "cpu_per_month_ms",
         "active_runs",
         "runs_per_month",
-        "scripts",
+        "workflows",
         "max_ttl_ms",
-        "max_script_lines",
+        "max_code_lines",
     ]
     .map(|column| format!("{prefix}{column}"))
     .join(", ")
@@ -53,8 +53,8 @@ pub(crate) fn quota_values(quotas: &Quotas) -> [Value; 6] {
 /// column of version 1, `active_run_quota`.
 fn tenant_columns() -> String {
     format!(
-        "id, retention_ms, cpu_per_month_ms, active_run_quota, runs_per_month, scripts, \
-         max_ttl_ms, max_script_lines, {}",
+        "id, retention_ms, cpu_per_month_ms, active_run_quota, runs_per_month, workflows, \
+         max_ttl_ms, max_code_lines, {}",
         quota_columns("default_")
     )
 }

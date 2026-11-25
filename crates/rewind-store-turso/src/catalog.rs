@@ -1731,7 +1731,7 @@ impl CatalogStore for TursoCatalog {
             sql::execute(
                 connection,
                 "UPDATE namespaces SET cpu_per_month_ms = ?, active_runs = ?, \
-                 runs_per_month = ?, scripts = ?, max_ttl_ms = ?, max_script_lines = ? \
+                 runs_per_month = ?, workflows = ?, max_ttl_ms = ?, max_code_lines = ? \
                  WHERE tenant = ? AND name = ?",
                 params,
             )

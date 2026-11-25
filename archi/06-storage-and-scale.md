@@ -181,7 +181,7 @@ production's data.
 | --- | --- |
 | The partitions, on S3 | Every record in the new names: the events (`schedule_call { action }`, `call_completed`, `call_failed`, the `code` and `action_set` of `run_started`), the statuses (`queued`; a run that was `active` is `running` or `waiting`, from the waits its head holds), the wait kinds (`harness`, `quarantined`), the tasks' `delivery`, `next_delivery_at`, `idempotent` and route `harness`, a fork's `source`, the summaries' mode `test`, the heads' `unfinished`, the signal URL tokens, the outbox items' webhook `type`, the tenant state |
 | The archive, on S3 | Every sealed attempt, as a run export in the new names |
-| The catalog | `code` and `action_sets`; every pinned action set and workflow version in the new names; the workflows, their versions, their codes and their suites (below); the partitions' `generation` |
+| The catalog | `code` and `action_sets`; every pinned action set and workflow version in the new names; the workflows, their versions, their codes and their suites (below); the partitions' `generation`; the quotas `workflows` and `max_code_lines` of organizations, their namespaces' defaults and namespaces |
 | The access store | Grants' principals `member:<id>`; the permissions of roles, tokens and token keys: `actions:read`, `actions:write` with `workflows:write` where `toolsets:write` was, `workflows:write` where `scripts:write` was, `calls:work`, `calls:approve` |
 | The subscriptions | Their `types`, with the new types (`run.waiting`, `action.schema_changed`, `secret.expired`) |
 

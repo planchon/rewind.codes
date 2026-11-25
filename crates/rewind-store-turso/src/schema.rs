@@ -1132,13 +1132,20 @@ WHERE EXISTS (SELECT 1 FROM json_each(token_keys.permissions)
 
 /// The catalog in the words of the rename release (`archi/06-storage-and-scale.md`, "Rewriting the
 /// stored names"), as Postgres's migration 17: the tables of the code and the pinned action sets,
-/// a partition's `generation`, a subscription's `types` and the new names of its webhook types, the
+/// a partition's `generation`, the quotas of `workflows` and `max_code_lines` (and their
+/// defaults), a subscription's `types` and the new names of its webhook types, the
 /// principals `member:` that were `user:`, the permissions renamed. The documents whose digest is
 /// their identity are `rename-data`'s.
 const V15: &str = r#"
 ALTER TABLE scripts RENAME TO code;
 ALTER TABLE toolsets RENAME TO action_sets;
 ALTER TABLE partitions RENAME COLUMN epoch TO generation;
+ALTER TABLE tenants RENAME COLUMN scripts TO workflows;
+ALTER TABLE tenants RENAME COLUMN max_script_lines TO max_code_lines;
+ALTER TABLE tenants RENAME COLUMN default_scripts TO default_workflows;
+ALTER TABLE tenants RENAME COLUMN default_max_script_lines TO default_max_code_lines;
+ALTER TABLE namespaces RENAME COLUMN scripts TO workflows;
+ALTER TABLE namespaces RENAME COLUMN max_script_lines TO max_code_lines;
 ALTER TABLE subscriptions RENAME COLUMN events TO types;
 UPDATE subscriptions SET types = replace(replace(replace(types,
     '"run.suspended"', '"run.waiting"'),
@@ -1869,8 +1876,8 @@ mod tests {
     async fn the_saved_workflows_of_version_13_move_to_the_workflow_model() {
         use rewind_core::{WorkflowId, WorkflowVersion};
         use rewind_engine::ports::{
-            CatalogMigration, CatalogStore, CodeTitle, NewVersion, ScopeFilter, StoredWorkflow,
-            SuiteMember, WorkflowFilter, WorkflowScope,
+            CatalogMigration, CatalogStore, CodeTitle, NamespaceName, NewVersion, ScopeFilter,
+            StoredWorkflow, SuiteMember, WorkflowFilter, WorkflowScope,
         };
         use serde_json::json;
 
@@ -1997,6 +2004,23 @@ mod tests {
             )
             .await
             .expect("a token key");
+            // Quotas of workflows and code lines, in the columns that said scripts.
+            sql::execute(
+                &connection,
+                "INSERT INTO tenants (id, retention_ms, scripts, max_script_lines, \
+                 default_scripts, default_max_script_lines) VALUES ('acme', 1000, 5, 300, 2, 100)",
+                Vec::new(),
+            )
+            .await
+            .expect("a tenant");
+            sql::execute(
+                &connection,
+                "INSERT INTO namespaces (tenant, name, scripts, max_script_lines, created_at, \
+                 last_active_at, partition) VALUES ('acme', 'alice', 3, 200, ?, ?, 0)",
+                vec![ts(T0), ts(T0)],
+            )
+            .await
+            .expect("a namespace");
             (gym_v1, triage_v1, triage_v2, triage_v3)
         };
 
@@ -2186,6 +2210,32 @@ mod tests {
         assert_eq!(
             stored, r#"["actions:write","runs:read","workflows:write"]"#,
             "sorted, as the store writes them"
+        );
+        // Version 15 renames the quotas' columns, their values kept.
+        let tenant = catalog
+            .get_tenant(&acme)
+            .await
+            .expect("get_tenant")
+            .expect("the tenant");
+        assert_eq!(
+            (tenant.quotas.workflows, tenant.quotas.max_code_lines),
+            (Some(5), Some(300))
+        );
+        assert_eq!(
+            (
+                tenant.namespace_defaults.workflows,
+                tenant.namespace_defaults.max_code_lines
+            ),
+            (Some(2), Some(100))
+        );
+        let alice = catalog
+            .get_namespace(&acme, &NamespaceName::new("alice").expect("a name"))
+            .await
+            .expect("get_namespace")
+            .expect("the namespace");
+        assert_eq!(
+            (alice.exceptions.workflows, alice.exceptions.max_code_lines),
+            (Some(3), Some(200))
         );
         let left: Vec<String> = {
             let connection = store.connection().await.expect("connection");

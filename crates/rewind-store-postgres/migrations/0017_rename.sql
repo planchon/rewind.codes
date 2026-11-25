@@ -3,9 +3,9 @@
 -- legacy tables keep their names; the catalog's are renamed).
 --
 -- What SQL can rename is renamed here, once, when the new build opens the store: the tables
--- and columns that still said toolset, script, epoch (a partition's) or events (a
--- subscription's), the principals `user:` that are members now, the permissions renamed and
--- the types of the webhooks a subscription lists. The documents whose digest is their identity
+-- and columns that still said toolset, script (the quotas of scripts and script lines too),
+-- epoch (a partition's) or events (a subscription's), the principals `user:` that are members
+-- now, the permissions renamed and the types of the webhooks a subscription lists. The documents whose digest is their identity
 -- (the pinned action sets, the workflow versions, the tests) are rewritten by
 -- `rewind server rename-data`, which computes their new digests: until it ran, they are refused
 -- when read, as the workflow model's versions are.
@@ -19,6 +19,15 @@ ALTER TABLE action_sets RENAME CONSTRAINT toolsets_pkey TO action_sets_pkey;
 -- A partition's move counter is its generation; the determinism epochs of `nodes` keep their
 -- name.
 ALTER TABLE partitions RENAME COLUMN epoch TO generation;
+
+-- The quotas count workflows and a code's lines, for an organization, its namespaces' defaults
+-- and each namespace.
+ALTER TABLE tenants RENAME COLUMN scripts TO workflows;
+ALTER TABLE tenants RENAME COLUMN max_script_lines TO max_code_lines;
+ALTER TABLE tenants RENAME COLUMN default_scripts TO default_workflows;
+ALTER TABLE tenants RENAME COLUMN default_max_script_lines TO default_max_code_lines;
+ALTER TABLE namespaces RENAME COLUMN scripts TO workflows;
+ALTER TABLE namespaces RENAME COLUMN max_script_lines TO max_code_lines;
 
 -- A subscription lists webhook types.
 ALTER TABLE subscriptions RENAME COLUMN events TO types;
