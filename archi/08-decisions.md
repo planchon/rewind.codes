@@ -112,6 +112,7 @@ Read this index, then only the sections of your work. Add each new section here.
   - [Taken while bringing the dashboard to the rename release](#taken-while-bringing-the-dashboard-to-the-rename-release-november-2026)
   - [Taken while building rename-data](#taken-while-building-rename-data-november-2026)
   - [Taken while merging main into the rename release](#taken-while-merging-main-into-the-rename-release-november-2026)
+  - [Taken while bringing the release gate to GO on the rename release](#taken-while-bringing-the-release-gate-to-go-on-the-rename-release-november-2026)
 
 ## Product
 
@@ -2153,3 +2154,9 @@ words and the workflow model of the rename release.
 | A namespace's Usage speaks the rename release: "histories", "Longest code" (`maxCodeLines`); the table of a namespace's runs forced to it (`ScopedRuns`) goes, since its runs are its scope's Runs | Keeping the component | Nothing uses it once the namespace's page is split. |
 | The tests the branch added or renamed are modules of their crate's one binary: `rewind-engine`'s `model` and `transcript` (was `trace`), `rewind-format`'s `rename`, `rewind-runtime`'s `handlers` (was `mocks`); the corpus runs as `corpus::epoch_1::…` and `corpus::epoch_2::…`. 1,390 tests and 5 ignored, as on the branch before the merge | | Main's [one test binary per crate](#taken-for-the-development-loop-november-2026). |
 | The `deploy` skill lists the rename release's steps: the release gate's GO, the rehearsal on a copy, the node stopped, its variables renamed (`REWIND_ADMIN_TENANT` to `REWIND_ADMIN_ORGANIZATION`, `REWIND_TENANT_POOLS` to `REWIND_ORGANIZATION_POOLS`, `REWIND_QUOTA_SCRIPTS` to `REWIND_QUOTA_WORKFLOWS`, `REWIND_QUOTA_MAX_SCRIPT_LINES` to `REWIND_QUOTA_MAX_CODE_LINES`, `REWIND_ALLOW_INTERNAL_TOOLS` to `REWIND_ALLOW_INTERNAL_ADDRESSES`), `rename-data` once from a one-off service, then the deploy | Leaving them to `deploy/README.md` alone | The skill is what deploys the server; a deploy by its usual steps would start the new build on data in the old names. |
+
+### Taken while bringing the release gate to GO on the rename release (November 2026)
+
+| Decision | Alternative rejected | Why |
+| --- | --- | --- |
+| **A reference that is neither a workflow's id nor a name names no workflow**: what does not parse as an id and fails the rules of a name ([workflow names](04-tools.md#workflow-names)), a NUL, a path, another alphabet or 10 kB, is 404 `not-found` without a read of the store, wherever a workflow is named (`/v1/workflows/{id}`, a start, an action set's pins, a test) | Refusing it with 400; refusing only a NUL | Postgres refuses a NUL in a query, which answered 503; a name that cannot be given is one no workflow has, as an unknown run id is 404. |

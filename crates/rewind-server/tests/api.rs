@@ -1381,6 +1381,20 @@ async fn lookups_with_a_nul_character_match_nothing() {
     server.stop().await;
 }
 
+/// On Postgres (Docker), which refuses a NUL character in a query: skipped, with a message, when
+/// Docker is absent, unless `REWIND_REQUIRE_DOCKER` is set.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn lookups_with_a_nul_character_match_nothing_on_postgres() {
+    let Some(postgres) = support::Postgres::start() else {
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let blobs = dir.path().join("blobs");
+    let server = TestServer::start_on(dir, &postgres.url(), &blobs, &[]).await;
+    support::nul_lookups_match_nothing(&server).await;
+    server.stop().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn text_with_a_nul_character_is_refused_with_400() {
     let server = TestServer::start(&[]).await;

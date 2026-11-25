@@ -178,6 +178,12 @@ impl<P: Plane> Edge<P> {
             let visible = !catalog.versions(tenant, &id, labels).await?.is_empty();
             return Ok(visible.then_some(found));
         }
+        // Neither an id nor a name (`archi/04-tools.md`, "Workflow names"): a NUL, a path, a
+        // word of any other alphabet or 10 kB name no workflow, and never reach the store,
+        // which may refuse them (Postgres refuses a NUL character).
+        if check_workflow_name(workflow).is_err() {
+            return Ok(None);
+        }
         Ok(catalog
             .workflow_named(tenant, namespace, workflow, labels)
             .await?)

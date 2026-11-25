@@ -487,7 +487,9 @@ pub(crate) fn wait(text: &str) -> Option<rewind_api::common::Duration> {
 
 /// Lookups whose key holds a NUL character (U+0000) match nothing, whatever the store: an
 /// unknown token or id is not found, and a filter is refused with 400. Postgres refuses the
-/// character in a query, and its error was answered 503 "the store cannot be reached".
+/// character in a query, and its error was answered 503 "the store cannot be reached". A
+/// workflow named by what is neither its id nor a name (a NUL, a path, another alphabet, 10 kB)
+/// is not found either.
 pub(crate) async fn nul_lookups_match_nothing(server: &TestServer) {
     use rewind_api::ProblemType;
     use rewind_api::calls::{CallStreamQuery, CompleteCall, DeferCall, FailCall, RejectCall};
@@ -576,6 +578,23 @@ pub(crate) async fn nul_lookups_match_nothing(server: &TestServer) {
     not_found(harness.revoke_token("ab\u{0}").await.unwrap_err());
     not_found(harness.delete_token_key("rk_\u{0}").await.unwrap_err());
     not_found(harness.get_run("run\u{0}", None).await.unwrap_err());
+
+    // Workflows, by an id or a name: neither reaches the store.
+    let workflows = [
+        "wf_\u{0}",
+        "run\u{0}id",
+        "\u{0}",
+        "tri\u{0}age@v1",
+        "r\u{fc}n",
+        "../api-keys",
+    ];
+    let long = "a".repeat(10_240);
+    for workflow in workflows.into_iter().chain([long.as_str()]) {
+        not_found(harness.get_workflow(workflow).await.unwrap_err());
+        let mut start = rewind_api::runs::StartRun::new("");
+        start.workflow = Some(workflow.into());
+        not_found(harness.start_run(&start, None).await.unwrap_err());
+    }
 
     // Filters: labels and actions.
     for label in ["agent:tri\u{0}age", "ag\u{0}ent:triage"] {
