@@ -1006,16 +1006,16 @@ test.describe("secrets per namespace", () => {
       const secretsView = await page.content();
       expect(secretsView.includes(canary()), "the Secrets view shows a value").toBe(false);
 
-      // Alice's page: her secret, read by her run.
-      await page.goto(`${stacks().a.url}/namespaces/alice`);
+      // Alice's Secrets, in her namespace's scope: her secret, read by her run.
+      await page.goto(`${stacks().a.url}/ns/alice/secrets`);
       await expect(page.getByText("ns/fx")).toBeVisible();
       const hers = await page.content();
-      expect(hers.includes(canary()), "a namespace's page shows a value").toBe(false);
+      expect(hers.includes(canary()), "a namespace's Secrets shows a value").toBe(false);
       // The run's page names the secrets it uses, never a value.
       await page.goto(`${stacks().a.url}/runs/${run.id}`);
       await expect(page.getByText("ns/fx").first()).toBeVisible();
       expect((await page.content()).includes(canary()), "a run's page shows a value").toBe(false);
-      evidence("signed in with the owner key: Secrets lists org/shared-fx (env=prod), its value typed in a password field; Alice's page lists ns/fx; the run's page names ns/fx; no page holds a value");
+      evidence("signed in with the owner key: Secrets lists org/shared-fx (env=prod), its value typed in a password field; Alice's Secrets lists ns/fx; the run's page names ns/fx; no page holds a value");
     } finally {
       await mcp.close();
     }

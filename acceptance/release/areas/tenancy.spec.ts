@@ -361,7 +361,8 @@ test("another organization's workflow is not found, and starts nothing", { tag: 
   const runs = async () => (await globex.api.get("/v1/runs", { query: { limit: 100 } })).json.runs.length;
   expectProblem(await globex.api.get(`/v1/workflows/${name}`), 404, "not-found");
   await expectRefused({ attempt: () => globex.api.ns("globex-ns").post("/v1/runs", { workflow: name, input: { n: 1 } }), status: 404, slug: "not-found", probe: runs });
-  const digest = String(saved.json.digest);
+  const digest = String(saved.json.version.digest);
+  expect(digest).toMatch(/^[0-9a-f]{64}$/);
   await expectRefused({ attempt: () => globex.api.ns("globex-ns").post("/v1/runs", { workflow: `${name}@${digest}`, input: { n: 1 } }), status: 404, slug: "not-found", probe: runs });
   expectOk(await acme.org.api.get(`/v1/workflows/${name}`), 200);
   evidence("globex: GET acme's workflow, and a run of it by name and by its exact version digest → 404; nothing started");

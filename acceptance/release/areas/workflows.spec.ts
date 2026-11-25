@@ -102,7 +102,13 @@ test("creating a workflow checks it and gives its id and declarations; its name 
   expect(created.json.version.digest).toMatch(/^[0-9a-f]{64}$/);
   expect(created.json.version.declarations.dts).toContain(`export const ${name}: Workflow<`);
   expect(created.json.version.declarations.prompt.startsWith(`${name}.start({ repo: string }) → run`), created.json.version.declarations.prompt).toBe(true);
-  expectProblem(await org.api.post("/v1/workflows", triage(name)), 409, "name-taken");
+  // Another workflow under its name is refused; the same creation sent again, as a client does
+  // when its answer was lost, answers the workflow it made (archi/08, the SDK's resent writes).
+  expectProblem(await org.api.post("/v1/workflows", triage(name, TRIAGE.replace("? 3 : 0", "? 4 : 0"))), 409, "name-taken");
+  const resent = await org.api.post("/v1/workflows", triage(name));
+  expectOk(resent, 200);
+  expect(resent.json.id).toBe(created.json.id);
+  expect(resent.json.version.version).toBe(1);
   // The same code again makes no version.
   const again = await org.api.post(`/v1/workflows/${name}/versions`, { code: TRIAGE });
   expectOk(again, 200);
