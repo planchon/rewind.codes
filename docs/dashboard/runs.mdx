@@ -7,8 +7,8 @@ Runs holds the runs of your organization in four views of the same query: **All*
 **Failures**. Its sidebar holds the views and the filters.
 
 <Frame>
-  <img src="/images/dashboard/observability-light.webp" alt="Runs: the query bar, runs started over time, the list of runs, and the filters" className="block dark:hidden" />
-  <img src="/images/dashboard/observability-dark.webp" alt="Runs: the query bar, runs started over time, the list of runs, and the filters" className="hidden dark:block" />
+  <img src="/images/dashboard/runs-light.webp" alt="Runs: the query bar, runs started over time, the list of runs, and the filters" className="block dark:hidden" />
+  <img src="/images/dashboard/runs-dark.webp" alt="Runs: the query bar, runs started over time, the list of runs, and the filters" className="hidden dark:block" />
 </Frame>
 
 ## The query bar
@@ -18,22 +18,24 @@ and the values that exist as you type (after `namespace:`, the end users whose n
 underlines a term the server cannot read.
 
 <Frame caption="Suggestions drawn from the values that exist: here, the values of the label agent">
-  <img src="/images/dashboard/observability-suggestions-light.webp" alt="The query bar suggesting @agent:support, @agent:triage and @agent:digest" className="block dark:hidden" />
-  <img src="/images/dashboard/observability-suggestions-dark.webp" alt="The query bar suggesting @agent:support, @agent:triage and @agent:digest" className="hidden dark:block" />
+  <img src="/images/dashboard/runs-suggestions-light.webp" alt="The query bar suggesting @agent:support, @agent:triage and @agent:digest" className="block dark:hidden" />
+  <img src="/images/dashboard/runs-suggestions-dark.webp" alt="The query bar suggesting @agent:support, @agent:triage and @agent:digest" className="hidden dark:block" />
 </Frame>
 
 ## Filters
 
-The sidebar lists, for each field, the values found with their counts: the timeline, the status, the workflows, the
-namespaces, each label, the actions, the errors. A filter is a term of the query:
+The sidebar lists, for each field, its values with their counts: the timeline, the status, the workflows, the
+namespaces, each label, the actions, the errors. The counts come from the hourly counters of the query's namespace, or
+of the organization, over the window: the other terms of the query narrow the list of runs, not the counts. A filter is
+a term of the query:
 
 - one click asks for the value (`status:failed`);
 - a second click excludes it (`-status:failed`);
 - a third removes it.
 
 <Frame caption="@agent:triage status:failed: the filters checked in the sidebar are the terms of the query">
-  <img src="/images/dashboard/observability-query-light.webp" alt="Runs filtered on the failed runs of the triage agent" className="block dark:hidden" />
-  <img src="/images/dashboard/observability-query-dark.webp" alt="Runs filtered on the failed runs of the triage agent" className="hidden dark:block" />
+  <img src="/images/dashboard/runs-query-light.webp" alt="Runs filtered on the failed runs of the triage agent" className="block dark:hidden" />
+  <img src="/images/dashboard/runs-query-dark.webp" alt="Runs filtered on the failed runs of the triage agent" className="hidden dark:block" />
 </Frame>
 
 ## The four views
@@ -44,7 +46,7 @@ The runs started over time, then the list: each run with its handle, its status,
 started, its duration, its calls, when it wakes and its error. Click a header to order the runs by its column (newest
 or oldest first, latest activity, longest, most calls, soonest to wake) or to filter what it shows: a status, a
 namespace, a workflow, a window of start, a duration, a number of calls, the actions called, an error, a label. A
-header's filter is a term of the query, so it shows in the query bar and is saved with a search.
+header's filter is a term of the query, so it shows in the query bar and in the page's URL.
 
 A run's status is `queued`, `running` or `waiting` until it ends `completed`, `failed`, `cancelled` or `aborted`. A
 waiting run shows what it waits for on hover.
@@ -61,8 +63,8 @@ actions**, **approvals**, **deferred** and **parked** calls, and **quarantines**
 on and when it wakes, the soonest first. Use it to find what a person, your worker or your harness has to answer.
 
 <Frame>
-  <img src="/images/dashboard/observability-waiting-light.webp" alt="Waiting runs grouped by signal, timer, harness action, approval and parked call" className="block dark:hidden" />
-  <img src="/images/dashboard/observability-waiting-dark.webp" alt="Waiting runs grouped by signal, timer, harness action, approval and parked call" className="hidden dark:block" />
+  <img src="/images/dashboard/runs-waiting-light.webp" alt="Waiting runs grouped by signal, timer, harness action, approval and parked call" className="block dark:hidden" />
+  <img src="/images/dashboard/runs-waiting-dark.webp" alt="Waiting runs grouped by signal, timer, harness action, approval and parked call" className="hidden dark:block" />
 </Frame>
 
 ### Failures
@@ -74,8 +76,8 @@ and its latest run by its handle. Its scope is one end user (`namespace:`) or th
 the Overview's.
 
 <Frame>
-  <img src="/images/dashboard/observability-failures-light.webp" alt="Failures by fingerprint, with their series, workflows, line and latest run" className="block dark:hidden" />
-  <img src="/images/dashboard/observability-failures-dark.webp" alt="Failures by fingerprint, with their series, workflows, line and latest run" className="hidden dark:block" />
+  <img src="/images/dashboard/runs-failures-light.webp" alt="Failures by fingerprint, with their series, workflows, line and latest run" className="block dark:hidden" />
+  <img src="/images/dashboard/runs-failures-dark.webp" alt="Failures by fingerprint, with their series, workflows, line and latest run" className="hidden dark:block" />
 </Frame>
 
 Click a run, anywhere, to open it in the [Run](/dashboard/run) view.

@@ -22,13 +22,14 @@ bar and row opens the runs behind it in [Runs](/dashboard/runs).
 
 Below them:
 
-- **Runs started, by outcome**: completed, failed and still active, over the window.
+- **Runs started, by status**: completed, failed, cancelled and aborted, and those still queued, running or waiting,
+  over the window.
 - **What fails most**: failed runs by fingerprint, the error with its numbers, ids and strings replaced, so the same
   failure across many different workflows is one row.
 - **Failing actions**: the actions whose calls failed in the window.
 
 The figures come from hourly counters, kept per end user: the query bar at the top narrows them to one end user,
 `namespace:user_ada`, and the organization's are shown otherwise. Every other term of a
-[query](/dashboard/query-language), such as `@agent:triage`, applies to the runs a figure opens. **Save** keeps the
-query, and the query and the window follow you into Runs. Counters carry no labels: the figures are not available to a
+[query](/dashboard/query-language), such as `@agent:triage`, applies to the runs a figure opens, and the query and the
+window follow you into Runs. Counters carry no labels: the figures are not available to a
 member limited to labels.

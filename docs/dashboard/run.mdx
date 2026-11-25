@@ -5,7 +5,8 @@ description: "One run in depth: the debugger with its time cursor, the history, 
 
 Open a run from anywhere: a row of Runs, a figure of the Overview, Find with its handle or its id. A run is named by its
 **handle**, `namespace/origin/suffix`: for whom it ran, what ran (its workflow's name, else its workflow's short id),
-and a suffix that tells it apart, as in `dana/triage/06bqx3k9f2mt`. Its page is at that path, and the API takes the
+and a suffix that tells it apart, as in `dana/triage/06bqx3k9f2mt`. A handle never changes: a run started before
+workflows had ids keeps the origin it was given then, its code's title as a slug, or `script`. Its page is at that path, and the API takes the
 handle wherever it takes a run. Its header shows its handle, a **Test run** or quarantine tag when it has one, and its
 **Controls**; its sidebar, its sections and its details: namespace, workflow and version (`triage v12`), the run that
 started it, code, action set, calls, its id, trace id, labels and the secrets it uses. A run that is still going
@@ -70,8 +71,8 @@ Every event of the run, at `/runs/<handle>/history`: its index, its time from th
 line. Select one to see it in full.
 
 <Frame>
-  <img src="/images/dashboard/run-journal-light.webp" alt="The history of a run: run_started, schedule_call, call_completed, log, start_timer, signal_awaited" className="block dark:hidden" />
-  <img src="/images/dashboard/run-journal-dark.webp" alt="The history of a run: run_started, schedule_call, call_completed, log, start_timer, signal_awaited" className="hidden dark:block" />
+  <img src="/images/dashboard/run-history-light.webp" alt="The history of a run: run_started, schedule_call, call_completed, log, start_timer, signal_awaited" className="block dark:hidden" />
+  <img src="/images/dashboard/run-history-dark.webp" alt="The history of a run: run_started, schedule_call, call_completed, log, start_timer, signal_awaited" className="hidden dark:block" />
 </Frame>
 
 ## Logs

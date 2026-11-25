@@ -12,7 +12,7 @@
 //
 //   pnpm --dir docs screenshots run-debugger find   # only these shots
 import { mkdir } from "node:fs/promises";
-import { chromium, type Browser, type Locator, type Page } from "playwright";
+import { chromium, type Browser, type Locator, type Page, type Request } from "playwright";
 import sharp from "sharp";
 
 const BASE = process.env.DASHBOARD_URL ?? "http://localhost:5199/";
@@ -33,8 +33,35 @@ interface Shot {
   last?: boolean;
 }
 
+/**
+ * The requests of each page still in flight, but its event streams (the change stream, a run's
+ * events), which stay open as long as the page: Playwright's "networkidle" never comes with them.
+ */
+const inFlight = new WeakMap<Page, Set<Request>>();
+
+function track(page: Page): void {
+  const open = new Set<Request>();
+  inFlight.set(page, open);
+  page.on("request", (request) => {
+    const stream =
+      request.headers().accept === "text/event-stream" ||
+      /\/v1\/changes|\/events\?follow=/.test(request.url());
+    if (!stream) open.add(request);
+  });
+  page.on("requestfinished", (request) => open.delete(request));
+  page.on("requestfailed", (request) => open.delete(request));
+}
+
+/** Waits for the page's reads to be done for half a second (15 s at most), then `ms`. */
 async function settle(page: Page, ms = 900): Promise<void> {
-  await page.waitForLoadState("networkidle").catch(() => {});
+  const open = inFlight.get(page);
+  const deadline = Date.now() + 15_000;
+  let quietSince = Date.now();
+  while (open && Date.now() < deadline) {
+    if (open.size > 0) quietSince = Date.now();
+    else if (Date.now() - quietSince >= 500) break;
+    await page.waitForTimeout(100);
+  }
   await page.waitForTimeout(ms);
 }
 
@@ -43,39 +70,63 @@ async function go(page: Page, route: string): Promise<void> {
   await settle(page);
 }
 
-/** Opens a run of the triage agent waiting for its approval, from Observability's waiting view. */
-async function openWaitingRun(page: Page, section = ""): Promise<void> {
-  await go(page, "/observability?q=%40agent%3Atriage%20waiting%3Asignal");
-  await page.locator("a[href^='/runs/']").first().click();
+/**
+ * Opens the first run a list of Runs shows for `query`, then one of its sections (`history`,
+ * `logs`, `started`; the debugger without one). A run's page is `/runs/<handle>`, beside the
+ * views `/runs/running`, `/runs/waiting` and `/runs/failures`, which its links never name.
+ */
+async function openRun(page: Page, query: string, section = ""): Promise<void> {
+  await go(page, `/runs?q=${encodeURIComponent(query)}`);
+  await page
+    .locator(
+      "main a[href^='/runs/']:not([href^='/runs/running']):not([href^='/runs/waiting']):not([href^='/runs/failures'])",
+    )
+    .first()
+    .click();
   await settle(page, 1500);
   if (section !== "") {
     const url = new URL(page.url());
-    url.pathname = url.pathname.replace(/^(\/runs\/[^/]+)(\/.*)?$/, `$1/${section}`);
+    url.pathname = `${url.pathname.replace(/\/+$/, "")}/${section}`;
     await page.goto(url.toString());
     await settle(page, 1200);
   }
 }
 
+/** Opens a run of the triage agent waiting for its approval. */
+function openWaitingRun(page: Page, section = ""): Promise<void> {
+  return openRun(page, "@agent:triage waiting:signal", section);
+}
+
 const SHOTS: Shot[] = [
-  { name: "overview", open: (page) => go(page, "/overview") },
-  { name: "observability", open: (page) => go(page, "/observability") },
+  // Seven days: the calls of the mocked world that failed are older than a day.
+  { name: "overview", open: (page) => go(page, "/overview?window=7d") },
+  { name: "runs", open: (page) => go(page, "/runs") },
   {
-    name: "observability-query",
+    name: "runs-query",
     async open(page) {
-      await go(page, "/observability?q=%40agent%3Atriage%20status%3Afailed");
+      await go(page, `/runs?q=${encodeURIComponent("@agent:triage status:failed")}`);
+      // The facets before @agent folded, so that the checked @agent shows under the checked status.
+      for (const title of ["Namespace", "Workflow", "@env"]) {
+        const summary = page
+          .locator("details.filter-group[open] > summary")
+          .filter({ has: page.locator(".filter-title", { hasText: new RegExp(`^${title}$`) }) });
+        if ((await summary.count()) > 0) await summary.first().click();
+      }
+      await page.mouse.move(1100, 800);
+      await settle(page, 300);
     },
   },
-  { name: "observability-waiting", open: (page) => go(page, "/observability/waiting") },
+  { name: "runs-waiting", open: (page) => go(page, "/runs/waiting") },
   {
-    name: "observability-suggestions",
+    name: "runs-suggestions",
     async open(page) {
-      await go(page, "/observability");
+      await go(page, "/runs");
       const query = page.getByRole("combobox", { name: "Query" }).or(page.getByLabel("Query")).first();
       await query.fill("@agent:");
       await settle(page, 600);
     },
   },
-  { name: "observability-failures", open: (page) => go(page, "/observability/failures?window=7d") },
+  { name: "runs-failures", open: (page) => go(page, "/runs/failures?window=7d") },
   { name: "run-debugger", open: (page) => openWaitingRun(page), height: 1000 },
   {
     name: "run-time-cursor",
@@ -88,22 +139,32 @@ const SHOTS: Shot[] = [
     },
     height: 1000,
   },
+  // The runs a run started: the run that started a detached run of digest from rewind:workflows.
   {
     name: "run-started",
-    async open(page) {
-      await go(page, "/observability?q=%22rewind%3Aworkflows%22");
-      await page.locator("a[href^='/runs/']").first().click();
-      await settle(page, 1500);
-      const url = new URL(page.url());
-      url.pathname = url.pathname.replace(/^(\/runs\/[^/]+)(\/.*)?$/, "$1/started");
-      await page.goto(url.toString());
-      await settle(page, 1200);
-    },
+    open: (page) => openRun(page, "action:workflows.digest.start", "started"),
   },
-  { name: "run-journal", open: (page) => openWaitingRun(page, "journal") },
-  { name: "scripts", open: (page) => go(page, "/scripts") },
-  { name: "tools", open: (page) => go(page, "/tools") },
+  { name: "run-history", open: (page) => openWaitingRun(page, "history") },
+  { name: "workflows", open: (page) => go(page, "/workflows") },
+  {
+    name: "workflow",
+    // The organization's triage, at its latest version: its code, interface and suite.
+    async open(page) {
+      await go(page, "/workflows");
+      await page
+        .locator("main tr")
+        .filter({ has: page.locator(".wf-name", { hasText: /^triage$/ }) })
+        .filter({ hasNot: page.locator(".tag", { hasText: "fork" }) })
+        .first()
+        .locator("a.wf-name")
+        .click();
+      await settle(page, 1500);
+    },
+    height: 1000,
+  },
+  { name: "actions", open: (page) => go(page, "/actions") },
   { name: "namespaces", open: (page) => go(page, "/namespaces"), height: 1000 },
+  // One end user's scope, at its Usage.
   { name: "namespace", open: (page) => go(page, "/ns/bob/usage") },
   { name: "organization-members", open: (page) => go(page, "/organization/members") },
   { name: "organization-roles", open: (page) => go(page, "/organization/roles") },
@@ -169,6 +230,7 @@ async function capture(browser: Browser, theme: Theme, last: boolean): Promise<v
     locale: "en-US",
   });
   const page = await context.newPage();
+  track(page);
   // The mocked world keeps one browser's session: start signed out.
   await page.request.post(new URL("auth/logout", BASE).toString(), { data: {} });
   await page.goto(BASE);

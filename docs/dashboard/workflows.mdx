@@ -7,8 +7,8 @@ Workflows lists every [workflow](/concepts/workflows) of your organization and o
 the most recently run first. It needs `runs:read`.
 
 <Frame>
-  <img src="/images/dashboard/scripts-light.webp" alt="The Workflows view: each workflow with its scope, its runs by outcome and the actions it called" className="block dark:hidden" />
-  <img src="/images/dashboard/scripts-dark.webp" alt="The Workflows view: each workflow with its scope, its runs by outcome and the actions it called" className="hidden dark:block" />
+  <img src="/images/dashboard/workflows-light.webp" alt="The Workflows view: each workflow with its scope, its runs by outcome and the actions it called" className="block dark:hidden" />
+  <img src="/images/dashboard/workflows-dark.webp" alt="The Workflows view: each workflow with its scope, its runs by outcome and the actions it called" className="hidden dark:block" />
 </Frame>
 
 Each row shows the workflow as it is shown everywhere, its scope (its namespace, or the organization), its runs and
@@ -40,13 +40,19 @@ A workflow's page, at `/workflows/<id>`, has a sidebar of its own: its versions,
 looking at, each test a click away, and that version's details (when it was made, the version it derives from, its
 code's digest, its action set, the secrets its runs use and its labels).
 
+<Frame>
+  <img src="/images/dashboard/workflow-light.webp" alt="A workflow at its latest version: its versions, suite and details in the sidebar, its code, interface and suite" className="block dark:hidden" />
+  <img src="/images/dashboard/workflow-dark.webp" alt="A workflow at its latest version: its versions, suite and details in the sidebar, its code, interface and suite" className="hidden dark:block" />
+</Frame>
+
 It opens on the latest version. The breadcrumb names it, `Workflows / triage / v12`: click the version to switch to
 another one, each with the size of its suite. The page shows the version's **code**, its **interface** (its input,
 output and signal schemas) and its **suite**, the tests it passed when it was made, as a table:
 
 | Column | What |
 | --- | --- |
-| **Test** | Its name, a link to its page, and how it joined the suite: **inherited** from the version before as it was, **added** by this version (written by hand or [recorded from a run](/sdk/workflows#record-tests-from-runs), a link to that run), or **replaced**, with the test it replaces and why |
+| **Test** | Its name, a link to its page; for a replaced test, the test it replaces and why |
+| **Origin** | How it joined the suite: **inherited** from the version before as it was, **added** by this version (written by hand, or **recorded** from a run, a link to that run: [record tests](/sdk/workflows#record-tests-from-runs)), or **replaced** |
 | **Input** | The run's input |
 | **Expects** | How the run must end: its status, and what its output must contain or the error it fails with |
 | **Calls** | How many calls the test checks, and how many must never happen |
