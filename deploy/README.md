@@ -307,7 +307,8 @@ stored names"):
   `waiting` from the waits its head holds) and every sealed attempt of the archive, and prints
   what it changed, and the titles it could not turn into names;
 - run again, it finds everything in the new names and says `nothing to rename`; with
-  `--dry-run` it counts what it would change, by kind, and writes nothing.
+  `--dry-run` it counts what it would change, by kind, and writes nothing (the step that gives
+  runs their workflows writes as it goes, so a dry run leaves it out and says so).
 
 **Runs not yet moved to partitions come first.** A deployment whose Postgres still holds runs
 in its schema `legacy` (one that skipped the deploy that moves runs to partitions, or whose
