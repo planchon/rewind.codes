@@ -67,7 +67,7 @@ pub(super) async fn stream(
     let namespace = match (&caller.namespace, named) {
         (Some(bound), Some(named)) if *bound != named => {
             return Err(ApiError::forbidden(format!(
-                "this request is bound to the namespace {bound}: it receives the tasks of no \
+                "this request is bound to the namespace {bound}: it receives the calls of no \
                  other"
             )));
         }
@@ -83,7 +83,7 @@ pub(super) async fn stream(
     let slots = query.slots.unwrap_or(SLOTS);
     if slots > MAX_SLOTS {
         return Err(ApiError::invalid(format!(
-            "slots is {slots}: a stream holds at most {MAX_SLOTS} tasks at once"
+            "slots is {slots}: a stream holds at most {MAX_SLOTS} calls at once"
         )));
     }
     let worker = match query.worker {

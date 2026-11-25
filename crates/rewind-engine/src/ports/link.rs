@@ -143,12 +143,10 @@ pub enum Refusal {
     #[error("the namespace is being erased: it takes no run")]
     NamespaceDeleting,
     /// No such call task: it was answered, its run ended, or it was handed out again.
-    #[error(
-        "the task no longer exists: it was answered, its run ended, or it was handed out again"
-    )]
+    #[error("the call no longer waits: it was answered, its run ended, or it was handed out again")]
     TaskGone,
     /// Only a task waiting for the harness (`approval` or `parked`) is approved or rejected.
-    #[error("task {task} is {state}: only a task waiting for the harness is approved or rejected")]
+    #[error("call {task} is {state}: only a call waiting for the harness is approved or rejected")]
     TaskNotWaiting { task: String, state: &'static str },
     #[error("the result is {size} bytes as canonical JSON, above the limit of {max} bytes")]
     ResultTooLarge { size: usize, max: usize },
