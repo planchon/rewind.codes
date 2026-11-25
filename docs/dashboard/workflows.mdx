@@ -3,18 +3,18 @@ title: "Workflows"
 description: "Every workflow of your organization and of its namespaces, with its runs and actions; each workflow's versions, code, interface and suite, and every test on its own page."
 ---
 
-Workflows lists every [workflow](/concepts/workflows) of your organization and of its namespaces, the most recently
-run first. It needs `runs:read`.
+Workflows lists every [workflow](/concepts/workflows) of your organization and of its namespaces, since the first run,
+the most recently run first. It needs `runs:read`.
 
 <Frame>
   <img src="/images/dashboard/scripts-light.webp" alt="The Workflows view: each workflow with its scope, its runs by outcome and the actions it called" className="block dark:hidden" />
   <img src="/images/dashboard/scripts-dark.webp" alt="The Workflows view: each workflow with its scope, its runs by outcome and the actions it called" className="hidden dark:block" />
 </Frame>
 
-Each row shows the workflow as it is shown everywhere, its scope (its namespace, or the organization), its runs in the
-window and their outcomes, the actions it called, and when it last and first ran. A workflow shows as its name, else
-the first line of the comment at the top of its latest version's code, else its short id (`wf-7k2m9q`); hover it for
-its id and its code's digest.
+Each row shows the workflow as it is shown everywhere, its scope (its namespace, or the organization), its runs and
+their outcomes, the actions it called, and when it last and first ran. A workflow shows as its name, else the first
+line of the comment at the top of its latest version's code, else its short id (`wf-7k2m9q`); hover it for its id and
+its code's digest.
 
 ```ts
 /**
@@ -28,11 +28,11 @@ import { github } from "rewind:actions";
 Your agents write that comment when they write the code; the rest of it is the workflow's description until one is
 given.
 
-Search with the same query bar as the runs, over a window (the last hour, 24 hours, 7 or 30 days), which reads an end
-user and an action here: `namespace:alice` shows the workflows of Alice's namespace and the organization's workflows
-her runs executed, counted over her runs only; `action:github.close_issue` the workflows that closed issues. Click an
-action in a row to add it to the query. An end user's page opens the same list with **See its workflows**. The counts
-come from hourly counters, which carry no labels: the counts are not available to a member limited to labels.
+Search with the same query bar as the runs, which reads an end user and an action here: `namespace:alice` shows the
+workflows of Alice's namespace and the organization's, counted over her runs only; `action:github.close_issue` the
+workflows that closed issues. Click an action in a row to add it to the query. Pick an end user at the top of the page
+to see the same list for them alone. The counts come from hourly counters, which carry no labels: the counts are not
+available to a member limited to labels.
 
 ## A workflow
 

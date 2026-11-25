@@ -11,7 +11,7 @@ people's connections, `/oauth` and `/.well-known` ([07](../archi/07-code-archite
 After a change of a DTO, a path or an operation in `crates/rewind-api`:
 
 ```sh
-REWIND_OPENAPI_WRITE=1 cargo test -p rewind-api --test openapi
+REWIND_OPENAPI_WRITE=1 cargo test -p rewind-api --test integration openapi::
 ```
 
 Review the diff and commit it. Without the variable, the same test fails when the committed

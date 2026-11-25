@@ -8,12 +8,13 @@ import { PenLine, Plus, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router";
 import { runPath } from "../../app/runLinks";
-import { Ago, Empty, LabelList, Loading, RunHandle, RunId, useNow } from "../../components/bits";
+import { Ago, Empty, Loading, RunHandle, RunId, useNow } from "../../components/bits";
 import { Sparkline } from "../../components/Charts";
 import { ErrorNote } from "../../components/ErrorNote";
 import { DialogForm, FormDialog } from "../../components/FormDialog";
 import { HoverCard } from "../../components/HoverCard";
 import { NamespaceName } from "../../components/NamespaceName";
+import { RowLabels } from "../../components/RowLabels";
 import { TableScroll } from "../../components/TableScroll";
 import { formatLabels } from "../../model/access";
 import { formatCount } from "../../model/format";
@@ -42,12 +43,16 @@ export function useCanWriteSecrets(namespace: string | null): boolean {
 
 export function SecretList({
   namespace,
+  readOnly = false,
 }: {
   /** `null`: the organization's secrets. */
   namespace: string | null;
+  /** Listed only, written elsewhere: the organization's, in a namespace's scope. */
+  readOnly?: boolean;
 }) {
   const list = useSecrets(namespace);
-  const write = useCanWriteSecrets(namespace);
+  const canWrite = useCanWriteSecrets(namespace);
+  const write = canWrite && !readOnly;
   const names = useMemberNames();
   const now = useNow(60_000);
   const [writing, setWriting] = useState<{ existing: Secret | null } | null>(null);
@@ -140,7 +145,7 @@ export function SecretList({
                   </td>
                   {org && (
                     <td className="wrap">
-                      <LabelList labels={s.labels ?? {}} />
+                      <RowLabels labels={s.labels ?? {}} empty />
                     </td>
                   )}
                   <td className="dim">

@@ -22,6 +22,7 @@ import { isActive, type Run, type Waiting } from "../../model/types";
 import { endedRunOf, workflowPath, workflowRef } from "../../model/workflows";
 import { useAccess } from "../../state/access";
 import { useRunExport } from "../../state/runs";
+import { scopedPath } from "../../state/scope";
 import { useWorkflowLabels } from "../../state/workflows";
 import { RunControls } from "./RunControls";
 import { endingOf, RunEndBanner } from "./RunEnd";
@@ -129,7 +130,7 @@ export function RunDetails({ run, model }: { run: Run; model: RunModel }) {
         <dt>Namespace</dt>
         <dd>
           <Link
-            to={queryLink("/runs", fieldTerm("namespace", run.namespace))}
+            to={scopedPath("/runs", run.namespace)}
             title="The end user the run acts for: their runs"
           >
             <NamespaceName name={run.namespace} />
@@ -262,9 +263,7 @@ function UsedSecrets({ run }: { run: Run }) {
       {Object.entries(run.secrets ?? {})
         .sort(([a], [b]) => a.localeCompare(b))
         .map(([server, ref]) => {
-          const to = ref.startsWith("org/")
-            ? "/secrets"
-            : `/namespaces/${encodeURIComponent(run.namespace)}`;
+          const to = scopedPath("/secrets", ref.startsWith("org/") ? null : run.namespace);
           return (
             <li key={server}>
               <span className="muted">{server}</span>{" "}

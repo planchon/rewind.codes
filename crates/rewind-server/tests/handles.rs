@@ -6,7 +6,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-mod support;
+use crate::support;
 
 use rewind_api::access::BuiltInRole;
 use rewind_api::action_sets::CreateActionSet;

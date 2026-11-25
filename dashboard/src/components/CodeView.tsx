@@ -1,5 +1,5 @@
 // A TypeScript source with line numbers and, beside each line, notes about it: on a run's page,
-// the tool calls, timers, signal waits and logs that line caused. The source shows whole: no
+// the calls, timers, signal waits and logs that line caused. The source shows whole: no
 // scroll of its own, long lines wrapped. Each line is a row of one grid (its number, its code,
 // its notes), so a wrapped line keeps its number and its notes beside it.
 // Parts of a line can be targets (a call, a variable): hovered, focused or clicked, they report

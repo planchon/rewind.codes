@@ -6,6 +6,113 @@ Three kinds of decisions, kept apart so it is clear which ones are open:
 - **Architecture (approved)**: proposed during design and approved for 0.1.
 - **Technical (open to challenge)**: taken during design or implementation, delegated.
 
+## Index
+
+Read this index, then only the sections of your work. Add each new section here.
+
+- [Product](#product)
+  - [Taken after the layering](#taken-after-the-layering-november-2026)
+  - [Taken for the dashboard's debugger and search](#taken-for-the-dashboards-debugger-and-search-november-2026)
+  - [Taken for accounts, organizations and access](#taken-for-accounts-organizations-and-access-november-2026)
+  - [Taken for namespaces](#taken-for-namespaces-november-2026)
+  - [Taken for Claude as a harness](#taken-for-claude-as-a-harness-november-2026)
+  - [Taken for secrets and API toolsets](#taken-for-secrets-and-api-toolsets-november-2026)
+  - [Taken for the object-storage rewrite](#taken-for-the-object-storage-rewrite-november-2026)
+  - [Taken for the development loop](#taken-for-the-development-loop-november-2026)
+- [Architecture (approved for 0.1)](#architecture-approved-for-01)
+- [Technical (open to challenge)](#technical-open-to-challenge)
+  - [Taken while implementing the layering](#taken-while-implementing-the-layering-november-2026)
+  - [Taken while freezing the HTTP API and the sandbox lib](#taken-while-freezing-the-http-api-and-the-sandbox-lib-november-2026)
+  - [Taken while freezing the contracts in code](#taken-while-freezing-the-contracts-in-code-november-2026)
+  - [Taken while building the TypeScript SDK](#taken-while-building-the-typescript-sdk-november-2026)
+  - [Taken while implementing the tool tasks](#taken-while-implementing-the-tool-tasks-november-2026)
+  - [Taken while building the dashboard](#taken-while-building-the-dashboard-november-2026)
+  - [Taken while building the dashboard's sign-in and organization views](#taken-while-building-the-dashboards-sign-in-and-organization-views-november-2026)
+  - [Taken while building the runtime](#taken-while-building-the-runtime-november-2026)
+  - [Taken while building the engine's activation side](#taken-while-building-the-engines-activation-side-november-2026)
+  - [Taken while building the embedded store](#taken-while-building-the-embedded-store-november-2026)
+  - [Taken while integrating the branches](#taken-while-integrating-the-branches-november-2026)
+  - [Taken while building the blob stores](#taken-while-building-the-blob-stores-november-2026)
+  - [Taken while building the type-checker](#taken-while-building-the-type-checker-november-2026)
+  - [Taken while building the tools](#taken-while-building-the-tools-november-2026)
+  - [Taken while integrating the tools](#taken-while-integrating-the-tools-november-2026)
+  - [Taken while building OpenTelemetry](#taken-while-building-opentelemetry-november-2026)
+  - [Taken while building the production store](#taken-while-building-the-production-store-november-2026)
+  - [Taken while building the server](#taken-while-building-the-server-november-2026)
+  - [Taken while finishing service telemetry](#taken-while-finishing-service-telemetry-november-2026)
+  - [Taken while building the CLI](#taken-while-building-the-cli-november-2026)
+  - [Taken while building the evals](#taken-while-building-the-evals-november-2026)
+  - [Taken while building the acceptance suite](#taken-while-building-the-acceptance-suite-november-2026)
+  - [Taken while reviewing the core, the format and the engine](#taken-while-reviewing-the-core-the-format-and-the-engine-november-2026)
+  - [Taken while reviewing the server, the API and the CLI](#taken-while-reviewing-the-server-the-api-and-the-cli-november-2026)
+  - [Taken while reviewing the SDK and the dashboard](#taken-while-reviewing-the-sdk-and-the-dashboard-november-2026)
+  - [Taken while fixing the review of the webhooks and the key scopes](#taken-while-fixing-the-review-of-the-webhooks-and-the-key-scopes-november-2026)
+  - [Taken while reviewing the sandbox and the checker](#taken-while-reviewing-the-sandbox-and-the-checker-november-2026)
+  - [Taken while fixing the review of the engine and the stores](#taken-while-fixing-the-review-of-the-engine-and-the-stores-november-2026)
+  - [Taken while reviewing the tools and OpenTelemetry](#taken-while-reviewing-the-tools-and-opentelemetry-november-2026)
+  - [Taken while fixing the runs that kill their workers and the lookups with a NUL](#taken-while-fixing-the-runs-that-kill-their-workers-and-the-lookups-with-a-nul-november-2026)
+  - [Taken while fixing the review of MCP egress and toolset names](#taken-while-fixing-the-review-of-mcp-egress-and-toolset-names-november-2026)
+  - [Taken while building operations](#taken-while-building-operations-november-2026)
+  - [Taken while bounding the sandbox's memory](#taken-while-bounding-the-sandboxs-memory-november-2026)
+  - [Taken while running the workers under gVisor](#taken-while-running-the-workers-under-gvisor-november-2026)
+  - [Taken while designing the dashboard's debugger and search](#taken-while-designing-the-dashboards-debugger-and-search-november-2026)
+  - [Taken while building the dashboard's debugger and search](#taken-while-building-the-dashboards-debugger-and-search-november-2026)
+  - [Taken while building the dashboard's namespaces](#taken-while-building-the-dashboards-namespaces-november-2026)
+  - [Taken while deploying Rewind on Railway and Vercel](#taken-while-deploying-rewind-on-railway-and-vercel-november-2026)
+  - [Taken while publishing the SDK on npm](#taken-while-publishing-the-sdk-on-npm-november-2026)
+  - [Taken while building workflows across runs](#taken-while-building-workflows-across-runs-november-2026)
+  - [Taken while closing the namespaces](#taken-while-closing-the-namespaces-november-2026)
+  - [Taken while merging the namespaces and the workflows](#taken-while-merging-the-namespaces-and-the-workflows-november-2026)
+  - [Taken for the dashboard's redesign](#taken-for-the-dashboards-redesign-november-2026)
+  - [Taken while polishing the dashboard](#taken-while-polishing-the-dashboard-november-2026)
+  - [Taken for the dashboard's type scale](#taken-for-the-dashboards-type-scale-november-2026)
+  - [Taken for the documentation](#taken-for-the-documentation-november-2026)
+  - [Taken while building the release gate](#taken-while-building-the-release-gate-november-2026)
+  - [Taken for workflow test suites](#taken-for-workflow-test-suites-november-2026)
+  - [Taken while building workflow test suites](#taken-while-building-workflow-test-suites-november-2026)
+  - [Taken while integrating Dax](#taken-while-integrating-dax-november-2026)
+  - [Taken while designing the MCP server](#taken-while-designing-the-mcp-server-november-2026)
+  - [Taken while building the agent tools and the MCP server](#taken-while-building-the-agent-tools-and-the-mcp-server-november-2026)
+  - [Taken while building the dashboard's Connect Claude](#taken-while-building-the-dashboards-connect-claude-november-2026)
+  - [Taken while building connections and OAuth](#taken-while-building-connections-and-oauth-november-2026)
+  - [Taken for namespaces' display names](#taken-for-namespaces-display-names-november-2026)
+  - [Taken for the dashboard's plain URLs](#taken-for-the-dashboards-plain-urls-november-2026)
+  - [Taken while freezing the contracts of secrets and API toolsets](#taken-while-freezing-the-contracts-of-secrets-and-api-toolsets-november-2026)
+  - [Taken while building the stores of secrets](#taken-while-building-the-stores-of-secrets-november-2026)
+  - [Taken while building API tools and signed calls](#taken-while-building-api-tools-and-signed-calls-november-2026)
+  - [Taken while building the SDK's and the dashboard's secrets](#taken-while-building-the-sdks-and-the-dashboards-secrets-november-2026)
+  - [Taken while building the attachments of secrets](#taken-while-building-the-attachments-of-secrets-november-2026)
+  - [Taken while fixing the security review of secrets](#taken-while-fixing-the-security-review-of-secrets-november-2026)
+  - [Taken while proving secrets and signed calls end to end](#taken-while-proving-secrets-and-signed-calls-end-to-end-november-2026)
+  - [Taken for the table of runs](#taken-for-the-table-of-runs-november-2026)
+  - [Taken for the live dashboard](#taken-for-the-live-dashboard-november-2026)
+  - [Taken while building the live dashboard](#taken-while-building-the-live-dashboard-november-2026)
+  - [Taken while writing the object-storage spec](#taken-while-writing-the-object-storage-spec-november-2026)
+  - [Taken while freezing the run plane's contracts in code](#taken-while-freezing-the-run-planes-contracts-in-code-november-2026)
+  - [Taken while building the clients of the run plane](#taken-while-building-the-clients-of-the-run-plane-november-2026)
+  - [Taken while building the partitions on SlateDB](#taken-while-building-the-partitions-on-slatedb-november-2026)
+  - [Taken while building the control plane of the run plane](#taken-while-building-the-control-plane-of-the-run-plane-november-2026)
+  - [Taken while building the actors of the run plane](#taken-while-building-the-actors-of-the-run-plane-november-2026)
+  - [Taken while cutting the server over to the run plane](#taken-while-cutting-the-server-over-to-the-run-plane-november-2026)
+  - [Taken while bringing the release gate to GO on the run plane](#taken-while-bringing-the-release-gate-to-go-on-the-run-plane-november-2026)
+  - [Taken for the dashboard's sidebar and run page](#taken-for-the-dashboards-sidebar-and-run-page-november-2026)
+  - [Taken for script titles and run handles](#taken-for-script-titles-and-run-handles-november-2026)
+  - [Taken while building script titles and run handles](#taken-while-building-script-titles-and-run-handles-november-2026)
+  - [Taken while bringing script titles and run handles to the run plane](#taken-while-bringing-script-titles-and-run-handles-to-the-run-plane-november-2026)
+  - [Taken while bringing main's CI to green after the release](#taken-while-bringing-mains-ci-to-green-after-the-release-november-2026)
+  - [Taken while redeploying the hosted node](#taken-while-redeploying-the-hosted-node-november-2026)
+  - [Taken for the vocabulary](#taken-for-the-vocabulary-november-2026)
+  - [Taken while reviewing the vocabulary against main](#taken-while-reviewing-the-vocabulary-against-main-november-2026)
+  - [Taken for the dashboard's labels, handles and lists of everything](#taken-for-the-dashboards-labels-handles-and-lists-of-everything-november-2026)
+  - [Taken for the dashboard's hierarchy](#taken-for-the-dashboards-hierarchy-november-2026)
+  - [Taken while building the workflow model](#taken-while-building-the-workflow-model-november-2026)
+  - [Taken while building SDK 0.6.0](#taken-while-building-sdk-060-november-2026)
+  - [Taken while building the statuses](#taken-while-building-the-statuses-november-2026)
+  - [Taken while bumping the determinism epoch](#taken-while-bumping-the-determinism-epoch-november-2026)
+  - [Taken while bringing the dashboard to the rename release](#taken-while-bringing-the-dashboard-to-the-rename-release-november-2026)
+  - [Taken while building rename-data](#taken-while-building-rename-data-november-2026)
+  - [Taken while merging main into the rename release](#taken-while-merging-main-into-the-rename-release-november-2026)
+
 ## Product
 
 | Decision | Notes |
@@ -399,6 +506,27 @@ Postgres, and that nothing polls but the scheduler.
 | **The embedded server is one node** (C7): one partition, SlateDB on local files, Turso for the control plane, the node link in process | A separate embedded store | The CLI runs the code production runs. |
 | **The control plane notifies its changes** (C9): every write sends its change in the same transaction (`NOTIFY`), and every process listens | Reading the control plane on every request | Caches stay right without a timer; the dashboard's stream carries scripts, workflows, secrets, namespaces and connections. |
 | **SlateDB 0.18** (C10), its compactor in the writer's process, the WAL flushed by the committer after each batch | Another embedded store on object storage | Writer fencing, atomic write batches and conditional puts on S3. |
+
+### Taken for the development loop (November 2026)
+
+The owner found that everything took too long (24 November 2026). Measured that day on the
+development machine (8 cores, 16 GiB): `cargo test --workspace` took 4 min 17 s, one binary after
+the other; a worktree's `target/` reached 43 GB; every cargo command rebuilt `rewind-server` and
+its test binaries for 40 s; CI took about 20 minutes per push to main.
+
+| Decision | Alternative rejected | Why |
+| --- | --- | --- |
+| **Build time and disk come first.** No debug symbols by default (`[profile.dev] debug = false`): a command that needs line numbers or a debugger asks for them (`CARGO_PROFILE_DEV_DEBUG=line-tables-only`) | Debug info, or line tables, by default | The owner's choice. A cold build of every test went to 3 min 50 s with an empty compiler cache |
+| **No Rust in GitHub Actions.** `scripts/gate.sh` checks the workspace on the developer's machine before a commit lands on main (fmt, clippy with `-D warnings`, every test with the Docker ones required, doctests, rustdoc); the release gate (`acceptance/release.sh`) checks the image and the reference deployment under load before a release. GitHub Actions keeps the pnpm packages, the deploys of the sites on Vercel and the SDK's publication on npm | CI on every push; a release gate workflow started by hand | The owner's choice: waiting for CI slowed every change, and the image's release build took 11 of its 20 minutes. The same checks run locally |
+| **The server is deployed from the developer's machine** by the `deploy` skill (`.claude/skills/deploy`): the gate, the release gate for a release, `railway up --service node` with the commit as the deployment's message once the owner says yes, then the health check, `/v1/server`, the logs and a smoke run | A deploy job in CI | Railway builds the image itself from the uploaded tree; a deploy of production needs the owner's go |
+| **cargo-nextest runs the tests** (`.config/nextest.toml`): every test in its own process, the binaries side by side | `cargo test`, one binary after the other | 1,274 tests in 76 s instead of 4 min 17 s. A test that meets a known race on a loaded machine runs alone (`threads-required`), with the race named |
+| **One test binary per crate**: every file of a crate's `tests/` is a module of `tests/integration.rs` (`autotests = false`); a test with a harness of its own (`rewind-cli`'s `embedded`, `rewind-mcp`'s) stays apart. A filter names the module: `cargo nextest run -p rewind-server -E 'test(/^api::/)'`, `cargo test -p rewind-api --test integration openapi::` | One binary per file | Each binary linked V8 and the crate's dependencies again, about 400 MB each: 91 test targets became 24, and a worktree's `target/` went from 23 to 13 GB |
+| **Symbols stay in the development binaries** | `strip = "symbols"`, about 150 MB less per binary | The owner's choice: backtraces keep their function names |
+| **One worktree per feature**: its steps (contract, engine, API, dashboard, docs, reviews, fixes) work in it one after the other | A worktree per step | Each new worktree is a cold build and 20 to 40 GB; the retries took nine |
+| **sccache keeps 50 GiB** (the machine's `~/Library/Application Support/Mozilla.sccache/config`) | Its 10 GiB default | One build of the workspace filled 10 GiB, evicting what the other worktrees would reuse |
+| **`rewind-server`'s build script fails on a watched dashboard source that does not exist** | Watching it anyway | Cargo runs a build script again on every build while a watched path is missing: after `biome.json` became `biome.jsonc`, every cargo command rebuilt the server and its test binaries (40 s) |
+| **This file opens with an index of its sections**; a new section is added to it | Reading the file whole | It is 460 KB: an agent reads the index, then the sections of its work |
+| **`CLAUDE.md`** at the root holds the development loop (which command when), the worktree rule and where landing and deploying are described; the dashboard's rules stay in their skill | Rediscovering the loop in each session | Agents ran the whole workspace's tests to check one crate |
 
 ## Architecture (approved for 0.1)
 
@@ -907,9 +1035,9 @@ runtime's observable behavior or the port contracts, so they are frozen with for
 | The load generator is a tooling crate, `rewind-load`, a client of the API through `rewind-api`: its own fake MCP server (`rmcp`, a tool that fails transiently once per call) and host tool, runs with an MCP call, a host call, a retried call, a sleep and a signal sent twice with one key. It checks every output, and that each call reached its tool exactly as many times as the run's `attempts` say, read once the read model holds the run (the projector fills it after the commit; the lag is reported and bounded). Latencies: the start request, start to first MCP call, a host result accepted to the next MCP call (an activation and its dispatch), start to the end seen through the API. Thresholds given on the command line fail the load | A script driving the SDK; counting calls without the run's attempts; reading attempts as the run ends | The API is the boundary operators load. A retry is not a duplicate: only the attempts the server records tell them apart, and the read model lags the journal under load. |
 | With `REWIND_DASHBOARD_DIST`, `rewind-server`'s build script reruns when that directory changes | Watching the variable only | A cached target directory (the image's cache mount) kept the file list of an older dashboard build, whose files were gone. |
 | `deploy/acceptance.sh` is criterion 6 of 0.1, run by `acceptance/run.sh`: the limit tests, then the reference deployment as a Compose project of its own (port, subnet, `COMPOSE_ENV_FILES` written by `init.sh <file>`, images tagged by process), the walls, two loads with the thresholds of 09, and the SDK's bound against it; it removes its containers, volumes and images, and exits with 0 only when every step passed | Running the loads against an operator's deployment | The acceptance must run anywhere, beside anything, and leave nothing behind. |
-| The limits are tested through the HTTP API in `rewind-server/tests/limits.rs`, at the server's defaults; the quota's 429 stays in `api.rs`; the 256 KiB bound of `run_script` is tested by the SDK against a live server when `REWIND_LIVE_URL` and `REWIND_LIVE_KEY` are set (`test/live.test.ts`), in CI against the reference deployment | A second copy in the load generator | One suite per limit, run by `cargo test`. |
+| The limits are tested through the HTTP API in `rewind-server/tests/limits.rs`, at the server's defaults; the quota's 429 stays in `api.rs`; the 256 KiB bound of `run_script` is tested by the SDK against a live server when `REWIND_LIVE_URL` and `REWIND_LIVE_KEY` are set (`test/live.test.ts`), by `deploy/acceptance.sh` against the reference deployment | A second copy in the load generator | One suite per limit, run by `cargo test`. |
 | A run aborted at the history cap ends with at most two entries past it: the trigger that would cross the cap, committed with `run_aborted` (03) | Reserving two entries below the cap | What the script records is capped; the abort is the host's. |
-| CI on GitHub Actions: Rust (fmt, clippy, the API's tests with the OpenAPI staleness test, the e2e corpus, every other test, docs), the SDK, the dashboard, the image (cache mounts kept in the Actions cache with `buildkit-cache-dance`, layers in the BuildKit cache), and the reference deployment under load, under runc and under gVisor. `REWIND_REQUIRE_DOCKER` makes the tests that start Postgres, MinIO or a Collector fail instead of skipping | Services declared in the workflow | The tests start their own containers, with their own names and ports; a test that silently skips proves nothing. |
+| The Rust workspace is checked by `scripts/gate.sh` on the developer's machine (fmt, clippy, the API's tests with the OpenAPI staleness test, the e2e corpus, every other test, doctests, docs), and the image and the reference deployment under load by the release gate; GitHub Actions checks only the pnpm packages ([Taken for the development loop](#taken-for-the-development-loop-november-2026)). `REWIND_REQUIRE_DOCKER` makes the tests that start Postgres, MinIO or a Collector fail instead of skipping | Services declared in the workflow | The tests start their own containers, with their own names and ports; a test that silently skips proves nothing. |
 
 ### Taken while bounding the sandbox's memory (November 2026)
 
@@ -933,7 +1061,7 @@ runtime's observable behavior or the port contracts, so they are frozen with for
 | The holders are healthy once their route is set; a gVisor worker starts after its holder is healthy | Starting with the holder | A sandbox copies the namespace's addresses and routes when it starts and removes them from the namespace: a route set later never reaches it. |
 | Under gVisor, `check-walls.sh` checks from `walls`, a gVisor sandbox with the workers' runtime and `resolv.conf` (`x-gvisor`) in a holder of its own, both started for the check and removed after; it picks by the runtime of the worker in the holder's namespace, and checks from the holder under runc as before | Checking from the holder; probing from the worker's sandbox | The sandbox took the holder's addresses, so its checks failed, and nothing else can run in that namespace. The worker's image has no tools, and should keep none. |
 | The previous epoch's pool under gVisor is the profile `previous-epoch-gvisor`, instead of `REWIND_PREVIOUS_RUNTIME` | A runtime variable | A pool under gVisor also needs the relay and the wait for its holder, which a variable cannot add. |
-| CI loads the deployment a second time, with 100 KiB payloads | One load without payloads | Only payloads above 64 KiB reach S3: without them the workers' way to MinIO goes unchecked. |
+| `deploy/acceptance.sh` loads the deployment a second time, with 100 KiB payloads | One load without payloads | Only payloads above 64 KiB reach S3: without them the workers' way to MinIO goes unchecked. |
 
 ### Taken while designing the dashboard's debugger and search (November 2026)
 
@@ -1052,7 +1180,7 @@ runtime's observable behavior or the port contracts, so they are frozen with for
 | Run is not an entry of the sidebar: a run opens from Observability, the Overview, a link or Find, and the sidebar shows Observability as current meanwhile | A "Run" entry | A run page needs a run. |
 | The "back" of a run returns to the list it was opened from, with its query and filters (every run when it was opened from a link); that of Observability or Organization shows the views without leaving the page | Showing the views from every page, as Vercel does | It is the way back the operator takes with the browser, and the list is where the next run is picked. |
 | A filter of Observability and the query are one: checking a value adds its term to the query, unchecking removes it, excluding adds `-field:value`; the query in the URL stays the only state | Filters kept apart from the query | A view is shared, saved and reloaded as its URL, and the query bar always shows what is applied. |
-| No namespace is picked in the dashboard: it never sends `Rewind-Namespace`; a run's namespace is a column, a filter and the term `namespace:` | The namespace filter beside the organization picker | In the dashboard an end user is a dimension of the runs, not a context to switch into. Amended by [the polish](#taken-while-polishing-the-dashboard-november-2026): the Scripts list sends the header for its term `namespace:`, on its own requests. |
+| No namespace is picked in the dashboard: it never sends `Rewind-Namespace`; a run's namespace is a column, a filter and the term `namespace:` | The namespace filter beside the organization picker | In the dashboard an end user is a dimension of the runs, not a context to switch into. Amended by [the polish](#taken-while-polishing-the-dashboard-november-2026): the Scripts list sends the header for its term `namespace:`, on its own requests. Superseded by [the hierarchy](#taken-for-the-dashboards-hierarchy-november-2026): a namespace is a scope, picked at the top of the page. |
 | `#/observability` (`/active`, `/waiting`, `/failures`) replaces `#/runs`, `#/waiting` and `#/failures`, which redirect there with their query; `?ns=bob` becomes `namespace:bob`; `#/runs/:id` stays, its sections at `/journal`, `/logs`, `/trace`, `/started` | Breaking the old links; moving a run under `/observability` | The CLI, the webhooks and saved links point at runs and searches. Since [the plain URLs](#taken-for-the-dashboards-plain-urls-november-2026), the routes are paths (`/observability`, `/runs/:id`). |
 | Menus, popovers, tooltips and dialogs are Base UI's (`@base-ui/react`), unstyled, styled with the tokens; the CSS lives in files, one per part | Radix UI; `<details>` menus; Tailwind | Keyboard, focus and dismissal are handled by a maintained library, with no styling to undo. |
 | Times are relative ("5h ago") and show the exact time, in UTC and local, on hover; the theme and the time zone are in the member's menu | A time-zone switch in the top bar | The top bar is gone, and an exact time is wanted only when looked at. |
@@ -1109,7 +1237,7 @@ From the owner's review of a run cancelled at its deadline (`dev_notifications`,
 | Setup A runs behind an edge that routes as `deploy/edge/Caddyfile` does (`POST /v1/test` to the workers, the rest to the api server), and allows MCP servers and webhooks on 127.0.0.1 so the fixtures are reachable; setup B, with a deployed server's defaults, proves the egress refusals | One setup | One server cannot both reach the fixtures on the loopback and refuse the loopback. |
 | A canary secret made for each run is set as credentials; every answer is searched for it as it is recorded, and every log and Collector file at the end. Every exchange is recorded, and a 5xx a check did not declare (`allow5xx`) fails the gate, as does a panic in a log | Checking leaks and 5xx only where a check looks | A leak or a fault in a path no check meant to test still shows. |
 | Each problem type of `api/README.md` must be provoked by a full run, except `internal`, `identity-unavailable` and `last-owner`: the gate has no WorkOS, so no member, and keys never count as owners; the permission matrix must cover every operation of `api/openapi.json`, and hold and refuse every permission | Lists kept by hand | A new endpoint, permission or problem type without a check fails the gate. |
-| The GitHub workflow `release-gate.yml` is started by hand and leaves the load test out (PARTIAL); publishing the SDK does not wait for it | Running on tags; gating `release-sdk.yml` | The owner runs the gate locally before a release, the load test included. |
+| The release gate runs on the developer's machine, the load test included, before a release (the `deploy` skill); publishing the SDK does not wait for it | A GitHub workflow started by hand, without the load test (removed with Rust from GitHub Actions, [development loop](#taken-for-the-development-loop-november-2026)); running on tags; gating `release-sdk.yml` | The owner runs the gate locally before a release, the load test included. |
 | A host tool's `inputSchema` and `outputSchema` that cannot be compiled refuse the toolset (422 `invalid-toolset`); an MCP server's schemas are still taken as listed, and a call of a tool whose schema cannot be compiled is refused | Refusing the calls only, for host tools too | The harness writes host tools' schemas: it learns at registration, as `api/README.md` says. A server's tools are not the tenant's to fix. |
 | A call of `require(…)` refuses the script at start, unless the script binds the name `require` itself (a function, a class, a variable or a parameter) | Leaving it to a `ReferenceError` at run time | 03 refuses "a `require`" at start; `rewind check` already reports it, and a start with `check: false` must refuse it too. |
 | Without WorkOS, a layer answers 404 on every route of `/auth` before its handler reads the body or the cookies | The 404 from each handler | A handler's body was parsed first: a malformed body answered 400, which told a caller the route exists. |
@@ -1885,6 +2013,52 @@ stream were built after the decisions above. The owner settled what they left op
 | **A run uses secrets** (was attaches): the core's map of a run's, a fork's or a version's secrets by server is `ServerSecrets` (was `Attachments`, and so in the API); the engine's check is the module `secrets` with `SecretRights` (was `AttachRights`), `SecretProblem`, `RefusedSecrets` and the field `secret_rights` of a start, a fork and a save (was `attach`); a refusal's list of what the caller may use instead is `usable` (was `attachable`, at most `MAX_USABLE`); the corpus scenario key is `secret_rights`. Child runs and SDK streams stay attached | `Secrets` for the map (it would read as the store's secrets); `allowed` for the list | 04 says a run *uses* secrets and that a refusal "lists the secrets the caller may use for that server", without naming the field; the map is keyed by server. |
 | **Smaller names** (second renaming pass): the run head's `allowed_labels` (was `scope`) and `unfinished` (was `attempts`, the activations an owner started without seeing their end) are stored names; a partition's move counter is its `generation` (`PartitionGeneration`, `PartitionMap::generation`, the node link's `generation`), the column `partitions.epoch` keeping its name until the store migration; the completion the executor hands an instance is a `Handoff` (was the executor port's `Delivery`, which a call's delivery also names), handed by `CodeInstance::deliver(handoff, now)`; the statistics' series step is `interval` (`SeriesInterval`) as 07 names it; the agent tools of the MCP set are `list_organizations` and `organization` | `generation` in SQL now; `InboxItem` (the stored inbox item, whose payloads are not loaded); `LoadedCompletion` | 06 and 07 say generation, 07 `interval`, 01 `list_organizations`; the determinism epoch and SlateDB's writer and compactor epochs keep their names; the spec calls what `deliver` takes "an inbox item", a name a stored record already holds. |
 
+### Taken for the dashboard's labels, handles and lists of everything (November 2026)
+
+From the owner's review of the waiting runs of Dax (24 November 2026): "we show too many labels
+per run: past 3 labels, or labels too big, everything should go in a tooltip", "when possible,
+show the namespace's name instead of its id", and "the Scripts page should not filter by date,
+it makes no sense; the same for the Tools page"; then of the result: "no text in the card, only
+the labels", "never render an id in a label: make it a link with an icon", and "remove the By
+kind column of the Tools".
+
+| Decision | Alternative rejected | Why |
+| --- | --- | --- |
+| A row of a table shows its labels whole when they are at most three and their characters (two for each chip's padding) at most 52 (`labelsFit`); otherwise one chip, "6 labels", opens them all in a card, each still a filter (`RowLabels`): the runs' table, the waiting runs, the secrets, and the grants of members, invitations, API keys and connections. A run's own sidebar and a consent screen show them all. Supersedes "the labels that fit, then +N" (type scale) | The labels that fit within 44 characters, then "+N"; the budget measured from the column's width | The owner: a run of Dax carries six labels, four of them ids, and its row grew to three lines of them. A chip that names some labels and hides others ranks them by their key's spelling; the count says there are more without picking. At 44 characters, `conversation:c-85` fitted and `conversation:c-255` did not: rows of one kind took two forms; at 52 three short labels fit, and `dax:iteration env:prod goal:<id>` (56) does not. |
+| The card of a row's labels holds the labels and nothing else: no title ("6 labels"), no hint; side by side up to 300 px, 6 px around them (a menu's padding), the card shrunk to its longest line once laid out (`ShrunkToLines`: the chips' offsets, one pixel more for their rounding) | A title and "Click a label to see only the runs with it"; 12 px of padding and labels wrapped at 360 px; one label per line | The owner: "I only want to see the labels", found the padding "way too big", then one label per line too narrow ("~300 px max"). A box sized to wrapped content keeps its greatest width: the chips left up to 44 px empty at the end of their lines, the right padding wider than the left. |
+| A label whose value is an id shows its key and a link's icon, never the id (its title gives it): `goal 🔗`; it links to every run with the label (`/observability?q=@goal:<id>`), wherever labels show (a row, its card, a run's details, the failure groups). An id is a part of the value, split at `-`, `_`, `.` or `:`, of 12 characters or more mixing letters and digits, or of 16 digits or more (`isIdValue`): an object id, a UUID, a ULID, a digest, `cus_NffrFeUfNV2Hib`; `c-1255`, `notifications_daily` and dates are words. The facets of the sidebar and the query bar's suggestions still list the values, which are what they filter by | A link to the customer's own page of the object, by a URL set per label key; links carried by the run | The owner: "we only render display names or readable labels, never ids", and chose the runs in Rewind over a URL per key, which would need an API, the stores and a setting. A label of an id takes its key's width in a row's budget. |
+| Nested corners are concentric: an inner shape's radius is the outer radius less the space between them. The labels' card takes 10 px corners (its chips' 4 px, `--radius-label`, and its 6 px padding); a segmented control's thumb and items take its 8 px less its padding (4 px, 3 px in the account menu's), written as that difference in the CSS | 12 px corners around 4 px chips; a 6 px thumb in an 8 px control 4 px away | The owner found the card's corners off against its padding. Menus already kept the rule (12 px around 6 px items, 6 px apart). |
+| The Tools view has no column of failures by kind | The kinds of each tool's failures as chips, each a link to its runs | The owner removed it. |
+| A run's handle shows its namespace by its display name where it has one (`paul/prod_gym/06h0az8t4x7j`), from the names every view reads (`useNamespaceNames`); its title, its link, its copy button and the API keep the handle with the id (D4 of "script titles and run handles") | The id always; the display name as a slug in the handle | The owner did not know what the id at the head of a handle was. The handle stays what a person can paste back; the name only changes what is read. |
+| Scripts and Tools have no window of time: Scripts lists every script since the first run (`GET /v1/scripts` without `since`), Tools the statistics of every call since the first (`since=1970-01-01T00:00:00Z`, the API's default staying 24 hours); a `window` in an older link is ignored. Supersedes "the dashboard's Scripts view shows a window (24 h by default)" | A window kept, all time by default; a new default of `GET /v1/tools/stats` | The owner: a script is what it is whenever it ran, and a list of them filtered by date made no sense. Counters per hour add up over any window in one read per partition, as a namespace's scripts already did; the API keeps its contract. |
+| A waiting run's status and handle stay on one line, its first line of source under them when the cell is too narrow | Each wrapping on its own | The status stood alone on a line above a long namespace id. |
+| Scripts' intro moved to the (i) beside its title, and "N scripts shown" under its table is gone | A paragraph under the title | The rules of the dashboard ("no explanatory paragraph", "no counts of what the screen shows"). |
+
+### Taken for the dashboard's hierarchy (November 2026)
+
+The owner found the navigation hard to follow (24 November 2026): "most of the objects are grouped
+by namespaces, or are generic templates for an organization". The design page,
+https://claude.ai/artifact/JvetigW8PKNYmVsbtZ7quo, was reviewed and its points D1 to D4 answered the
+same day.
+
+| Decision | Alternative rejected | Why |
+| --- | --- | --- |
+| **Organization › namespace › objects** (the owner): the dashboard looks at every namespace or at one, picked at the top of the page; the same views answer in both, the last entry of the sidebar aside (Namespaces over every namespace, Usage in one) | No namespace picked ([the redesign](#taken-for-the-dashboards-redesign-november-2026)) | Since a namespace owns workflows, and its forks change what a name runs, a namespace is a context, no longer a dimension of the runs only. Over every namespace it stays one: a column, a facet, a term. |
+| **What belongs to no namespace is the organization's** (D1, the owner): its workflows, secrets and toolsets show over every namespace and, where a namespace uses them, in its scope; there is no default namespace, and a run still needs one | A `default` namespace holding the runs started without `Rewind-Namespace`; an Organization entry in the picker | A harness that forgets its end user is refused rather than putting that user's runs where erasing the user and its quotas would miss them; the organization's objects show wherever they apply. |
+| **The picker sits at the top of every page, at the left of its header** (D2, the owner chose the top of the page), in the header's start, empty on every page until now; not on the organization's pages, which have no scope | A bar of its own above the page's header, as the design page drew it; the picker under the organization picker | The page's header is the page's top bar: a second bar would push every stuck header and table header down for one control. |
+| **The dashboard opens over every namespace** (D3, the owner) | The namespace picked last, kept in the browser | Failures across every end user come first; a narrowed view is opened on purpose. |
+| **A namespace's mark is a 5 × 5 mirrored pattern drawn from its name** (D4, the owner: "a pattern per namespace"), never from its display name, on a tint of its color; drawn by `minidenticons` 4.2.1, the organization's mark staying a round gradient | A gradient square; an initial; one icon for every namespace | A rename keeps the mark; opaque ids (`u_8f2k1q`) all start alike, which initials cannot tell apart; a maintained package rather than our own drawing. |
+| **In a namespace, the sidebar shows it under the organization picker, above Find** (the owner): ‹, its mark, its display name; the whole row leads back to the same view over every namespace, and stays above a page's own sidebar; folded, its mark alone | Above Overview, among the views; hidden on a page's own sidebar | The scope stays in sight; Find between the two ‹ keeps the namespace's "back" apart from a page's. |
+| One namespace's views are under `/ns/<name>/`: the same routes, mounted a second time under a route that gives them the namespace (`NamespaceScope`); `/namespaces/<name>` and the `?ns=` of older links lead to that scope | `?ns=` carried by every link ([the first filter](#taken-while-building-the-dashboards-namespaces-november-2026)) | A link that forgot `?ns=` widened the view without a word; a path cannot be forgotten. |
+| In a namespace's scope, the reads of runs, statistics, failures, tools and scripts send `Rewind-Namespace`, and their keys hold the namespace; the statistics send no query there, the view's terms then narrowing only the runs its marks open | The scope as a `namespace:` term added to every query | The header is the API's scope; a term the reader types could contradict an added one, and the statistics would fall back on the organization's. |
+| Picking a scope keeps the view, with its query (less its `namespace:` terms, which named namespaces of the scope left), its window and its order (Scripts and Tools, without a window, their query); from the page of one object (a run, a script, a workflow), it opens the list of its kind; Namespaces and Usage stand for each other | Opening the namespace's Overview every time | The question asked stays; only who it is asked of changes. A run belongs to one namespace: under another, it is not found ([as before](#taken-while-building-the-dashboards-namespaces-november-2026)). |
+| A page of one object keeps its address; a run's page shows its namespace in the picker and the sidebar, and its details lead to its namespace's runs and secrets. Scripts and workflows are the organization's: their pages show every namespace | Runs under `/ns/<name>/runs/…` | A run's handle already starts with its namespace, and links to runs are in tickets, logs and webhooks. |
+| A query's `namespace:` term is never turned into the scope | Redirecting `?q=namespace:bob` to bob's scope | Over every namespace, the term filters several namespaces or leaves some out. |
+| A namespace's page is split along the scope: how its runs went is its Overview (its alerts of the month first), its runs are its Observability, its scripts its Scripts, its secrets its Secrets; Usage keeps its CPU, limits, tokens, exceptions and controls | Keeping the page, a second Overview | One view per question, the same in every scope. |
+| In a namespace's Secrets, its own secrets, then the organization's that its runs can attach, listed only: they are written over every namespace. Their reads and the runs that attach them count every namespace's runs, as a secret's use does | The organization's written from every namespace's scope; hidden | Two "New secret" on one page would write in two places; a secret's use is the secret's. |
+| Testing, in a namespace's scope, lists the organization's workflows: every saved workflow is the organization's until the workflow model of the renaming release gives namespaces their own | Testing over every namespace only | The sidebar keeps the same views in both scopes; the list narrows when the API does. |
+| The sidebar's Secrets comes before its last entry (Namespaces or Usage) | Secrets last | The last entry is the one that changes with the scope. |
+
 ### Taken while building the workflow model (November 2026)
 
 | Decision | Alternative rejected | Why |
@@ -1959,3 +2133,22 @@ stream were built after the decisions above. The owner settled what they left op
 | **The archive's sealed attempts are found from the heads** (`sealed`, the last attempt sealed) and rewritten in place: the one time an object of the archive is written twice (`FileArchive::replace`, `S3Archive::replace`, a put that overwrites) | Listing the bucket's `runs/` prefix | The heads name every sealed attempt, without listing a bucket that holds blobs too. |
 | **`--dry-run` reads and renames everything in memory, writes nothing, and skips the workflows step**, which writes the catalog: it counts the documents, records and sealed attempts that would change, by kind; the summary of a run lists the workflows created, moved, kept and named, and every title that could not become a name with why | A dry run of the workflows step on a copy of the catalog | The rehearsal on a copy of production is the dry run of the whole. |
 | **Recorded values stay as recorded**: an error named `ToolError` in `fail_run`, a quarantine's reason saying "entry", a stack's `script.ts`, a span's name; only names Rewind gave its own fields and enumerations change | Rewriting recorded texts too | What the code produced is the run's; the epoch 1 replays it as it was. |
+
+### Taken while merging main into the rename release (November 2026)
+
+Main brought the development loop, one test binary per crate, the labels' card and the
+dashboard's hierarchy (25 November 2026). The result is main's hierarchy and behavior in the
+words and the workflow model of the rename release.
+
+| Decision | Alternative rejected | Why |
+| --- | --- | --- |
+| The sections "Taken for the dashboard's labels, handles and lists of everything" and "Taken for the dashboard's hierarchy" stay as the owner decided them, in that day's words; they read in the rename release's: Observability is Runs (a label of an id links to `/runs?q=@goal:<id>`), failure groups are fingerprints, Scripts and Testing are Workflows, Tools is Actions (still without a column of failures by kind), a run attaching a secret uses it, a toolset is an action set | Rewriting them in place | Every section of this file keeps the words of its day; [the vocabulary](#taken-for-the-vocabulary-november-2026) says what each old word became. |
+| **Workflows and Actions have no window of time**: Workflows reads `GET /v1/workflows?since=1970-01-01T00:00:00Z` (the API counts 30 days without `since`), Actions `GET /v1/actions/stats?since=1970-01-01T00:00:00Z` (24 hours by default); their window control is gone, a `window` in an older link is ignored, and the Overview's link to Actions carries none | A window kept for Workflows, whose counters the branch read over one | Main's "Scripts and Tools have no window of time", on the views that replace them; the API keeps its defaults. |
+| **In a namespace's scope, Workflows lists the namespace's workflows and the organization's** (`Rewind-Namespace`, no `q`), each with its scope, "This namespace" or "Organization". Supersedes "Testing, in a namespace's scope, lists the organization's workflows" | The organization's only, as main's Testing | The workflow model gives namespaces their own workflows, and the list narrows as the API does. The Scope cell's two labels are the merge's words, to be reviewed by the owner. |
+| In a namespace's scope, the reads of runs, statistics, fingerprints, action statistics and workflows send `Rewind-Namespace`, and their keys hold the namespace | The branch's `namespace:` term sent as `q` beside the header | Main's rule (the header is the API's scope), on the branch's reads. |
+| A run's, a workflow's and a test's page keep one address: `/ns/<name>/runs/…` and `/ns/<name>/workflows/…` redirect to it. A namespace's workflow shows its namespace in the picker and the sidebar, as a run's page does; an organization's workflow, and a test of it, shows every namespace | Workflow pages under the scope | Main's "a page of one object keeps its address"; with the workflow model, a workflow can belong to a namespace. |
+| The same routes answer over every namespace and under `/ns/<name>/`: the Overview, the four Runs views, Workflows, Actions and Secrets, with the earlier routes' redirects (`/observability…`, `/scripts…`, `/testing…`, `/tools`); Usage only in a namespace. `?ns=<name>`, main's `/runs?ns=bob` included, and `/namespaces/<name>` open the namespace's scope | Redirects over every namespace only | An older link keeps its scope as well as its view. |
+| Picking a scope keeps the view, its query, window and order (Workflows and Actions, without a window, their query); from a run, a workflow or a test, it opens the list of its kind | Main's list (a run, a script, a workflow) | The objects of the workflow model. |
+| A namespace's Usage speaks the rename release: "histories", "Longest code" (`maxCodeLines`); the table of a namespace's runs forced to it (`ScopedRuns`) goes, since its runs are its scope's Runs | Keeping the component | Nothing uses it once the namespace's page is split. |
+| The tests the branch added or renamed are modules of their crate's one binary: `rewind-engine`'s `model` and `transcript` (was `trace`), `rewind-format`'s `rename`, `rewind-runtime`'s `handlers` (was `mocks`); the corpus runs as `corpus::epoch_1::…` and `corpus::epoch_2::…`. 1,390 tests and 5 ignored, as on the branch before the merge | | Main's [one test binary per crate](#taken-for-the-development-loop-november-2026). |
+| The `deploy` skill lists the rename release's steps: the release gate's GO, the rehearsal on a copy, the node stopped, its variables renamed (`REWIND_ADMIN_TENANT` to `REWIND_ADMIN_ORGANIZATION`, `REWIND_TENANT_POOLS` to `REWIND_ORGANIZATION_POOLS`, `REWIND_QUOTA_SCRIPTS` to `REWIND_QUOTA_WORKFLOWS`, `REWIND_QUOTA_MAX_SCRIPT_LINES` to `REWIND_QUOTA_MAX_CODE_LINES`, `REWIND_ALLOW_INTERNAL_TOOLS` to `REWIND_ALLOW_INTERNAL_ADDRESSES`), `rename-data` once from a one-off service, then the deploy | Leaving them to `deploy/README.md` alone | The skill is what deploys the server; a deploy by its usual steps would start the new build on data in the old names. |

@@ -1,14 +1,18 @@
 // Workflows (archi/05, "Workflows"): every workflow of the organization and of its namespaces, the
 // most recently run first, each as it shows (its name, its comment's first line, or its short id)
-// with its scope, its latest version, and its runs by outcome and the actions they called over a
-// window, from the hourly counters (archi/05, "Statistics"), which know no labels. Searched with
-// the query bar of the runs, which reads one namespace here, sent as `Rewind-Namespace` (that end
-// user's workflows and the organization's, counted over its runs), and actions, kept in the browser.
+// with its scope, its latest version, and its runs by outcome and the actions they called since its
+// first run, from the hourly counters (archi/05, "Statistics"), which know no labels; no window of
+// time, a workflow being what it is whenever it ran. Searched with the query bar of the runs, which
+// reads one namespace here, sent as `Rewind-Namespace` (that end user's workflows and the
+// organization's, counted over its runs), and actions, kept in the browser. In a namespace's scope,
+// that namespace's.
 import { GitFork } from "lucide-react";
 import { useMemo } from "react";
 import { Link, useNavigate } from "react-router";
+import { useAt } from "../../app/scope";
 import { Ago, Empty, Loading, ProblemView } from "../../components/bits";
 import { HoverCard } from "../../components/HoverCard";
+import { NamespaceName } from "../../components/NamespaceName";
 import { PageHeader } from "../../components/PageHeader";
 import { QueryBar } from "../../components/QueryBar";
 import { StatusGlyph } from "../../components/Status";
@@ -16,7 +20,6 @@ import { TableScroll } from "../../components/TableScroll";
 import {
   legacyWorkflowsQuery,
   RANGES,
-  type RangeKey,
   WORKFLOWS_LANGUAGE,
   workflowsSearch,
 } from "../../model/filters";
@@ -26,9 +29,9 @@ import { RUN_COUNT_KEYS, type RunCounts, type WorkflowSummary } from "../../mode
 import { isNamed, shortIdOf, workflowLabel, workflowPath } from "../../model/workflows";
 import { useAccess } from "../../state/access";
 import { useRunStats } from "../../state/aggregates";
+import { useScopeNamespace } from "../../state/scope";
 import { useWorkflowLabels, useWorkflowList, type WorkflowList } from "../../state/workflows";
-import { Seg } from "../FilterBits";
-import { useListQuery, useRunQueryValues, useWindow, WINDOW_WORDS, WINDOWS } from "../search";
+import { useListQuery, useRunQueryValues } from "../search";
 import { TableTop } from "../TableTop";
 import { firstLine, Scope } from "./bits";
 
@@ -52,6 +55,7 @@ export function Outcomes({
   /** A term the links to the runs add: the namespace the counts are of. */
   scope?: string;
 }) {
+  const at = useAt();
   const total = totalRuns(counts);
   const present = RUN_COUNT_KEYS.filter((s) => (counts[s] ?? 0) > 0);
   const title = present.map((s) => `${counts[s]} ${s}`).join(", ");
@@ -69,7 +73,7 @@ export function Outcomes({
             <Link
               key={s}
               to={queryLink(
-                "/runs",
+                at("/runs"),
                 joinQuery(`status:${s}`, fieldTerm("workflow", workflow), scope),
               )}
               className={`status ${s}`}
@@ -155,6 +159,8 @@ function WorkflowRow({
   onPickAction: (action: string) => void;
 }) {
   const navigate = useNavigate();
+  const at = useAt();
+  const scoped = useScopeNamespace();
   const to = workflowPath(workflow.id);
   const label = workflowLabel({ ...workflow, comment: workflow.latest.comment });
   const named = isNamed(workflow) || Boolean(workflow.latest.comment);
@@ -195,13 +201,17 @@ function WorkflowRow({
         {sub && <span className="cell-sub">{sub}</span>}
       </td>
       <td>
-        <Scope namespace={workflow.namespace} />
+        {scoped !== null && workflow.namespace ? (
+          <span title={workflow.namespace}>This namespace</span>
+        ) : (
+          <Scope namespace={workflow.namespace} />
+        )}
       </td>
       {counted && workflow.runs ? (
         <>
           <td className="right">
             <Link
-              to={queryLink("/runs", joinQuery(fieldTerm("workflow", workflow.id), scope))}
+              to={queryLink(at("/runs"), joinQuery(fieldTerm("workflow", workflow.id), scope))}
               className="num"
               title="Its runs"
             >
@@ -235,9 +245,10 @@ function WorkflowRow({
 }
 
 /**
- * The table of workflows, shared by Workflows and a namespace's page: each workflow's scope and
- * latest version, its runs by outcome, the actions they called, when it last ran. `scope` is the
- * term its links to the runs add; `keeps` keeps the rows of the actions the query names.
+ * The table of workflows: each workflow's scope and latest version, its runs by outcome, the
+ * actions they called, when it last ran. `scope` is the term its links to the runs add; in a
+ * namespace's scope, they open that scope's runs. `keeps` keeps the rows of the actions the query
+ * names.
  */
 export function WorkflowTable({
   workflows,
@@ -333,36 +344,38 @@ function useWorkflowFacets() {
 
 export function WorkflowsView() {
   const { q, setQ } = useListQuery(legacyWorkflowsQuery, LEGACY_NAMES);
-  const [win, setWin] = useWindow();
+  const scoped = useScopeNamespace();
   const search = workflowsSearch(q);
+  // The scope's namespace, else the one the query names.
+  const namespace = scoped ?? search.namespace;
   const workflows = useWorkflowList({
-    query: search.query,
-    range: win,
-    namespace: search.namespace,
+    query: scoped === null ? search.query : { ...search.query, q: undefined },
+    namespace,
     enabled: search.fault === null,
   });
   const suggestions = useWorkflowFacets();
-  const scope = search.namespace ? fieldTerm("namespace", search.namespace) : "";
+  const scope = scoped === null && namespace ? fieldTerm("namespace", namespace) : "";
 
   return (
     <div className="page">
       <PageHeader
         title="Workflows"
         info={
-          <p>
-            Every workflow of the organization and of its namespaces, the most recently run first,
-            with its runs in {WINDOW_WORDS[win]}. A workflow shows as its name, else the first line
-            of the comment at the top of its code, else its short id. With namespace:, one end
-            user's workflows and the organization's, counted over that end user's runs.
-          </p>
-        }
-        actions={
-          <Seg<RangeKey>
-            label="Window"
-            value={win}
-            onChange={setWin}
-            options={WINDOWS.map((w) => ({ value: w, label: w, title: WINDOW_WORDS[w] }))}
-          />
+          namespace ? (
+            <p>
+              The workflows of <NamespaceName name={namespace} /> and of the organization, the most
+              recently run first, with that end user's runs since their first. A workflow shows as
+              its name, else the first line of the comment at the top of its code, else its short
+              id.
+            </p>
+          ) : (
+            <p>
+              Every workflow of the organization and of its namespaces, the most recently run first,
+              with its runs since its first. A workflow shows as its name, else the first line of
+              the comment at the top of its code, else its short id. With namespace:, one end user's
+              workflows and the organization's, counted over that end user's runs.
+            </p>
+          )
         }
       />
       <QueryBar
@@ -373,7 +386,11 @@ export function WorkflowsView() {
         values={suggestions.values}
         onTyping={suggestions.onTyping}
         fault={search.fault}
-        placeholder="namespace:alice action:github.close_issue"
+        placeholder={
+          scoped === null
+            ? "namespace:alice action:github.close_issue"
+            : "action:github.close_issue"
+        }
       />
       {search.fault ? (
         <Empty>Fix the query to see the workflows: the term at fault is underlined above.</Empty>
@@ -382,7 +399,6 @@ export function WorkflowsView() {
           workflows={workflows}
           scope={scope}
           keeps={search.filtered ? search.keeps : undefined}
-          empty={`No workflow matches this search in ${WINDOW_WORDS[win]}.`}
           onPickAction={(action) =>
             setQ(
               joinQuery(

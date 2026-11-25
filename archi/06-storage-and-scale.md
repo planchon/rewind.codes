@@ -308,6 +308,10 @@ copy and type its **handle**, `<namespace>/<origin>/<suffix>`
   next millisecond): one process never repeats a suffix. `/` occurs in no part, so a handle
   splits without doubt.
 
+The dashboard shows the namespace part by the namespace's display name where it has one
+(`paul/prod_gym/06h0az8t4x7j`), its id in the handle's title; what it links to, copies and
+accepts is the handle with the id.
+
 A handle never names two runs of a tenant. It carries its namespace, and every run of a
 namespace is created by the owner of the namespace's partition, which serializes its creations
 ([decisions](08-decisions.md#taken-while-bringing-script-titles-and-run-handles-to-the-run-plane-november-2026)).

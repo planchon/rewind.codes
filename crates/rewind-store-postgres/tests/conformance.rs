@@ -2,7 +2,7 @@
 //! against Postgres in Docker, each check on a new database. Those of `CatalogStore` and
 //! `Cluster` run in `tests/control_plane.rs`.
 
-mod support;
+use crate::support;
 
 use rewind_engine::conformance;
 use rewind_store_postgres::PostgresStore;

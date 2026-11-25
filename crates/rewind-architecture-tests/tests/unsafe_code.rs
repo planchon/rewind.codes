@@ -15,6 +15,8 @@ const UNSAFE_MODULE: &str = "crates/rewind-runtime/src/memory.rs";
 const DENYING_ROOT: &str = "crates/rewind-runtime/src/lib.rs";
 /// This test, which spells what it looks for.
 const THIS_TEST: &str = "crates/rewind-architecture-tests/tests/unsafe_code.rs";
+/// The root of this test's binary, which declares it by its name: `mod unsafe_code;`.
+const THIS_TEST_ROOT: &str = "crates/rewind-architecture-tests/tests/integration.rs";
 
 fn workspace() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -118,7 +120,7 @@ fn only_the_memory_module_of_the_runtime_uses_unsafe() {
             .unwrap()
             .to_string_lossy()
             .replace('\\', "/");
-        if relative == UNSAFE_MODULE || relative == THIS_TEST {
+        if relative == UNSAFE_MODULE || relative == THIS_TEST || relative == THIS_TEST_ROOT {
             continue;
         }
         let source = fs::read_to_string(file).unwrap();

@@ -1,8 +1,9 @@
 // The dashboard's client of the API: `/v1`, typed by the generated `paths` and authenticated
 // with a Bearer token (the operator's key, or a member's access token), and the sign-in routes
-// `/auth`, which read and write the session cookie and never see a token. It reads every namespace
-// of the organization, and names one (`Rewind-Namespace`) only for the workflows of one end user
-// and the namespace a fork goes to.
+// `/auth`, which read and write the session cookie and never see a token. Its reads of runs,
+// statistics, failures, workflows and actions cover every namespace of the organization, or the
+// one they name (`Rewind-Namespace`): the namespace a view is scoped to; a fork names the namespace
+// it goes to.
 import createClient from "openapi-fetch";
 import type {
   ActionSetSummary,
@@ -165,6 +166,11 @@ function skewOf(response: Response): number {
   return Number.isFinite(at) ? at - Date.now() : 0;
 }
 
+/** The header that narrows a read to one namespace; nothing for every namespace. */
+function inNamespace(namespace: string | null): { headers?: { "Rewind-Namespace": string } } {
+  return namespace !== null ? { headers: { "Rewind-Namespace": namespace } } : {};
+}
+
 /** Whether a request goes to `/v1`, the only routes that take the Bearer token. */
 function isV1(url: string): boolean {
   return new URL(url).pathname.startsWith("/v1/");
@@ -233,17 +239,44 @@ export class Api {
     return this.unwrap(await this.client.GET("/v1/server"));
   }
 
-  async runs(query: ListRunsQuery, signal?: AbortSignal): Promise<RunPage> {
-    return this.unwrap(await this.client.GET("/v1/runs", { params: { query }, signal }));
+  /** The runs of every namespace, or of the one `namespace` names. */
+  async runs(
+    query: ListRunsQuery,
+    signal?: AbortSignal,
+    namespace: string | null = null,
+  ): Promise<RunPage> {
+    return this.unwrap(
+      await this.client.GET("/v1/runs", { params: { query }, ...inNamespace(namespace), signal }),
+    );
   }
 
-  async runStats(query: RunStatsQuery, signal?: AbortSignal): Promise<RunStats> {
-    return this.unwrap(await this.client.GET("/v1/runs/stats", { params: { query }, signal }));
+  async runStats(
+    query: RunStatsQuery,
+    signal?: AbortSignal,
+    namespace: string | null = null,
+  ): Promise<RunStats> {
+    return this.unwrap(
+      await this.client.GET("/v1/runs/stats", {
+        params: { query },
+        ...inNamespace(namespace),
+        signal,
+      }),
+    );
   }
 
   /** The failed, cancelled and aborted runs of a window, by fingerprint. */
-  async failures(query: FailuresQuery, signal?: AbortSignal): Promise<FingerprintPage> {
-    return this.unwrap(await this.client.GET("/v1/runs/failures", { params: { query }, signal }));
+  async failures(
+    query: FailuresQuery,
+    signal?: AbortSignal,
+    namespace: string | null = null,
+  ): Promise<FingerprintPage> {
+    return this.unwrap(
+      await this.client.GET("/v1/runs/failures", {
+        params: { query },
+        ...inNamespace(namespace),
+        signal,
+      }),
+    );
   }
 
   async run(id: string, signal?: AbortSignal): Promise<Run> {
@@ -305,7 +338,7 @@ export class Api {
     return this.unwrap(
       await this.client.GET("/v1/workflows", {
         params: { query },
-        ...(namespace !== null ? { headers: { "Rewind-Namespace": namespace } } : {}),
+        ...inNamespace(namespace),
         signal,
       }),
     );
@@ -367,8 +400,18 @@ export class Api {
   }
 
   /** Latency, errors and redeliveries per action. */
-  async actionStats(query: ActionStatsQuery, signal?: AbortSignal): Promise<ActionStatsPage> {
-    return this.unwrap(await this.client.GET("/v1/actions/stats", { params: { query }, signal }));
+  async actionStats(
+    query: ActionStatsQuery,
+    signal?: AbortSignal,
+    namespace: string | null = null,
+  ): Promise<ActionStatsPage> {
+    return this.unwrap(
+      await this.client.GET("/v1/actions/stats", {
+        params: { query },
+        ...inNamespace(namespace),
+        signal,
+      }),
+    );
   }
 
   /** A payload's value, read through the run whose history holds it, as the server requires. */

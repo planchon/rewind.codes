@@ -7,7 +7,7 @@
 //!
 //! The checks share one Postgres container, each on a new database.
 
-mod support;
+use crate::support;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;

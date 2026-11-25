@@ -22,7 +22,7 @@ const SOURCES: [&str; 8] = [
     "pnpm-lock.yaml",
     "vite.config.ts",
     "tsconfig.json",
-    "biome.json",
+    "biome.jsonc",
 ];
 
 fn main() {
@@ -39,10 +39,17 @@ fn main() {
         }
         None => {
             for source in SOURCES {
-                println!(
-                    "cargo:rerun-if-changed={}",
-                    dashboard.join(source).display()
-                );
+                let path = dashboard.join(source);
+                // Cargo runs this script again on every build while a watched path is missing,
+                // and the server and every test binary that links it are built again with it.
+                if !path.exists() {
+                    fail(&format!(
+                        "{} is missing: name the dashboard's sources as they are in SOURCES, in \
+                         crates/rewind-server/build.rs",
+                        path.display()
+                    ));
+                }
+                println!("cargo:rerun-if-changed={}", path.display());
             }
             let dist = dashboard.join("dist");
             if stale(&dashboard, &dist) {

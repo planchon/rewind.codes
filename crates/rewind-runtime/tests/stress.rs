@@ -133,7 +133,7 @@ fn guard_malloc_finds_no_memory_error_in_the_lifecycle() {
         return;
     }
     let output = Command::new(std::env::current_exe().unwrap())
-        .args(["lifecycle_of_", "--test-threads", "1"])
+        .args(["stress::lifecycle_of_", "--test-threads", "1"])
         .env("DYLD_INSERT_LIBRARIES", GUARD_MALLOC)
         .env("MALLOC_PROTECT_BEFORE", "1")
         .env("REWIND_STRESS_ROUNDS", "2")

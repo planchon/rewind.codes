@@ -1,5 +1,4 @@
-import { screen, waitFor, within } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import { screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import type { ActionStats } from "../model/types";
 import { renderApp, search } from "../test/app";
@@ -48,26 +47,20 @@ describe("ActionsView", () => {
     ).toEqual([10, 1_000, 60_000, 3_600_000]);
   });
 
-  it("shows latency, error rate and redeliveries per action over the window", async () => {
-    const user = userEvent.setup();
-    const { router, requested } = renderApp("/actions?window=7d");
+  it("shows latency, error rate and redeliveries per action since the first call", async () => {
+    const { requested } = renderApp("/actions?window=7d");
     const table = await screen.findByRole("table");
     const row = within(table)
       .getByRole("link", { name: "weather.forecast" })
       .closest("tr") as HTMLElement;
     expect(within(row).getAllByText(/%$/).length).toBeGreaterThan(0);
-    const since = requested("/v1/actions/stats").at(-1)?.searchParams.get("since");
-    expect(Date.now() - Date.parse(since ?? "")).toBeGreaterThan(7 * 86_400_000 - 60_000);
-    expect(
-      within(row)
-        .getAllByRole("link")
-        .some(
-          (a) => a.getAttribute("href") === "/runs?q=action%3Aweather.forecast+error%3Atimeout",
-        ),
-    ).toBe(true);
-
-    await user.click(screen.getByRole("button", { name: "24h" }));
-    await waitFor(() => expect(search(router).get("window")).toBeNull());
+    // No window of time: every call, whatever the older link said.
+    const sent = requested("/v1/actions/stats").at(-1)?.searchParams;
+    expect(sent?.get("since")).toBe("1970-01-01T00:00:00.000Z");
+    expect(sent?.has("until")).toBe(false);
+    expect(screen.queryByRole("button", { name: "24h" })).toBeNull();
+    // No column of failures by kind.
+    expect(within(table).queryByRole("columnheader", { name: "By kind" })).toBeNull();
   });
 
   it("opens from a link of the Tools view", async () => {

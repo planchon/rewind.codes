@@ -6,6 +6,7 @@
 // version's details; each test has its own page. Whoever holds `workflows:write` names, describes,
 // promotes, forks and pulls it from its header.
 import { Navigate, useParams } from "react-router";
+import { useObjectNamespace } from "../../app/scope";
 import { Loading, ProblemView } from "../../components/bits";
 import { CodeView } from "../../components/CodeView";
 import { JsonPeek } from "../../components/JsonPeek";
@@ -81,6 +82,8 @@ export function WorkflowView() {
 function WorkflowPage({ reference }: { reference: string }) {
   const shown = useShownWorkflow(reference);
   const { read, workflow, versions, version, asked, latest } = shown;
+  // A namespace's workflow: the picker and the sidebar show its namespace.
+  useObjectNamespace(workflow?.namespace);
   const labelOf = useWorkflowLabels();
   const label = workflow
     ? workflowLabel({ ...workflow, comment: versions[0]?.comment })

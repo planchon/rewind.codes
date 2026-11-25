@@ -1,7 +1,7 @@
 // Secrets (archi/04, "Secrets"): the organization's (`namespace` null) and each namespace's, never
 // a value, and the keys Rewind signs calls with. The lists and usages on screen are read again when
 // the change stream says a secret of their scope was put or deleted, and within 10 s of a run's
-// change, for their reads and the runs that attach them (`queries.ts`); a write reads again every
+// change, for their reads and the runs that use them (`queries.ts`); a write reads again every
 // list and usage of the secrets, a rotation the signing keys.
 import { useQuery } from "@tanstack/react-query";
 import { useEffect } from "react";
@@ -26,7 +26,7 @@ export function useSecrets(namespace: string | null, enabled = true): Read<Secre
   );
 }
 
-/** What reads one secret: the active and waiting runs that attach it, the workflows. */
+/** What reads one secret: the active and waiting runs that use it, the workflows. */
 export function useSecretUsage(
   namespace: string | null,
   name: string,

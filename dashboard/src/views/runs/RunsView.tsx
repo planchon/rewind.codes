@@ -1,12 +1,14 @@
 // Runs: the runs, looked at and filtered (archi/05). Four views of the same query: every run, the
 // running ones, those waiting on the outside world (grouped by what they wait for), and the
 // failures (by fingerprint). Its sidebar holds the views and the filters; the query lives in the
-// URL, and a filter is a term of it.
+// URL, and a filter is a term of it. In a namespace's scope, its runs only: no Namespace facet or
+// column, and handles without their namespace.
 import { Menu } from "@base-ui/react/menu";
 import { ChevronDown, CircleAlert, Hourglass, List, LoaderCircle, RefreshCw } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import { Link, Navigate, useLocation, useSearchParams } from "react-router";
 import { RunsFrom } from "../../app/runLinks";
+import { useAt } from "../../app/scope";
 import { useSettings } from "../../app/settings";
 import { PageSidebar } from "../../app/sidebar";
 import { Empty } from "../../components/bits";
@@ -30,6 +32,7 @@ import type { Facets, RunStats, RunStatus } from "../../model/types";
 import { useRunStats } from "../../state/aggregates";
 import { queryFault } from "../../state/errors";
 import { useRunSearch } from "../../state/runs";
+import { splitScope, useScopeNamespace } from "../../state/scope";
 import { RunTable } from "../RunTable";
 import { INTERVALS, useRunQueryValues, useSearchQuery, useWindow } from "../search";
 import { FilterGroups, TimelineSelect, timelineOf, withTimeline } from "./Filters";
@@ -105,6 +108,7 @@ function ViewSelect({
   q: string;
   counts: Record<ViewKey, number | undefined>;
 }) {
+  const at = useAt();
   const count = counts[current.key];
   return (
     <Menu.Root>
@@ -125,7 +129,7 @@ function ViewSelect({
                 className="menu-item"
                 closeOnClick
                 aria-current={v.key === current.key ? "page" : undefined}
-                render={<Link to={queryLink(v.path, q)} />}
+                render={<Link to={queryLink(at(v.path), q)} />}
               >
                 <span className="menu-item-icon" aria-hidden="true">
                   {v.icon}
@@ -146,6 +150,7 @@ function ViewSelect({
 /** The runs a query matches over a window, by status, each segment a link to its runs. */
 function RunsHistogram({ q, win }: { q: string; win: RangeKey }) {
   const { zone } = useSettings();
+  const at = useAt();
   const width = RANGES[win];
   const { interval, ms: intervalMs } = INTERVALS[win];
   const base = withTimeline(q, null);
@@ -183,7 +188,7 @@ function RunsHistogram({ q, win }: { q: string; win: RangeKey }) {
         bucketLabel={(b) => `${formatTime(b.from, zone).slice(0, 16)} – ${tick(b.to)}`}
         href={(b, status: RunStatus) =>
           queryLink(
-            "/runs",
+            at("/runs"),
             joinQuery(
               base,
               `status:${status}`,
@@ -212,6 +217,7 @@ function RunsList({
   onFault: (fault: QueryFault | null) => void;
 }) {
   const [params, setParams] = useSearchParams();
+  const everyNamespace = useScopeNamespace() === null;
   const sort = readSort(params);
   const asked = joinQuery(q, view.term);
   const runs = useRunSearch({ q: asked, sort, pageSize: 50 });
@@ -234,8 +240,10 @@ function RunsList({
         add(labelTerm(pair.slice(0, at), pair.slice(at + 1)));
       }}
       onPickWorkflow={(id) => add(fieldTerm("workflow", id))}
-      showNamespace
-      onPickNamespace={(namespace) => add(fieldTerm("namespace", namespace))}
+      showNamespace={everyNamespace}
+      {...(everyNamespace
+        ? { onPickNamespace: (namespace: string) => add(fieldTerm("namespace", namespace)) }
+        : {})}
       empty={
         q
           ? "No run matches this query."
@@ -249,10 +257,14 @@ function RunsList({
 
 export function RunsView() {
   const { pathname } = useLocation();
-  const view = VIEWS.find((v) => v.path === pathname.replace(/\/$/, ""));
+  // The view, by its path in the scope: `/ns/bob/runs/waiting` is Waiting.
+  const path = splitScope(pathname).path.replace(/\/$/, "");
+  const view = VIEWS.find((v) => v.path === path);
   const { q, setQ } = useSearchQuery();
   const lookup = useRunQueryValues();
   const [win, setWin] = useWindow();
+  const at = useAt();
+  const everyNamespace = useScopeNamespace() === null;
 
   // The counts of the views and the facets: the statistics of the query's namespace, or of the
   // organization.
@@ -274,7 +286,7 @@ export function RunsView() {
     [],
   );
 
-  if (!view) return <Navigate to="/runs" replace />;
+  if (!view) return <Navigate to={at("/runs")} replace />;
   const searched = view.key !== "failures";
   const fault = (searched ? searchFault : null) ?? queryFault(stats.error);
   const timeline = view.key === "failures" ? win : timelineOf(q);
@@ -294,6 +306,7 @@ export function RunsView() {
             <FilterGroups
               facets={fault ? undefined : stats.data?.facets}
               q={q}
+              namespaces={everyNamespace}
               onToggle={(field, value) => setQ(toggleFacet(q, field, value))}
             />
           </section>

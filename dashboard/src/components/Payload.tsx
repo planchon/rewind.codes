@@ -229,7 +229,7 @@ export function PayloadView({
 }: {
   name: string;
   payload: Payload;
-  /** The run whose journal holds the payload: its value is read through it. */
+  /** The run whose history holds the payload: its value is read through it. */
   runId: string;
   extra?: ReactNode;
 }) {

@@ -17,7 +17,7 @@ use rewind_engine::{ReplayVerdict, StartRun};
 use rewind_runtime::{HandlerError, SandboxLimits, TsHandlers, V8Executor};
 use serde_json::{Value, json};
 
-mod support;
+use crate::support;
 
 use support::{T0, World};
 

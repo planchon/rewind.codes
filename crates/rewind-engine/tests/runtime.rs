@@ -3,7 +3,7 @@
 
 #![allow(clippy::unwrap_used)]
 
-mod support;
+use crate::support;
 
 use std::num::NonZeroU16;
 use std::sync::Arc;

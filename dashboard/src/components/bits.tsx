@@ -1,10 +1,20 @@
 // Small shared pieces: copy buttons, ids and digests, labels, times, problems.
-import { Check, Copy, TriangleExclamationPoint } from "lucide-react";
+import { Check, Copy, Link2, TriangleExclamationPoint } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
+import { Link } from "react-router";
 import { useSettings } from "../app/settings";
-import { formatRelative, formatTime, labelPair, shortDigest, shortRunId } from "../model/format";
+import {
+  formatRelative,
+  formatTime,
+  isIdValue,
+  labelPair,
+  shortDigest,
+  shortRunId,
+} from "../model/format";
+import { labelTerm, queryLink } from "../model/query";
 import type { Labels } from "../model/types";
 import { ApiError } from "../state/errors";
+import { useNamespaceLabel } from "./NamespaceName";
 
 export function CopyButton({ text, label = "Copy" }: { text: string; label?: string }) {
   const [done, setDone] = useState(false);
@@ -77,9 +87,10 @@ function shortNamespace(name: string): string {
 
 /**
  * A run by its handle, `namespace/origin/suffix` (archi/06, "Run handles"): what ran in full, the
- * namespace dimmed (left out where a column of the page says it, a long id shortened out of a
- * table), the suffix in mono; a button copies the handle whole, and the title gives the run's UUID
- * too. A run named by its UUID only (one erased since) shows as an id.
+ * namespace dimmed, by its display name when it has one (left out where a column of the page says
+ * it; a long id shortened out of a table), the suffix in mono; a button copies the handle whole,
+ * with the namespace's id, and the title gives it and the run's UUID. A run named by its UUID only
+ * (one erased since) shows as an id.
  */
 export function RunHandle({
   handle,
@@ -96,16 +107,18 @@ export function RunHandle({
   /** Its namespace whole, as in a table, where nothing is cut. */
   whole?: boolean;
 }) {
+  const displayName = useNamespaceLabel();
   const parts = handle.split("/");
   if (parts.length !== 3)
     return copy ? <RunId id={handle} /> : <span className="run-id">{handle}</span>;
   const [ns = "", origin = "", suffix = ""] = parts;
+  const shown = displayName(ns);
   return (
     <span className="copyable">
       <span className="run-handle" title={id ? `${handle}\nid ${id}` : handle}>
         {namespace && (
           <>
-            <span className="h-ns">{whole ? ns : shortNamespace(ns)}</span>
+            <span className="h-ns">{shown ?? (whole ? ns : shortNamespace(ns))}</span>
             <span className="h-sep">/</span>
           </>
         )}
@@ -132,10 +145,13 @@ export function RunId({ id, full = false }: { id: string; full?: boolean }) {
 export function LabelList({
   labels,
   onPick,
+  pickTitle = (pair) => `Filter by ${pair}`,
   counts,
 }: {
   labels: Labels | string[];
-  onPick?: (pair: string) => void;
+  onPick?: ((pair: string) => void) | undefined;
+  /** What picking a label does, in its title. */
+  pickTitle?: (pair: string) => string;
   counts?: Record<string, number>;
 }) {
   const pairs = Array.isArray(labels)
@@ -148,6 +164,9 @@ export function LabelList({
     <span className="labels">
       {pairs.map((pair) => {
         const at = pair.indexOf(":");
+        const value = pair.slice(at + 1);
+        if (at > 0 && isIdValue(value))
+          return <IdLabel key={pair} name={pair.slice(0, at)} id={value} />;
         const body = (
           <>
             <span className="k">{pair.slice(0, at + 1)}</span>
@@ -160,7 +179,7 @@ export function LabelList({
             key={pair}
             type="button"
             className="label"
-            title={`Filter by ${pair}`}
+            title={pickTitle(pair)}
             onClick={(e) => {
               e.stopPropagation();
               onPick(pair);
@@ -175,6 +194,25 @@ export function LabelList({
         );
       })}
     </span>
+  );
+}
+
+/**
+ * A label whose value is an id (`goal:6afbb6ae…`): its key and a link's icon, never the id, which
+ * its title gives; it opens every run with the label.
+ */
+export function IdLabel({ name, id, count }: { name: string; id: string; count?: string }) {
+  return (
+    <Link
+      to={queryLink("/runs", labelTerm(name, id))}
+      className="label label-id"
+      title={`${name}:${id}\nEvery run with this label`}
+      onClick={(e) => e.stopPropagation()}
+    >
+      {name}
+      <Link2 size={12} aria-hidden="true" />
+      {count !== undefined && <span className="count">{count}</span>}
+    </Link>
   );
 }
 

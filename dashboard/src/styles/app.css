@@ -258,6 +258,68 @@ button.sidebar-resizer {
   border-radius: 50%;
 }
 
+/* The namespace shown (archi/05, "Namespaces"): under the organization picker, in a namespace's
+   scope only; the row leads back to the same view over every namespace. */
+
+.ns-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: var(--row-height);
+  padding: 0 8px 0 4px;
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  font-size: var(--text-control);
+  font-weight: var(--weight-medium);
+  text-decoration: none;
+}
+
+.ns-row:hover {
+  background: var(--surface-2);
+  text-decoration: none;
+}
+
+.ns-row-back {
+  flex: none;
+  color: var(--ink-2);
+}
+
+.ns-row-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A namespace's mark: its pattern on a tint of its color, square where the organization's is
+   round. */
+.ns-mark {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  border-radius: 4px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--ns-color) 14%, var(--surface));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ns-color) 24%, transparent);
+}
+
+.ns-mark img {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* On a dark ground, the pattern lightens to keep its contrast. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .ns-mark img {
+    filter: brightness(1.6);
+  }
+}
+
+:root[data-theme="dark"] .ns-mark img {
+  filter: brightness(1.6);
+}
+
 .find-button {
   display: flex;
   align-items: center;
@@ -788,10 +850,11 @@ select.input {
 }
 
 .seg {
+  --seg-pad: 3px;
   display: inline-flex;
   align-items: center;
   gap: 2px;
-  padding: 3px;
+  padding: var(--seg-pad);
   border-radius: var(--radius-md);
   background: var(--surface);
   box-shadow: inset 0 0 0 1px var(--line);
@@ -804,7 +867,8 @@ select.input {
   min-width: 32px;
   padding: 0 12px;
   border: 0;
-  border-radius: var(--radius-sm);
+  /* Concentric with the control's corners. */
+  border-radius: calc(var(--radius-md) - var(--seg-pad));
   background: transparent;
   color: var(--ink-2);
   cursor: pointer;
@@ -837,9 +901,9 @@ select.input {
    choice, and a lighter one follows the pointer, as on Vercel's dashboard. 4px around the choice,
    36px in all, the height of the query bar beside it. */
 .seg.sliding {
+  --seg-pad: 4px;
   position: relative;
   isolation: isolate;
-  padding: 4px;
 }
 
 .seg.sliding button,
@@ -855,10 +919,10 @@ select.input {
 .seg-thumb,
 .seg-hover {
   position: absolute;
-  top: 4px;
-  bottom: 4px;
+  top: var(--seg-pad);
+  bottom: var(--seg-pad);
   left: 0;
-  border-radius: var(--radius-sm);
+  border-radius: calc(var(--radius-md) - var(--seg-pad));
   pointer-events: none;
 }
 
@@ -1470,7 +1534,7 @@ table.grid .row-link {
   line-height: 20px;
   padding: 0 6px;
   border: 0;
-  border-radius: 4px;
+  border-radius: var(--radius-label);
   background: var(--surface-2);
   box-shadow: inset 0 0 0 1px var(--line);
   font-family: var(--font-mono);
@@ -2175,6 +2239,116 @@ table.grid .run-handle .h-origin {
   height: 36px;
 }
 
+/* The namespace picker, at the left of the page's header: its search first, then every namespace,
+   then the namespaces. */
+
+.ns-pick {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  height: var(--row-height);
+  padding: 0 8px 0 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--ink);
+  font-size: var(--text-control);
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+}
+
+.ns-pick:hover,
+.ns-pick[data-popup-open] {
+  background: var(--surface-3);
+}
+
+.ns-pick-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ns-pick-all {
+  flex: none;
+  color: var(--ink-2);
+}
+
+.ns-pick-chevron {
+  flex: none;
+  color: var(--ink-2);
+}
+
+.ns-pick-menu {
+  width: 300px;
+  max-width: 300px;
+  padding: 0 6px 6px;
+}
+
+.ns-pick-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 44px;
+  margin: 0 -6px 6px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--line);
+  color: var(--ink-3);
+}
+
+.ns-pick-search input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font-size: var(--text-control);
+  outline: 0;
+}
+
+.ns-pick-list {
+  max-height: min(360px, 50vh);
+  overflow-y: auto;
+}
+
+.ns-pick-group {
+  display: contents;
+}
+
+.ns-pick-choice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: var(--row-height);
+  padding: 0 8px;
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  font-size: var(--text-control);
+  cursor: pointer;
+  user-select: none;
+}
+
+.ns-pick-choice[aria-selected="true"] {
+  background: var(--surface-2);
+}
+
+.ns-pick-choice[aria-current] {
+  font-weight: var(--weight-medium);
+}
+
+.ns-pick-check {
+  margin-left: auto;
+  flex: none;
+  color: var(--ink-2);
+}
+
+.ns-pick-empty {
+  padding: 8px;
+  color: var(--ink-3);
+}
+
 /* Find */
 
 .dialog.find {
@@ -2663,6 +2837,16 @@ button.history-row {
   :root[data-sidebar="folded"] .scope .badge,
   :root[data-sidebar="folded"] .scope-chevron,
   :root[data-sidebar="folded"] .org-avatar {
+    display: none;
+  }
+
+  :root[data-sidebar="folded"] .ns-row {
+    justify-content: center;
+    padding: 0;
+  }
+
+  :root[data-sidebar="folded"] .ns-row-back,
+  :root[data-sidebar="folded"] .ns-row-label {
     display: none;
   }
 

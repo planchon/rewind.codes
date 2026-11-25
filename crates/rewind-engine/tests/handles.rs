@@ -4,7 +4,7 @@
 
 #![allow(clippy::unwrap_used)]
 
-mod support;
+use crate::support;
 
 use rewind_core::{Code, Event, Lifecycle, RunHandle, SUFFIX_LEN, suffix_len_apart};
 use rewind_engine::ForkRun;

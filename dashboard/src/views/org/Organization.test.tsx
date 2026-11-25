@@ -322,3 +322,12 @@ describe("the Organization view", () => {
     expect(await screen.findByRole("heading", { name: "Roles" })).toBeInTheDocument();
   });
 });
+
+describe("the organization's pages and the namespaces", () => {
+  it("show no namespace picker: they are of the organization, whatever the namespace", async () => {
+    const world = signedIn("ada@example.net", "org_01ACME");
+    renderApp("/organization/api-keys", { world });
+    await screen.findByRole("heading", { level: 1 });
+    expect(screen.queryByRole("button", { name: /^Namespace: / })).toBeNull();
+  });
+});

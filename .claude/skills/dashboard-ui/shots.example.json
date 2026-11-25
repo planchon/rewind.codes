@@ -3,27 +3,27 @@
   "widths": [1280],
   "themes": ["light", "dark"],
   "shots": [
-    { "name": "observability", "path": "/observability" },
+    { "name": "runs", "path": "/runs" },
     {
-      "name": "observability-stuck",
-      "path": "/observability",
+      "name": "runs-stuck",
+      "path": "/runs",
       "steps": [{ "scroll": 600 }],
       "corners": ".table-wrap thead"
     },
     {
-      "name": "observability-sideways",
-      "path": "/observability",
+      "name": "runs-sideways",
+      "path": "/runs",
       "themes": ["light"],
       "steps": [{ "scroll": 600 }, { "scrollX": { "selector": ".table-wrap", "to": "end" } }]
     },
     {
-      "name": "observability-status-menu",
-      "path": "/observability",
+      "name": "runs-status-menu",
+      "path": "/runs",
       "themes": ["light"],
       "steps": [{ "click": "th button:has-text('Status')" }]
     },
-    { "name": "observability-narrow", "path": "/observability", "widths": [1100], "themes": ["light"] },
+    { "name": "runs-narrow", "path": "/runs", "widths": [1100], "themes": ["light"] },
     { "name": "namespaces", "path": "/namespaces" },
-    { "name": "scripts", "path": "/scripts" }
+    { "name": "workflows", "path": "/workflows" }
   ]
 }

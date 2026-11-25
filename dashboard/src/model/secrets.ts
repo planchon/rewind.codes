@@ -43,7 +43,7 @@ export function labelsTaken(typed: Labels, grant: Labels): Labels {
   return { ...typed, ...grant };
 }
 
-/** Whether a deletion stops nothing: no active run nor workflow attaches the secret. */
+/** Whether a deletion stops nothing: no active run nor workflow uses the secret. */
 export function stopsNothing(usage: SecretUsage): boolean {
   return usage.activeTotal === 0 && usage.workflows.length === 0;
 }

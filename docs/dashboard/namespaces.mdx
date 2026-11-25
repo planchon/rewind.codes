@@ -27,8 +27,10 @@ and the suggestions of the query bar. Hover it to see the namespace's id, which 
 
 ## One end user
 
-Open an end user to see their month in detail: how their runs went, what they used against their limits, then their
-runs, their workflows and their secrets.
+Open an end user, from this list or the picker at the top of the page, to look at them alone: every view then answers
+for them ([Every end user, or one](/dashboard/introduction#every-end-user-or-one)). How their runs went is their
+Overview, their runs are their Runs, their workflows and the organization's their Workflows, their secrets their
+[Secrets](/dashboard/secrets). Their **Usage**, the last entry of the sidebar, shows their month against their limits.
 
 <Frame>
   <img src="/images/dashboard/namespace-light.webp" alt="One end user: cumulative CPU against its quota, limits and use, alerts, tokens and exceptions" className="block dark:hidden" />
@@ -37,17 +39,10 @@ runs, their workflows and their secrets.
 
 | Part | Shows |
 | --- | --- |
-| **Alerts** | Shown first, when there are any: every limit crossed this month, and whether the `quota.alert` webhook was sent |
-| **Figures** | Runs started this month, the share that completed, the failed ones (and the aborted and cancelled), the runs waiting now, the duration p95 and p50. Each opens the runs behind it |
-| **Runs started each day** | The runs of each UTC day of the month, by outcome |
-| **What fails most** | The month's failures by fingerprint, the most frequent first |
-| **Actions its runs call** | The actions the month's runs called, with how many runs called each |
+| **Alerts** | Shown first, when there are any: every limit crossed this month, and whether the `quota.alert` webhook was sent. Their Overview shows them first too |
 | **Cumulative CPU** | CPU time over the month against the quota, with the days it reached 80 % and 100 % |
 | **Limits and use** | Each limit, the end user's use of it, and whether it is an exception to the defaults |
 | **Tokens and exceptions** | The tokens in use, and the exceptions to the defaults |
-| **Runs** | Its runs started this month, in the table of Runs: click a header to order the runs by its column or filter them (a status, a duration, the actions called…). The filters show as chips above the table, the namespace and the month locked; **Open in Runs** opens the same runs there |
-| **Workflows** | The namespace's workflows, its forks among them, and the organization's workflows its runs executed, the most recently run first; **See its workflows** shows them all in Workflows |
-| **Secrets** | The end user's own [secrets](/dashboard/secrets) (`ns/<name>`), with `secrets:read`: who wrote each and when, its reads, its last read and what uses it. With `secrets:write`, write a new one or a new value, or delete one after seeing what it would stop; a grant limited to labels never writes them |
 
 The arrows next to the month go back in time.
 

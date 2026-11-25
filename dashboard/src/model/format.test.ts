@@ -1,12 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
-  fitLabels,
   formatBytes,
   formatDuration,
   formatOffset,
   formatPercent,
   formatRelative,
   formatTime,
+  isIdValue,
+  labelsFit,
   shortDigest,
   shortRunId,
   splitLabel,
@@ -64,20 +65,55 @@ describe("format", () => {
     expect(splitLabel("nocolon")).toBeNull();
   });
 
-  it("fits whole chips in a cell, their values never cut", () => {
-    const labels: [string, string][] = [
-      ["dax", "iteration"],
-      ["env", "development"],
-      ["goal", "6afc64fdf4d56d8262048836"],
-      ["iteration", "6afc64fe1c0b5e2a9d7f3a41"],
-      ["kind", "routine"],
-      ["routine", "notifications_daily"],
+  it("shows a row's labels whole only when they are few and short", () => {
+    const three: [string, string][] = [
+      ["agent", "support"],
+      ["conversation", "c-1255"],
+      ["env", "prod"],
     ];
-    expect(fitLabels(labels)).toEqual({ shown: labels.slice(0, 2), hidden: 4 });
-    // One label is always shown, however long.
-    expect(fitLabels([["a-very-long-label-key-indeed", "6afc64fdf4d56d8262048836"]], 10)).toEqual({
-      shown: [["a-very-long-label-key-indeed", "6afc64fdf4d56d8262048836"]],
-      hidden: 0,
-    });
+    expect(labelsFit(three)).toBe(true);
+    expect(labelsFit([])).toBe(true);
+    // A fourth label, however short, and the row says how many there are.
+    expect(labelsFit([...three, ["k", "v"]])).toBe(false);
+    // Three labels too long to read at a glance.
+    expect(
+      labelsFit([
+        ["conversation", "support-escalation"],
+        ["environment", "production"],
+        ["schedule", "weekly"],
+      ]),
+    ).toBe(false);
+    expect(labelsFit([["goal", "6afbb6ae56fc7339557eb771"]])).toBe(true);
+    // An id takes its key and an icon, not its value.
+    expect(
+      labelsFit([
+        ["dax", "iteration"],
+        ["env", "prod"],
+        ["goal", "6afbb6ae56fc7339557eb771"],
+      ]),
+    ).toBe(true);
+  });
+
+  it("tells an id from a word a person reads", () => {
+    for (const id of [
+      "6afbb6ae56fc7339557eb771",
+      "01a1e9ea-8258-7525-9241-2f2ec0a9da28",
+      "cus_NffrFeUfNV2Hib",
+      "01HZX3K4M5N6P7Q8R9S0T1V2W3",
+      "9f2c4e1a07b3c9d2e8f1",
+      "1234567890123456",
+    ])
+      expect(isIdValue(id), id).toBe(true);
+    for (const word of [
+      "prod",
+      "iteration",
+      "c-1255",
+      "notifications_daily",
+      "2026-11-24",
+      "user_2fQ81",
+      "triage-stale-issues",
+      "claude-haiku-5-5",
+    ])
+      expect(isIdValue(word), word).toBe(false);
   });
 });

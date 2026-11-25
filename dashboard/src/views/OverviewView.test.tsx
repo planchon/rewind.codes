@@ -27,9 +27,10 @@ describe("OverviewView", () => {
     expect(failed.getAttribute("href")).toMatch(/^\/runs\/failures\?q=/);
     expect(failed).toHaveTextContent(/aborted, \d+ cancelled/);
     // Waiting now: whenever they started, by what they wait for (a signal, a timer, a harness
-    // action, an approval, a parked call, a quarantine); not the triage of the test environment.
+    // action, an approval, a parked call, a quarantine, the two goals of a Dax user); not the triage
+    // of the test environment.
     const waiting = within(figures).getByRole("link", { name: /Waiting now/ });
-    await waitFor(() => expect(waiting).toHaveTextContent(/Waiting now\s*6\s*1 on a signal/));
+    await waitFor(() => expect(waiting).toHaveTextContent(/Waiting now\s*8\s*3 on a signal/));
     expect(waiting).toHaveAttribute("href", "/runs/waiting?q=%40env%3Aprod");
     expect(within(figures).getByRole("link", { name: /Duration p95/ })).toHaveTextContent(/p50/);
     const quarantined = within(figures).getByRole("link", { name: /Quarantined/ });

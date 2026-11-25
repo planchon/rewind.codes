@@ -1,5 +1,5 @@
 // One sidebar (archi/05, "One sidebar"). It shows the views; a page that needs more than a
-// toolbar (Observability, Run, Organization) turns it into its own with `PageSidebar`, whose
+// toolbar (Runs, Run, Organization) turns it into its own with `PageSidebar`, whose
 // content is drawn into the sidebar, under a "back" that shows the views again or leads up a
 // level. The organization picker and Find stay above both. Its width is the reader's: dragged
 // at its edge, or folded to a rail of icons; both are kept in browser storage.

@@ -1091,6 +1091,35 @@ export function createWorld(options: WorldOptions): World {
       );
   }
 
+  // Goals of a Dax user, each run waiting on the next notification with six labels, the ids of
+  // Dax's records among them: what a row of the waiting runs holds for such an integration.
+  for (const [i, ago] of [2 * HOUR, 40 * MINUTE].entries()) {
+    const start = now - ago;
+    const settings = { perDay: 4, quietFrom: 22, quietTo: 8 };
+    const r = run(
+      start,
+      DEV_NOTIFICATIONS,
+      SET_DAX,
+      {
+        dax: "iteration",
+        env: "prod",
+        goal: "6afbb6ae56fc7339557eb771",
+        iteration: `6b0373fe1ab77da6944addc${"bc"[i]}`,
+        kind: "goal",
+        routine: `6afbb6ad56fc7339557eb76${7 + i}`,
+      },
+      { user: "6afc64fd2de4a3f3f4c9e127", settings },
+      { namespace: "6afc64fd2de4a3f3f4c9e127", origin: "dev_notifications" },
+    );
+    r.history = new HistoryBuilder(start)
+      .started({
+        code: DEV_NOTIFICATIONS.digest,
+        actionSet: SET_DAX,
+        input: { user: "6afc64fd2de4a3f3f4c9e127", settings },
+      })
+      .awaitSignal("notify", 25, undefined, 24);
+  }
+
   // onboarding: a test run, in virtual time.
   {
     const r = run(

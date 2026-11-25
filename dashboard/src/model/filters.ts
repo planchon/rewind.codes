@@ -219,20 +219,21 @@ export function legacyActionsQuery(params: URLSearchParams): string | null {
   return legacy(params, (p) => p.getAll("toolset").map((t) => `action_set:${quoteValue(t)}`));
 }
 
-/** The statistics a search of the Actions asks for: a window of whole hours, a scope, a group. */
+/**
+ * The statistics a search of the Actions asks for: every call since the first (the server reads 24
+ * hours without `since`), of a scope, of a group.
+ */
 export function toActionStatsQuery(
-  window: RangeKey,
   search: Pick<ActionsSearch, "namespace" | "group">,
-  now: number,
 ): ActionStatsQuery {
-  const query: ActionStatsQuery = {
-    since: new Date(now - RANGES[window]).toISOString(),
-    until: new Date(now).toISOString(),
-  };
+  const query: ActionStatsQuery = { since: SINCE_THE_FIRST };
   if (search.namespace) query.q = `namespace:${quoteValue(search.namespace)}`;
   if (search.group) query.group = search.group;
   return query;
 }
+
+/** A `since` before every run: the statistics since the first. */
+export const SINCE_THE_FIRST = "1970-01-01T00:00:00.000Z";
 
 // Namespaces: `GET /v1/namespaces?prefix=…`
 

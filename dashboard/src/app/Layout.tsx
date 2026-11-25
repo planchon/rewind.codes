@@ -1,10 +1,12 @@
-// The frame of the app (archi/05, "One sidebar"): a sidebar with the organization picker and Find
-// at its top, the views or the page's own sidebar below, the account at its bottom; the page on
-// the right. The query (`q`) follows the reader from the Overview to Runs.
+// The frame of the app (archi/05, "One sidebar" and "Namespaces"): a sidebar with the organization
+// picker, the namespace shown (in a namespace's scope) and Find at its top, the views or the page's
+// own sidebar below, the account at its bottom; the page on the right, the namespace picker at the
+// left of its header. The query (`q`) follows the reader from the Overview to Runs.
 import {
   Activity,
   ChevronLeft,
   ChevronRight,
+  Gauge,
   LayoutGrid,
   LockKeyhole,
   Search,
@@ -14,13 +16,19 @@ import {
 } from "lucide-react";
 import { type ReactNode, useCallback, useState } from "react";
 import { Link, Outlet, useLocation, useNavigate } from "react-router";
+import { NamespaceMark } from "../components/NamespaceMark";
+import { PageHeaderStart } from "../components/PageHeader";
 import { queryLink } from "../model/query";
 import { useAccess } from "../state/access";
+import { useNamespaceNames } from "../state/namespaces";
+import { scopedPath, splitScope } from "../state/scope";
 import { useSession } from "../state/session";
 import { AccountMenu, OrganizationSwitcher, useServerLine } from "./AccountMenus";
 import { FindDialog, useFindShortcut } from "./Find";
+import { NamespacePicker } from "./NamespacePicker";
 import { isRunsView } from "./runLinks";
 import { SidebarResizer, useFoldShortcut } from "./SidebarResizer";
+import { ObjectScopeProvider, unscopedPath, useShownNamespace } from "./scope";
 import { SidebarProvider, useSidebar } from "./sidebar";
 
 /**
@@ -76,10 +84,14 @@ function NavItem({
 
 function MainNav() {
   const access = useAccess();
-  const { pathname, search } = useLocation();
+  const location = useLocation();
   const { pane, setShowViews } = useSidebar();
+  const shown = useShownNamespace();
+  const at = (path: string) => scopedPath(path, shown);
   const reads = access.can("runs:read");
-  const { q, extra } = carried(pathname, search);
+  // The views are the same in every scope; the path after the scope says which one is open.
+  const pathname = splitScope(location.pathname).path;
+  const { q, extra } = carried(pathname, location.search);
   const inRuns = pathname === "/runs" || pathname.startsWith("/runs/");
   const reopen = pane ? () => setShowViews(false) : undefined;
   return (
@@ -88,14 +100,14 @@ function MainNav() {
         <>
           {access.statistics && (
             <NavItem
-              to={queryLink("/overview", q, extra)}
+              to={queryLink(at("/overview"), q, extra)}
               icon={<LayoutGrid size={16} />}
               label="Overview"
               current={pathname === "/overview"}
             />
           )}
           <NavItem
-            to={queryLink("/runs", q, extra)}
+            to={queryLink(at("/runs"), q, extra)}
             icon={<Activity size={16} />}
             label="Runs"
             current={inRuns}
@@ -103,7 +115,7 @@ function MainNav() {
             {...(reopen ? { onReopen: reopen } : {})}
           />
           <NavItem
-            to="/workflows"
+            to={at("/workflows")}
             icon={<Workflow size={16} />}
             label="Workflows"
             current={pathname.startsWith("/workflows")}
@@ -114,29 +126,69 @@ function MainNav() {
       {/* Statistics need `runs:read`, and a grant not limited to labels. */}
       {access.statistics && (
         <NavItem
-          to="/actions"
+          to={at("/actions")}
           icon={<Zap size={16} />}
           label="Actions"
           current={pathname.startsWith("/actions")}
         />
       )}
-      {access.can("namespaces:read") && (
-        <NavItem
-          to="/namespaces"
-          icon={<Users size={16} />}
-          label="Namespaces"
-          current={pathname.startsWith("/namespaces")}
-        />
-      )}
       {access.can("secrets:read") && (
         <NavItem
-          to="/secrets"
+          to={at("/secrets")}
           icon={<LockKeyhole size={16} />}
           label="Secrets"
           current={pathname.startsWith("/secrets")}
         />
       )}
+      {/* The last entry is the scope's: every namespace's use, or the one namespace's. */}
+      {access.can("namespaces:read") &&
+        (shown === null ? (
+          <NavItem
+            to="/namespaces"
+            icon={<Users size={16} />}
+            label="Namespaces"
+            current={pathname.startsWith("/namespaces")}
+          />
+        ) : (
+          <NavItem
+            to={at("/usage")}
+            icon={<Gauge size={16} />}
+            label="Usage"
+            current={pathname.startsWith("/usage")}
+          />
+        ))}
     </div>
+  );
+}
+
+/**
+ * The namespace shown, under the organization picker: its mark and its name; the row leads back to
+ * the same view over every namespace. None over every namespace.
+ */
+function NamespaceRow() {
+  const shown = useShownNamespace();
+  const names = useNamespaceNames();
+  const { pathname, search } = useLocation();
+  const { folded } = useSidebar();
+  if (shown === null) return null;
+  const display = names.get(shown);
+  const label = display ?? shown;
+  return (
+    <Link
+      to={unscopedPath(pathname, search)}
+      className="ns-row"
+      aria-label={`Back to all namespaces (from ${label})`}
+      title={folded ? `Back to all namespaces (from ${label})` : undefined}
+    >
+      <ChevronLeft size={16} aria-hidden="true" className="ns-row-back" />
+      <NamespaceMark name={shown} />
+      <span
+        className={`ns-row-label${display ? "" : " mono"}`}
+        title={display ? `${display} (namespace ${shown})` : shown}
+      >
+        {label}
+      </span>
+    </Link>
   );
 }
 
@@ -154,6 +206,7 @@ function Sidebar({ onFind }: { onFind: () => void }) {
         <div className="sidebar-top">
           <OrganizationSwitcher />
         </div>
+        <NamespaceRow />
         <button
           type="button"
           className="find-button"
@@ -213,19 +266,31 @@ function Sidebar({ onFind }: { onFind: () => void }) {
   );
 }
 
+/** The pages outside the scopes: the organization's settings and the person's account. */
+function unscoped(pathname: string): boolean {
+  return ["/organization", "/connect", "/account"].some(
+    (p) => pathname === p || pathname.startsWith(`${p}/`),
+  );
+}
+
 export function Layout() {
   const [finding, setFinding] = useState(false);
   const openFind = useCallback(() => setFinding(true), []);
+  const { pathname } = useLocation();
   useFindShortcut(openFind);
   return (
     <SidebarProvider>
-      <div className="shell">
-        <Sidebar onFind={openFind} />
-        <main className="main">
-          <Outlet />
-        </main>
-      </div>
-      <FindDialog open={finding} onOpenChange={setFinding} />
+      <ObjectScopeProvider>
+        <div className="shell">
+          <Sidebar onFind={openFind} />
+          <main className="main">
+            <PageHeaderStart.Provider value={unscoped(pathname) ? null : <NamespacePicker />}>
+              <Outlet />
+            </PageHeaderStart.Provider>
+          </main>
+        </div>
+        <FindDialog open={finding} onOpenChange={setFinding} />
+      </ObjectScopeProvider>
     </SidebarProvider>
   );
 }

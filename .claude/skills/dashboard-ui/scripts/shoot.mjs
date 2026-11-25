@@ -11,12 +11,13 @@
 //     "scale": 2,                        device scale factor (default 2)
 //     "shots": [
 //       {
-//         "name": "observability-stuck", file name: <name>-<theme>-<width>.png
-//         "path": "/observability",
+//         "name": "runs-stuck",          file name: <name>-<theme>-<width>.png
+//         "path": "/runs",
 //         "widths": [1100], "themes": ["light"],    override the defaults
 //         "steps": [                     run in order once the page is loaded
 //           { "click": "<selector>" },   the first match
 //           { "hover": "<selector>" },
+//           { "type": "acme" },        typed where the focus is
 //           { "scroll": 600 },           a wheel over the page's content, in px
 //           { "scrollX": { "selector": ".table-wrap", "to": "end" } },   or a number of px
 //           { "wait": 500 }
@@ -84,6 +85,7 @@ async function open(browser, shot, theme, width, scale) {
   for (const step of shot.steps ?? []) {
     if (step.click) await page.locator(step.click).first().click();
     if (step.hover) await page.locator(step.hover).first().hover();
+    if (step.type) await page.keyboard.type(step.type);
     if (step.scroll) await page.mouse.wheel(0, step.scroll);
     if (step.scrollX) {
       const { selector, to } = step.scrollX;

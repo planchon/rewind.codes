@@ -9,8 +9,6 @@ import {
   workflowsSearch,
 } from "./filters";
 
-const NOW = Date.parse("2026-11-12T10:00:00Z");
-
 describe("the Workflows' search", () => {
   const keep = (q: string, actions: string[]) => workflowsSearch(q).keeps(actions);
 
@@ -93,14 +91,12 @@ describe("the Actions' search", () => {
     expect(actionsSearch("action_set:079b3789").fault?.message).toMatch(/not per action set/);
   });
 
-  it("reads a window of the last 24 hours, of a namespace and a group", () => {
-    expect(toActionStatsQuery("24h", { namespace: null, group: null }, NOW)).toEqual({
-      since: "2026-11-11T10:00:00.000Z",
-      until: "2026-11-12T10:00:00.000Z",
+  it("reads every call since the first, of a namespace and a group", () => {
+    expect(toActionStatsQuery({ namespace: null, group: null })).toEqual({
+      since: "1970-01-01T00:00:00.000Z",
     });
-    expect(toActionStatsQuery("1h", { namespace: "alice", group: "github" }, NOW)).toEqual({
-      since: "2026-11-12T09:00:00.000Z",
-      until: "2026-11-12T10:00:00.000Z",
+    expect(toActionStatsQuery({ namespace: "alice", group: "github" })).toEqual({
+      since: "1970-01-01T00:00:00.000Z",
       q: "namespace:alice",
       group: "github",
     });

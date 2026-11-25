@@ -6,7 +6,7 @@
 
 #![allow(clippy::unwrap_used, clippy::too_many_lines)]
 
-mod support;
+use crate::support;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;

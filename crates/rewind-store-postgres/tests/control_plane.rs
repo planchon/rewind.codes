@@ -3,7 +3,7 @@
 //! (a lock freed by a killed process wakes its watcher at once); the changes that access and
 //! secrets send; payloads above Postgres' limit; namespaces whose rows have no partition.
 
-mod support;
+use crate::support;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{BufRead as _, BufReader};
@@ -177,7 +177,12 @@ async fn a_node_whose_connection_or_process_dies_wakes_its_watcher_at_once() {
 
     // Another process holds node-child's lock and is killed.
     let mut child = Command::new(std::env::current_exe().expect("the test binary"))
-        .args(["--exact", "child_node", "--nocapture", "--test-threads=1"])
+        .args([
+            "--exact",
+            "control_plane::child_node",
+            "--nocapture",
+            "--test-threads=1",
+        ])
         .env(CHILD_URL, postgres.url(&database))
         .stdout(Stdio::piped())
         .stderr(Stdio::null())

@@ -33,7 +33,7 @@ describe("a control-plane change", () => {
   });
 
   it("reads again the namespace it names, or the defaults, and not another", async () => {
-    const { requested } = renderApp("/namespaces/bob");
+    const { requested } = renderApp("/ns/bob/usage");
     const changes = changeStream();
     await screen.findByRole("img", { name: /^Cumulative CPU time of bob/ });
     await waitFor(() => expect(changes.live).toBe(true));

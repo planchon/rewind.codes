@@ -1,12 +1,13 @@
 // Workflows (archi/01, "Workflows"; archi/05, "Workflows"): one entity each, by its id, with an
 // optional name unique in its scope, versions numbered from 1 and a suite. The list holds each
-// workflow with its latest version and its runs of a window, from the hourly counters: read again
+// workflow with its latest version and its runs since the first, from the hourly counters: no
+// window of time, a workflow being what it is whenever it ran. Read again
 // within 10 s of a run's change, and when the change stream announces a workflow (named,
 // described, given a version or tests, promoted, forked, pulled), as is a workflow's page. A test
 // is named by its digest: it never changes.
 import { useQuery } from "@tanstack/react-query";
 import { useCallback } from "react";
-import { RANGES, type RangeKey } from "../model/filters";
+import { SINCE_THE_FIRST } from "../model/filters";
 import type {
   ControlChange,
   ListWorkflowsQuery,
@@ -27,10 +28,8 @@ import { type Store, useStore } from "./store";
 const anyWorkflow = (change: ControlChange) => change.kind === "workflow";
 
 export interface WorkflowListOptions {
-  /** What `GET /v1/workflows` takes besides the window: the scope of its counts; `limit`, 50. */
+  /** What `GET /v1/workflows` takes but its window and cursor: the scope of its counts; `limit`, 50. */
   query: Omit<ListWorkflowsQuery, "since" | "until" | "after">;
-  /** The runs counted are those started in this window, up to now: read again at each page. */
-  range?: RangeKey | undefined;
   /** One end user's workflows and the organization's (`Rewind-Namespace`); every one's if `null`. */
   namespace: string | null;
   /** `false` reads nothing (a query at fault). */
@@ -39,25 +38,26 @@ export interface WorkflowListOptions {
 
 export type WorkflowList = PagedRead<WorkflowSummary, null>;
 
-/** The workflows, the most recently run first, page after page. */
+/**
+ * The workflows, with their runs since the first (the server counts 30 days without `since`), the
+ * most recently run first, page after page.
+ */
 export function useWorkflowList({
   query,
-  range,
   namespace,
   enabled = true,
 }: WorkflowListOptions): WorkflowList {
   const { api } = useStore();
   const { limit, ...filter } = query;
-  const key = JSON.stringify([filter, range ?? null, namespace, limit]);
+  const key = JSON.stringify([filter, namespace, limit]);
   return usePaged(enabled ? `workflows|${key}` : null, () => ({
     kind: "aggregate",
     controls: anyWorkflow,
     pageSize: limit ?? 50,
     keyOf: (w: WorkflowSummary) => w.id,
     readPage: async (after, pageLimit, signal) => {
-      const since = range ? { since: new Date(Date.now() - RANGES[range]).toISOString() } : {};
       const page = await api.workflows(
-        { ...filter, ...since, limit: pageLimit, ...(after ? { after } : {}) },
+        { ...filter, since: SINCE_THE_FIRST, limit: pageLimit, ...(after ? { after } : {}) },
         signal,
         namespace,
       );

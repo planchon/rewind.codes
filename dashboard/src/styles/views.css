@@ -178,10 +178,6 @@ table.grid.actions-table td.action-name {
   color: var(--ink);
 }
 
-.actions-table td a.label {
-  text-decoration: none;
-}
-
 /* A row that folds the rows under it: the actions of a group, the namespaces of the organization */
 .group-toggle {
   display: inline-flex;
@@ -1156,7 +1152,7 @@ table.grid.actions-table .latency-cell {
   border: 1px dashed var(--line-strong);
 }
 
-/* Journal, logs, trace */
+/* History, logs, trace */
 
 .history {
   font-size: var(--text-small);
@@ -1758,7 +1754,7 @@ table.grid td.waiting-run {
 }
 
 /* A run's labels on one line, whole: the column grows to hold them, as the run's handle does. */
-.waiting-run > .labels:last-child {
+.waiting-run > .row-labels {
   margin-top: 3px;
   flex-wrap: nowrap;
 }
@@ -2765,30 +2761,26 @@ table.grid tr.row-defaults > * {
   }
 }
 
-.ns-section,
-.scoped-runs {
+.ns-section {
   display: flex;
   flex-direction: column;
   gap: 8px;
 }
 
-.ns-section-head,
-.scoped-runs-head {
+.ns-section-head {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
   gap: 12px;
 }
 
-.ns-section-head h2,
-.scoped-runs-head h2 {
+.ns-section-head h2 {
   margin: 0;
   font-size: var(--text-heading);
   font-weight: var(--weight-title);
 }
 
-.ns-section-head a,
-.scoped-runs-head a {
+.ns-section-head a {
   font-size: var(--text-body);
 }
 
@@ -2933,10 +2925,10 @@ table.grid tr.row-defaults > * {
   font-size: var(--text-micro);
 }
 
-/* The redesign's parts: the sidebars of Observability, of a run and of the organization; the
+/* The redesign's parts: the sidebars of Runs, of a run and of the organization; the
    Overview's figures in one card; the banners as Geist notes. */
 
-/* Observability: the view picker */
+/* Runs: the view picker */
 
 .view-select {
   display: flex;
@@ -2978,7 +2970,7 @@ table.grid tr.row-defaults > * {
   width: max(240px, calc(var(--sidebar-width) - 16px));
 }
 
-/* Observability: the filters */
+/* Runs: the filters */
 
 .filters-list {
   display: flex;
@@ -3132,7 +3124,7 @@ table.grid tr.row-defaults > * {
   padding: 0;
 }
 
-/* Observability: the runs over time, above the table */
+/* Runs: the runs over time, above the table */
 
 .histogram {
   padding: 4px 0 0;
@@ -3331,56 +3323,6 @@ table.grid tr.row-defaults > * {
   transition: opacity 0.15s ease 0.1s;
 }
 
-/* The filters of a table forced to a scope: the scope, locked, then the terms its headers
-   added (ScopedRuns.tsx). */
-.query-chips {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-}
-
-.query-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  height: 24px;
-  padding: 0 4px 0 8px;
-  border-radius: 9999px;
-  background: var(--surface);
-  box-shadow: inset 0 0 0 1px var(--line);
-  color: var(--ink);
-  font-size: var(--text-small);
-  white-space: nowrap;
-}
-
-.query-chip.locked {
-  padding-right: 8px;
-  background: var(--surface-2);
-  color: var(--ink-2);
-}
-
-.query-chip-remove {
-  display: inline-grid;
-  place-items: center;
-  width: 18px;
-  height: 18px;
-  border: 0;
-  border-radius: 9999px;
-  background: transparent;
-  color: var(--ink-3);
-  cursor: pointer;
-}
-
-.query-chip-remove:hover {
-  background: var(--surface-3);
-  color: var(--ink);
-}
-
-.query-chips-clear {
-  font-size: var(--text-small);
-}
-
 /* The run's handle, whole: the column is at least 240 px, and as wide as its longest handle. */
 .run-cell-id {
   display: flex;
@@ -3397,18 +3339,46 @@ table.grid tr.row-defaults > * {
   max-width: 100%;
 }
 
-/* A run's labels in its cell: whole chips that never shrink, then "+N" (RunCells.tsx). */
-.run-labels {
-  display: flex;
-  flex-wrap: nowrap;
+/* A label whose value is an id: its key and a link's icon, a link to its runs (IdLabel). */
+.label.label-id {
+  display: inline-flex;
+  align-items: center;
   gap: 4px;
-  margin-top: 4px;
+  text-decoration: none;
+}
+
+.label.label-id svg {
+  flex: none;
+  color: var(--ink-3);
+}
+
+.label.label-id .count {
+  margin-left: 0;
+}
+
+a.label:hover {
+  box-shadow: inset 0 0 0 1px var(--line-strong);
+  background: var(--surface-3);
+}
+
+/* A row's labels: up to three whole chips on one line that never shrink, else one chip that
+   says how many there are (RowLabels.tsx). */
+.row-labels {
+  display: flex;
   min-width: 0;
 }
 
-.run-labels .label {
+.row-labels .labels {
+  flex-wrap: nowrap;
+}
+
+.row-labels .label {
   flex: none;
   max-width: none;
+}
+
+.run-cell > .row-labels {
+  margin-top: 4px;
 }
 
 .label.more {
@@ -3569,8 +3539,18 @@ table.grid td.end-td {
   color: var(--ink-3);
 }
 
-.labels-card .labels {
-  max-width: 360px;
+/* The card of a row's labels: the labels alone, side by side up to 300 px, as tight as a menu, as
+   wide as their longest line (RowLabels.tsx); its corners concentric with the chips': their radius
+   and the padding between them. */
+.hover-card.labels-card {
+  --labels-card-pad: 6px;
+  max-width: min(300px, calc(100vw - 24px));
+  padding: var(--labels-card-pad);
+  border-radius: calc(var(--radius-label) + var(--labels-card-pad));
+}
+
+.shrunk-lines {
+  display: contents;
 }
 
 .labels-card .label {

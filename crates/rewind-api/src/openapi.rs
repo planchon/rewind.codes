@@ -1,8 +1,9 @@
 //! The OpenAPI 3.1 document of the API, generated from the DTOs with `utoipa`.
 //!
 //! It is committed at `api/openapi.json`; a test fails when the committed file is stale, and
-//! `REWIND_OPENAPI_WRITE=1 cargo test -p rewind-api --test openapi` writes it again. The TypeScript
-//! SDK and the dashboard generate their types from that file (`api/README.md`).
+//! `REWIND_OPENAPI_WRITE=1 cargo test -p rewind-api --test integration openapi::` writes it
+//! again. The TypeScript SDK and the dashboard generate their types from that file
+//! (`api/README.md`).
 //!
 //! Each operation below is a declaration: its function has no body, and serves only to carry
 //! the operation's description to `utoipa`. The server implements the operations; its routes

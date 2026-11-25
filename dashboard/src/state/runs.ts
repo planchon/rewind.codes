@@ -7,6 +7,7 @@ import type { HistoryEvent, Run, RunSort, RunSummary } from "../model/types";
 import type { HistorySnapshot } from "./history";
 import { type Read, useQueryRead, useResource } from "./read";
 import type { ReadStatus } from "./resource";
+import { useScopeNamespace } from "./scope";
 import type { PendingAnswer, RunSearch, SearchSnapshot } from "./search";
 import { useStore } from "./store";
 
@@ -42,13 +43,17 @@ export interface RunSearchView {
   setAtTop: (atTop: boolean) => void;
 }
 
-/** The runs a query matches, in a table (archi/08, "Taken for the live dashboard"). */
+/**
+ * The runs a query matches, in a table (archi/08, "Taken for the live dashboard"): of the namespace
+ * the view is scoped to, or of every namespace.
+ */
 export function useRunSearch(options: RunSearchOptions): RunSearchView {
   const store = useStore();
+  const namespace = useScopeNamespace();
   const sort = options.sort ?? "started";
   const pageSize = options.pageSize ?? 50;
-  const key = JSON.stringify([options.q, sort, pageSize]);
-  const search = store.search(key, { q: options.q, sort, pageSize });
+  const key = JSON.stringify([namespace, options.q, sort, pageSize]);
+  const search = store.search(key, { q: options.q, namespace, sort, pageSize });
   // Whether the table is at its top is the view's: a new search learns it from the view, which
   // hears of it only when the table crosses its top.
   const atTop = useRef(true);

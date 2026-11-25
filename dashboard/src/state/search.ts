@@ -28,6 +28,8 @@ export const MAX_PAGE = 500;
 export interface SearchRequest {
   /** The query, read by the server only. */
   q: string;
+  /** The namespace the search is scoped to (`Rewind-Namespace`); every namespace if `null`. */
+  namespace: string | null;
   sort: RunSort;
   /** Runs per page: the first read, and each "Load more". */
   pageSize: number;
@@ -71,7 +73,7 @@ async function readRuns(
       limit: Math.min(MAX_PAGE, count - runs.length),
       ...(cursor ? { cursor } : {}),
     };
-    const page = await api.runs(query, signal);
+    const page = await api.runs(query, signal, request.namespace);
     for (const run of page.runs) {
       if (seen.has(run.id)) continue;
       seen.add(run.id);

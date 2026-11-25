@@ -7,6 +7,7 @@
 import { ArrowRight, Braces, ChevronLeft, ChevronRight } from "lucide-react";
 import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
+import { useObjectNamespace } from "../../app/scope";
 import { Loading, ProblemView } from "../../components/bits";
 import { JsonDialog } from "../../components/JsonPeek";
 import { PageHeader } from "../../components/PageHeader";
@@ -109,6 +110,8 @@ function TestPage({ reference }: { reference: string }) {
   const navigate = useNavigate();
   const [json, setJson] = useState(false);
   const { read, workflow, versions, version, asked, latest } = useShownWorkflow(reference);
+  // A namespace's workflow: the picker and the sidebar show its namespace.
+  useObjectNamespace(workflow?.namespace);
   const test = useTest(digest);
   const id = workflow?.id ?? reference;
   const label = workflow

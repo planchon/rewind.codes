@@ -3,6 +3,7 @@
 // names itself to the links of its runs; a run opened from anywhere else goes back to every run.
 import { createContext, type ReactNode, useContext } from "react";
 import { useLocation } from "react-router";
+import { splitScope } from "../state/scope";
 
 const RunsFromContext = createContext<string | null>(null);
 
@@ -55,7 +56,8 @@ export function isRunsView(pathname: string): boolean {
 export function runBackPath(state: unknown): string {
   if (state && typeof state === "object" && "from" in state) {
     const from = (state as { from: unknown }).from;
-    if (typeof from === "string" && isRunsView(from.split("?")[0] ?? "")) return from;
+    if (typeof from === "string" && isRunsView(splitScope(from.split("?")[0] ?? "").path))
+      return from;
   }
   return "/runs";
 }

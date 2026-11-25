@@ -6,6 +6,8 @@ edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 license.workspace = true
+# Every file of tests/ is a module of one test binary, tests/integration.rs.
+autotests = false
 
 # An adapter: it depends on rewind-core and rewind-engine, and, as a tool dispatcher, on
 # rewind-outbound (archi/07-code-architecture.md, "Dependency rules").
@@ -27,6 +29,10 @@ url.workspace = true
 [dev-dependencies]
 axum.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "time"] }
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"
 
 [lints]
 workspace = true

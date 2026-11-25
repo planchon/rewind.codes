@@ -10,6 +10,7 @@ import { Bug, FileCode, GitBranch, MessageSquareText, ScrollText, Terminal } fro
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, Navigate, useLocation, useParams, useSearchParams } from "react-router";
 import { parseRunPath, runBackPath, runPath } from "../../app/runLinks";
+import { useObjectNamespace } from "../../app/scope";
 import { PageSidebar, useSidebarFolded } from "../../app/sidebar";
 import { Empty, Loading, ProblemView, RunHandle, useNow } from "../../components/bits";
 import { CodeView, type LineMark } from "../../components/CodeView";
@@ -328,6 +329,8 @@ function RunView({
   const back = runBackPath(location.state);
   const [params, setParams] = useSearchParams();
   const run = useRun(id);
+  // The run is of one end user: the picker and the sidebar show its namespace.
+  useObjectNamespace(run.data?.namespace);
   const history = useRunHistory(id);
   const code = useRunCode(run.data);
   const model = useMemo(() => buildRunModel(history.events), [history.events]);

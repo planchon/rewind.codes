@@ -1,7 +1,7 @@
-// The table of runs, shared by Runs and a namespace's page. With
-// `controls`, each header is a menu that orders the runs by its column and filters what it
-// shows (RunColumns.tsx). A run opened from it returns to the page it was opened from
-// (`useRunLinkState`).
+// The table of runs of Runs. In a namespace's scope, a run's handle leaves its namespace out: the
+// picker says it. With `controls`, each header is a menu that orders the runs by its column and
+// filters what it shows (RunColumns.tsx). A run opened from it returns to the page it was opened
+// from (`useRunLinkState`).
 //
 // It shows a search of `state/` (archi/05, "Nothing moves on its own"): rows keyed by run, each
 // rendered again only when its run changes; columns at least their widths, no cell cut; the
@@ -20,6 +20,7 @@ import { countTerms } from "../model/query";
 import type { RunSummary } from "../model/types";
 import { shortIdOf, versionLabel, workflowPath } from "../model/workflows";
 import type { RunSearchView } from "../state/runs";
+import { useScopeNamespace } from "../state/scope";
 import { useWorkflowLabels } from "../state/workflows";
 import { RunEnd, RunLabels } from "./RunCells";
 import {
@@ -56,11 +57,10 @@ const WIDTHS = {
 
 type Column = keyof typeof WIDTHS;
 
-/** The characters of labels a run's cell shows, then "+N". */
-const LABEL_BUDGET = 44;
-
 /** The optional columns a row shows. */
 interface Cols {
+  /** The namespace the table is scoped to: its runs' handles leave it out. */
+  scope: string | null;
   namespace: boolean;
   workflow: boolean;
   started: boolean;
@@ -185,7 +185,7 @@ const RunRow = memo(function RunRow({
             <RunHandle
               handle={run.handle}
               id={run.id}
-              namespace={!cols.namespace}
+              namespace={!cols.namespace && cols.scope === null}
               copy={false}
               whole
             />
@@ -196,7 +196,7 @@ const RunRow = memo(function RunRow({
             </Link>
           )}
         </span>
-        <RunLabels labels={run.labels} onPick={handlers.pickLabel} budget={LABEL_BUDGET} />
+        <RunLabels labels={run.labels} onPick={handlers.pickLabel} />
       </td>
       <td>
         <span className="labels">
@@ -291,6 +291,7 @@ export function RunTable({
   empty,
 }: RunTableProps) {
   const navigate = useNavigate();
+  const scope = useScopeNamespace();
   const from = useRunLinkState()?.from;
   const linkState = useMemo(() => (from ? { from } : undefined), [from]);
   const now = useNow(5_000);
@@ -342,6 +343,7 @@ export function RunTable({
   const cols = useMemo<Cols>(() => {
     const on = new Set(colsKey.split(","));
     return {
+      scope,
       namespace: on.has("namespace"),
       workflow: on.has("workflow"),
       started: on.has("started"),
@@ -350,7 +352,7 @@ export function RunTable({
       wakes: on.has("wakes"),
       error: on.has("error"),
     };
-  }, [colsKey]);
+  }, [colsKey, scope]);
 
   if (search.status === "pending") return <Loading>Loading runs…</Loading>;
   if (search.status === "error")

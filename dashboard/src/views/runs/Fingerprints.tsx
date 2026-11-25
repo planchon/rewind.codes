@@ -4,16 +4,18 @@
 import type { ReactNode } from "react";
 import { Link, useNavigate } from "react-router";
 import { runPath, useRunLinkState } from "../../app/runLinks";
-import { Ago, Empty, Loading, ProblemView, RunHandle } from "../../components/bits";
+import { useAt } from "../../app/scope";
+import { Ago, Empty, IdLabel, Loading, ProblemView, RunHandle } from "../../components/bits";
 import { Sparkline } from "../../components/Charts";
 import { StatusBadge } from "../../components/Status";
 import { TableScroll } from "../../components/TableScroll";
 import { isCancellation } from "../../model/ending";
 import { RANGES, type RangeKey } from "../../model/filters";
-import { formatCount, formatDuration, splitLabel } from "../../model/format";
+import { formatCount, formatDuration, isIdValue, splitLabel } from "../../model/format";
 import { joinQuery, labelTerm, queryLink } from "../../model/query";
 import { useFailures } from "../../state/aggregates";
 import { queryFault } from "../../state/errors";
+import { useScopeNamespace } from "../../state/scope";
 import { INTERVALS, WINDOW_WORDS, windowTerm } from "../search";
 
 export function Fingerprints({
@@ -27,6 +29,8 @@ export function Fingerprints({
 }) {
   const navigate = useNavigate();
   const linkState = useRunLinkState();
+  const at = useAt();
+  const everyNamespace = useScopeNamespace() === null;
   const width = RANGES[win];
   const { interval, ms: intervalMs } = INTERVALS[win];
   // The fingerprints of the query's namespace, or of the organization: the counters know no other
@@ -43,7 +47,7 @@ export function Fingerprints({
   });
   const fault = queryFault(failures.error);
   const fingerprintLink = (fingerprint: string) =>
-    queryLink("/runs", joinQuery(q, `fingerprint:${fingerprint}`, windowTerm("ended", win)));
+    queryLink(at("/runs"), joinQuery(q, `fingerprint:${fingerprint}`, windowTerm("ended", win)));
 
   let body: ReactNode;
   if (fault) {
@@ -125,6 +129,15 @@ export function Fingerprints({
                   <span className="labels">
                     {g.labels.slice(0, 3).map((l) => {
                       const pair = splitLabel(l.value);
+                      if (pair && isIdValue(pair[1]))
+                        return (
+                          <IdLabel
+                            key={l.value}
+                            name={pair[0]}
+                            id={pair[1]}
+                            count={formatCount(l.runs)}
+                          />
+                        );
                       return (
                         <button
                           key={l.value}
@@ -149,7 +162,13 @@ export function Fingerprints({
                       state={linkState}
                       title="The run that ended last, on the step that failed"
                     >
-                      <RunHandle handle={g.latest.handle} id={g.latest.id} copy={false} whole />
+                      <RunHandle
+                        handle={g.latest.handle}
+                        id={g.latest.id}
+                        namespace={everyNamespace}
+                        copy={false}
+                        whole
+                      />
                     </Link>
                   </span>
                 </td>

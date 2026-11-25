@@ -28,7 +28,8 @@ fn the_committed_openapi_document_is_up_to_date() {
             .unwrap_or_else(|| committed.lines().count().min(generated.lines().count()));
         panic!(
             "api/openapi.json is stale (first difference at line {}). Write it again with \
-             `{WRITE}=1 cargo test -p rewind-api --test openapi`, review the diff, and commit it.",
+             `{WRITE}=1 cargo test -p rewind-api --test integration openapi::`, review the \
+             diff, and commit it.",
             line + 1
         );
     }

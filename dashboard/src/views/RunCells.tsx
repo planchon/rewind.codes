@@ -1,78 +1,32 @@
-// Two cells of the table of runs, each with a card that says more: a run's labels (those that
-// fit, whole, then "+N"), and how it ended (the error's name over its message).
+// Two cells of a list of runs, each with a card that says more: a run's labels (whole when few
+// and short, else "6 labels"), and how it ended (the error's name over its message).
 import { useState } from "react";
 import { Link } from "react-router";
 import { runPath, useRunLinkState } from "../app/runLinks";
 import { useSettings } from "../app/settings";
-import { LabelList } from "../components/bits";
 import { HoverCard } from "../components/HoverCard";
+import { RowLabels } from "../components/RowLabels";
 import { EndGlyph } from "../components/Status";
 import { cancelCause, causeText, endKindOf, endTitle } from "../model/ending";
-import { fitLabels, formatDuration, formatRelative, formatTime, labelPair } from "../model/format";
-import type { Labels, RunSummary } from "../model/types";
+import { formatDuration, formatRelative, formatTime } from "../model/format";
+import type { RunSummary } from "../model/types";
 import { useRun } from "../state/runs";
 
-/**
- * A run's labels in a cell: those that fit, whole and readable, then "+N" for the rest. `budget`
- * is the characters the cell holds (`labelBudget`).
- */
+/** A run's labels, each a filter of the list. */
 export function RunLabels({
   labels,
   onPick,
-  budget,
 }: {
-  labels: Labels;
+  labels: RunSummary["labels"];
   onPick?: ((pair: string) => void) | undefined;
-  budget?: number;
 }) {
-  const pairs = Object.entries(labels).sort(([a], [b]) => a.localeCompare(b));
-  if (pairs.length === 0) return null;
-  const { shown, hidden } = fitLabels(pairs, budget);
   return (
-    <span className="run-labels">
-      {shown.map(([key, value]) => {
-        const pair = labelPair(key, value);
-        const body = (
-          <>
-            <span className="k">{key}:</span>
-            {value}
-          </>
-        );
-        return onPick ? (
-          <button
-            key={pair}
-            type="button"
-            className="label"
-            title={`${pair}: only the runs with this label`}
-            onClick={(e) => {
-              e.stopPropagation();
-              onPick(pair);
-            }}
-          >
-            {body}
-          </button>
-        ) : (
-          <span key={pair} className="label" title={pair}>
-            {body}
-          </span>
-        );
-      })}
-      {hidden > 0 && (
-        <HoverCard
-          label={`The run's ${pairs.length} labels`}
-          className="labels-card"
-          trigger={
-            <button type="button" className="label more" aria-label={`${hidden} more labels`}>
-              +{hidden}
-            </button>
-          }
-        >
-          <p className="card-title">{pairs.length} labels</p>
-          <LabelList labels={labels} {...(onPick ? { onPick } : {})} />
-          {onPick && <p className="card-meta">Click a label to see only the runs with it.</p>}
-        </HoverCard>
-      )}
-    </span>
+    <RowLabels
+      labels={labels}
+      onPick={onPick}
+      pickTitle={(pair) => `${pair}: only the runs with this label`}
+      owner="The run's"
+    />
   );
 }
 

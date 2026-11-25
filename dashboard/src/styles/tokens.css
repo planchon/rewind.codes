@@ -83,6 +83,9 @@
   --radius-sm: 6px;
   --radius-md: 8px;
   --radius-lg: 12px;
+  /* A label's chip. A shape inside another is concentric with it: its radius is the outer radius
+     less the space between them (a menu's 12 px around 6 px items, 6 px apart). */
+  --radius-label: 4px;
   --shadow-border: 0 0 0 1px var(--ds-gray-alpha-400);
   --card-ring: #00000014;
   /* The ring as it shows over the page: what draws it over moving rows (a stuck header). */

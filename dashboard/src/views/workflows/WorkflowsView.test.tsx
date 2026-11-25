@@ -19,8 +19,8 @@ function row(all: HTMLElement[], label: string): HTMLElement {
 }
 
 describe("WorkflowsView", () => {
-  it("lists each workflow as it shows, with its scope, its version and its runs of the window", async () => {
-    renderApp("/workflows?window=30d");
+  it("lists each workflow as it shows, with its scope, its version and its runs", async () => {
+    renderApp("/workflows");
     expect(await screen.findByRole("heading", { name: "Workflows" })).toBeInTheDocument();
     const all = await rows();
     // By its name, with its description's first line under it.
@@ -70,24 +70,15 @@ describe("WorkflowsView", () => {
     expect(requested("/v1/workflows").some((u) => u.searchParams.has("action"))).toBe(false);
   });
 
-  it("counts the window's runs, the last 24 hours by default", async () => {
-    const user = userEvent.setup();
-    const { router, requested } = renderApp("/workflows");
+  it("counts every run since the first, with no window of time", async () => {
+    const { requested } = renderApp("/workflows?window=24h");
     await rows();
-    const since = (u: URL) => Date.parse(u.searchParams.get("since") ?? "");
-    const listed = () =>
-      requested("/v1/workflows").filter((u) => u.searchParams.get("limit") !== "500");
-    const day = listed().at(-1) as URL;
-    expect(Date.now() - since(day)).toBeGreaterThanOrEqual(86_400_000 - 60_000);
-    expect(Date.now() - since(day)).toBeLessThan(86_400_000 + 60_000);
-
-    await user.click(screen.getByRole("button", { name: "30d" }));
-    await waitFor(() => expect(search(router).get("window")).toBe("30d"));
-    await waitFor(() =>
-      expect(Date.now() - since(listed().at(-1) as URL)).toBeGreaterThanOrEqual(
-        30 * 86_400_000 - 60_000,
-      ),
-    );
+    // Every run, those of 30 days ago too; an older link's window is ignored.
+    const listed = requested("/v1/workflows").filter((u) => u.searchParams.get("limit") !== "500");
+    expect(listed.at(-1)?.searchParams.get("since")).toBe("1970-01-01T00:00:00.000Z");
+    expect(listed.at(-1)?.searchParams.has("until")).toBe(false);
+    expect(screen.queryByRole("group", { name: "Window" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "24h" })).toBeNull();
   });
 
   it("underlines a label, which the counters know nothing of, and what the list cannot read", async () => {
@@ -108,7 +99,7 @@ describe("WorkflowsView", () => {
   });
 
   it("narrows to one namespace with Rewind-Namespace, and its links to the runs too", async () => {
-    const { callsTo } = renderApp("/workflows?q=namespace:chen&window=30d");
+    const { callsTo } = renderApp("/workflows?q=namespace:chen");
     const all = await rows();
     const listed = callsTo("/v1/workflows").filter((c) => c.url.searchParams.has("since"));
     await waitFor(() => expect(listed.at(-1)?.headers.get("Rewind-Namespace")).toBe("chen"));
@@ -116,6 +107,9 @@ describe("WorkflowsView", () => {
     // chen's workflows and the organization's, no other namespace's.
     const scopes = all.map((r) => within(r).getAllByRole("cell")[1]?.textContent);
     expect(new Set(scopes)).toEqual(new Set(["Chen Logistics", "Organization"]));
+    // What the page shows, with the namespace's display name for its id, opens from the (i).
+    await userEvent.setup().click(screen.getByRole("button", { name: "About Workflows" }));
+    expect(await screen.findByText(/The workflows of/)).toHaveTextContent("Chen Logistics");
     const runs = within(row(all, `wf-${WORKFLOWS.chenDigest.slice(3, 9)}`)).getByTitle("Its runs");
     expect(new URL(runs.getAttribute("href") ?? "", "http://x").searchParams.get("q")).toBe(
       `workflow:${WORKFLOWS.chenDigest} namespace:chen`,

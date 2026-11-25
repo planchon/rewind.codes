@@ -128,22 +128,33 @@ export function labelPair(key: string, value: string): string {
 }
 
 /**
- * The labels a cell shows whole, in order, within `budget` characters (a chip's padding counts
- * two); the others are counted in a "+N". At least one is shown.
+ * Whether a label's value is an id rather than a word a person reads: one of its parts (split at
+ * `-`, `_`, `.`, `:`) is at least 12 characters of letters and digits mixed, or 16 digits or more
+ * (a UUID, a 24-character object id, a digest, `cus_NffrFeUfNV2Hib`, a ULID). `c-1255`,
+ * `notifications_daily` and `2026-11-24` are words.
  */
-export function fitLabels(
-  pairs: readonly [string, string][],
-  budget = 44,
-): { shown: [string, string][]; hidden: number } {
-  const shown: [string, string][] = [];
-  let used = 0;
-  for (const [key, value] of pairs) {
-    const width = key.length + 1 + value.length + 2;
-    if (shown.length > 0 && used + width > budget) break;
-    shown.push([key, value]);
-    used += width;
-  }
-  return { shown, hidden: pairs.length - shown.length };
+export function isIdValue(value: string): boolean {
+  return value
+    .split(/[-_.:]/)
+    .some(
+      (part) =>
+        /^[A-Za-z0-9]+$/.test(part) &&
+        ((part.length >= 12 && /\d/.test(part) && /[A-Za-z]/.test(part)) || part.length >= 16),
+    );
+}
+
+/** The characters a label's chip takes: its key and a link's icon for an id, else the pair. */
+function labelWidth(key: string, value: string): number {
+  return (isIdValue(value) ? key.length + 2 : key.length + 1 + value.length) + 2;
+}
+
+/**
+ * Whether a row shows its labels whole: at most `most` of them, within `budget` characters (a
+ * chip's padding counts two). Otherwise one chip says how many there are, and its card shows them.
+ */
+export function labelsFit(pairs: readonly [string, string][], budget = 52, most = 3): boolean {
+  if (pairs.length > most) return false;
+  return pairs.reduce((sum, [key, value]) => sum + labelWidth(key, value), 0) <= budget;
 }
 
 /** Splits `key:value` at its first colon. */

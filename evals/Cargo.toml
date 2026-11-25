@@ -6,6 +6,8 @@ edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 license.workspace = true
+# Every file of tests/ is a module of one test binary, tests/integration.rs.
+autotests = false
 
 # Tooling (archi/07-code-architecture.md, "Dependency rules"): wires the adapters like a
 # composition root, and nothing depends on it.
@@ -33,6 +35,10 @@ tokio-util.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"
 
 [lints]
 workspace = true

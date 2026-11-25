@@ -1,12 +1,14 @@
 // Actions: latency, error rate and redeliveries per action, by group (an MCP server, an API, a
-// group of harness actions), over a window, for the organization or one end user. Searched with
-// the query bar of the runs, which reads `namespace:` and one `action:github.*` (sent to the server
-// as the group), `action:` and an action's name here; its figures are the Overview's tiles, and
-// each group of actions folds under its row.
+// group of harness actions), since the first call, for the organization or one end user. Searched
+// with the query bar of the runs, which reads `namespace:` and one `action:github.*` (sent to the
+// server as the group), `action:` and an action's name here; its figures are the Overview's tiles,
+// and each group of actions folds under its row. In a namespace's scope, the calls of that
+// namespace's runs.
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { Fragment, useMemo, useState } from "react";
 import { Link } from "react-router";
-import { Empty, Loading, ProblemView, Time } from "../components/bits";
+import { useAt } from "../app/scope";
+import { Empty, Loading, ProblemView } from "../components/bits";
 import { Tile } from "../components/Charts";
 import { PageHeader } from "../components/PageHeader";
 import { QueryBar } from "../components/QueryBar";
@@ -16,15 +18,14 @@ import {
   ACTIONS_LANGUAGE,
   actionsSearch,
   legacyActionsQuery,
-  type RangeKey,
   toActionStatsQuery,
 } from "../model/filters";
 import { formatCount, formatDuration, formatPercent } from "../model/format";
 import { type FieldValues, fieldTerm, queryLink, TEXT_VALUES } from "../model/query";
 import type { ActionStats } from "../model/types";
 import { useActionStats } from "../state/aggregates";
-import { Seg } from "./FilterBits";
-import { useListQuery, useWindow, WINDOW_WORDS, WINDOWS } from "./search";
+import { useScopeNamespace } from "../state/scope";
+import { useListQuery } from "./search";
 
 const LEGACY_NAMES = ["toolset"] as const;
 
@@ -191,11 +192,11 @@ function actionValues(actions: ActionStats[]): FieldValues {
 
 export function ActionsView() {
   const { q, setQ } = useListQuery(legacyActionsQuery, LEGACY_NAMES);
-  const [win, setWin] = useWindow();
+  const at = useAt();
+  const scoped = useScopeNamespace() !== null;
   const search = actionsSearch(q);
-  const stats = useActionStats(
-    `actions:${win}:${search.namespace ?? ""}:${search.group ?? ""}`,
-    () => toActionStatsQuery(win, search, Date.now()),
+  const stats = useActionStats(`actions:${search.namespace ?? ""}:${search.group ?? ""}`, () =>
+    toActionStatsQuery(search),
   );
   const tip = useTooltip();
   const [folded, setFolded] = useState<ReadonlySet<string>>(new Set());
@@ -222,21 +223,10 @@ export function ActionsView() {
       <PageHeader
         title="Actions"
         info={
-          stats.data && (
-            <p>
-              Latency, error rate and redeliveries of the calls completed from{" "}
-              <Time ms={Date.parse(stats.data.since)} /> to{" "}
-              <Time ms={Date.parse(stats.data.until)} />.
-            </p>
-          )
-        }
-        actions={
-          <Seg<RangeKey>
-            label="Window"
-            value={win}
-            onChange={setWin}
-            options={WINDOWS.map((w) => ({ value: w, label: w, title: WINDOW_WORDS[w] }))}
-          />
+          <p>
+            Latency, error rate and redeliveries of every call the runs made, per action, since the
+            first.
+          </p>
         }
       />
       <QueryBar
@@ -245,7 +235,9 @@ export function ActionsView() {
         language={ACTIONS_LANGUAGE}
         values={values}
         fault={search.fault}
-        placeholder="action:github.* namespace:alice close_issue"
+        placeholder={
+          scoped ? "action:github.* close_issue" : "action:github.* namespace:alice close_issue"
+        }
       />
 
       {search.fault ? (
@@ -258,7 +250,7 @@ export function ActionsView() {
         <div className="table-wrap">
           <Empty>
             {all.length === 0
-              ? `No call completed in ${WINDOW_WORDS[win]}.`
+              ? "No run has called an action yet."
               : "No action matches this search."}
           </Empty>
         </div>
@@ -268,7 +260,7 @@ export function ActionsView() {
             <Tile
               label="Calls"
               value={formatCount(calls)}
-              context={`${formatCount(actions.length)} action${actions.length === 1 ? "" : "s"} in ${WINDOW_WORDS[win]}`}
+              context={`${formatCount(actions.length)} action${actions.length === 1 ? "" : "s"}`}
             />
             <Tile
               label="Failed"
@@ -284,7 +276,7 @@ export function ActionsView() {
             />
             {slowest && (
               <Tile
-                to={queryLink("/runs", fieldTerm("action", slowest.action))}
+                to={queryLink(at("/runs"), fieldTerm("action", slowest.action))}
                 label="Slowest p95"
                 value={formatDuration(slowest.latencyMs.p95)}
                 context={slowest.action}
@@ -298,7 +290,6 @@ export function ActionsView() {
                   <th>Action</th>
                   <th className="right">Calls</th>
                   <th>Failed</th>
-                  <th>By kind</th>
                   <th className="right">Redeliveries</th>
                   <th className="right">p50</th>
                   <th className="right">p95</th>
@@ -335,7 +326,6 @@ export function ActionsView() {
                           {formatCount(g.errors)}{" "}
                           <span className="dim">· {formatPercent(g.errors, g.calls)}</span>
                         </td>
-                        <td />
                         <td className="right num">{formatCount(g.redeliveries)}</td>
                         <td colSpan={5} />
                       </tr>
@@ -344,7 +334,7 @@ export function ActionsView() {
                           <tr key={t.action}>
                             <td className="mono action-name">
                               <Link
-                                to={queryLink("/runs", fieldTerm("action", t.action))}
+                                to={queryLink(at("/runs"), fieldTerm("action", t.action))}
                                 title={`Runs that called ${t.action}`}
                               >
                                 {t.action}
@@ -366,26 +356,6 @@ export function ActionsView() {
                                   />
                                 </span>
                                 <span className="num dim">{formatPercent(t.errors, t.calls)}</span>
-                              </span>
-                            </td>
-                            <td>
-                              <span className="labels">
-                                {Object.entries(t.errorKinds)
-                                  .filter(([, n]) => n > 0)
-                                  .sort(([, a], [, b]) => b - a)
-                                  .map(([kind, n]) => (
-                                    <Link
-                                      key={kind}
-                                      className="label"
-                                      to={queryLink(
-                                        "/runs",
-                                        `${fieldTerm("action", t.action)} ${fieldTerm("error", kind)}`,
-                                      )}
-                                      title={`Runs where ${t.action} failed with ${kind}`}
-                                    >
-                                      <span className="k">{kind}</span>&nbsp;{n}
-                                    </Link>
-                                  ))}
                               </span>
                             </td>
                             <td

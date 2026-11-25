@@ -30,7 +30,7 @@ export function staleOn(change: ControlChange): (readonly unknown[])[] {
   }
 }
 
-/** The reads that move with the runs: a secret's reads, the runs that attach it. */
+/** The reads that move with the runs: a secret's reads, the runs that use it. */
 export const MOVED_BY_RUNS: readonly (readonly unknown[])[] = [SECRETS];
 
 /** The reads read once again when the change stream reopens or resyncs. */

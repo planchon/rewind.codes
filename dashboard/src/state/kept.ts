@@ -1,4 +1,4 @@
-// What `state/` keeps per key (a search, a count, a run's details or journal): shown while a view
+// What `state/` keeps per key (a search, a count, a run's details or history): shown while a view
 // holds it, kept a while after the last one lets it go, so that a return to the page shows it at
 // once, then dropped.
 import { ApiError } from "../sources/client";

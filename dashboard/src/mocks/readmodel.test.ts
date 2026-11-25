@@ -83,7 +83,7 @@ describe("the mocked read model", () => {
     );
     expect(counted).toBe(stats.runs);
     expect(stats.waiting).toEqual({
-      signal: 1,
+      signal: 3,
       timer: 1,
       harness: 1,
       approval: 1,

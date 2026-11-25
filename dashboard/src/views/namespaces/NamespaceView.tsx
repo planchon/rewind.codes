@@ -1,14 +1,11 @@
-// A namespace's page: one end user, shown by its display name when it has one (its id on hover).
-// Over a month: the alerts of the month first, when it has any; how its runs went (started,
-// completed, failed, waiting, durations, by day, what fails most, the actions they call), its CPU
+// A namespace's Usage, the last view of its scope (`/ns/<name>/usage`; archi/05, "Namespaces"): the
+// end user the picker shows. Over a month: the alerts of the month first, when it has any; its CPU
 // time added up against its quota, its use of every limit, its tokens in use, its exceptions to
-// the defaults; then its runs
-// of the month, its workflows, and its secrets (`secrets:read`). What the caller's
-// permissions allow, each in a dialog: rename it and change its limits (`namespaces:write`), revoke
-// its tokens (`tokens:write`), write and delete its secrets (`secrets:write`), erase it
-// (`namespaces:write`, confirmed by typing its id). Each change of the namespace shows on the page
-// at once, and is undone if the server refuses it, its message in the dialog
-// (`state/namespaces.ts`).
+// the defaults. How its runs went is its Overview; its runs, workflows and secrets, its other views.
+// What the caller's permissions allow, each in a dialog: rename it and change its limits
+// (`namespaces:write`), revoke its tokens (`tokens:write`), erase it (`namespaces:write`,
+// confirmed by typing its id). Each change of the namespace shows on the page at once, and is
+// undone if the server refuses it, its message in the dialog (`state/namespaces.ts`).
 import {
   ChevronLeft,
   ChevronRight,
@@ -18,18 +15,13 @@ import {
   Trash2,
 } from "lucide-react";
 import { useState } from "react";
-import { Link, useNavigate, useParams, useSearchParams } from "react-router";
-import { Ago, CopyButton, Empty, Loading, ProblemView, Time, useNow } from "../../components/bits";
-import { Meter, StackedBars, Tile } from "../../components/Charts";
+import { Link, useSearchParams } from "react-router";
+import { Ago, Loading, ProblemView, Time, useNow } from "../../components/bits";
 import { CpuChart } from "../../components/CpuChart";
 import { ErrorNote } from "../../components/ErrorNote";
 import { DialogForm, FormDialog } from "../../components/FormDialog";
-import { InfoCard } from "../../components/InfoCard";
-import { NamespaceName } from "../../components/NamespaceName";
 import { PageHeader } from "../../components/PageHeader";
-import { isCancellation } from "../../model/ending";
-import { formatCount, formatDuration, formatPercent } from "../../model/format";
-import { fieldTerm, joinQuery, queryLink, queryTime } from "../../model/query";
+import { formatCount } from "../../model/format";
 import {
   crossingDay,
   cumulativeCpu,
@@ -40,21 +32,16 @@ import {
   isMonth,
   limitOf,
   METERED,
-  monthBounds,
   monthLabel,
   monthOf,
   QUOTA_FIELDS,
-  QUOTA_KEYS,
-  QUOTA_NAMES,
   quotaText,
   shiftMonth,
   usedOf,
 } from "../../model/quotas";
-import { waitingRuns } from "../../model/scope";
-import type { NamespaceDetail, Quotas, RunStatus } from "../../model/types";
+import type { NamespaceDetail, Quotas } from "../../model/types";
 import { useAccess } from "../../state/access";
 import type { Action } from "../../state/actions";
-import { useFailures, useRunStats } from "../../state/aggregates";
 import {
   useEraseNamespace,
   useNamespaceDefaults,
@@ -63,19 +50,15 @@ import {
   useRevokeNamespaceTokens,
   useSetNamespaceLimits,
 } from "../../state/namespaces";
-import { useWorkflowList } from "../../state/workflows";
+import { useScopeNamespace } from "../../state/scope";
 import { ConfirmButton } from "../org/bits";
-import { ScopedRuns } from "../ScopedRuns";
-import { SecretList } from "../secrets/SecretList";
-import { WorkflowTable } from "../workflows/WorkflowsView";
-import { AlertChip, NamespacesGate, QuotaMeter, QuotasForm } from "./bits";
+import { NamespaceAlerts, NamespacesGate, QuotaMeter, QuotasForm } from "./bits";
 
-const DAY_MS = 86_400_000;
 /** The longest a display name may be, in characters, as the API checks it. */
 const DISPLAY_NAME_MAX = 128;
 
 export function NamespaceView() {
-  const { name = "" } = useParams();
+  const name = useScopeNamespace() ?? "";
   return (
     <NamespacesGate>
       {/* Another namespace is another page: it never shows the one before while it loads. */}
@@ -255,281 +238,6 @@ function Erase({
   );
 }
 
-/**
- * How the namespace's runs of the month went: figures, the runs started each day by outcome, what
- * fails most and the actions they call. Every figure, bar and row opens the runs behind it.
- *
- * The month going on is open-ended (`started:>=…`): its query does not change as time passes, so
- * the lists it keys keep their rows instead of loading again each minute.
- */
-function useMonthRuns(name: string, month: string, now: number) {
-  const [from, end] = monthBounds(month);
-  const until = Math.min(end, now);
-  const scope = fieldTerm("namespace", name);
-  const started =
-    end > now ? `started:>=${queryTime(from)}` : `started:${queryTime(from)}..${queryTime(end)}`;
-  const range = { since: new Date(from).toISOString(), until: new Date(until).toISOString() };
-  const key = `${name}|${month}`;
-  // Its runs waiting now are the gauge of its active runs, whatever the window.
-  const stats = useRunStats(`namespace|${key}`, () => ({
-    q: scope,
-    ...range,
-    interval: "1d",
-    top: 6,
-  }));
-  const failures = useFailures(`namespace-failures|${key}`, () => ({
-    q: scope,
-    ...range,
-    limit: 5,
-  }));
-  return { scope, started, from, until, stats, failures };
-}
-
-type MonthRuns = ReturnType<typeof useMonthRuns>;
-
-function RunFigures({ runs, month }: { runs: MonthRuns; month: string }) {
-  const { scope, started } = runs;
-  if (runs.stats.isPending) return <Loading>Loading its runs…</Loading>;
-  if (runs.stats.isError)
-    return <ProblemView error={runs.stats.error} title="Its runs could not be counted" />;
-  const s = runs.stats.data;
-  const ended =
-    s.statuses.completed + s.statuses.failed + s.statuses.cancelled + s.statuses.aborted;
-  const failed = s.statuses.failed + s.statuses.aborted;
-  const waiting = s.waiting;
-  const durations = s.durations;
-  const link = (...terms: string[]) => queryLink("/runs", joinQuery(scope, ...terms));
-  return (
-    <section className="tiles" aria-label={`Runs in ${monthLabel(month)}`}>
-      <Tile
-        to={link(started)}
-        label="Runs started"
-        value={formatCount(s.runs)}
-        context={`in ${monthLabel(month)}`}
-      />
-      <Tile
-        to={link(started, "status:completed")}
-        label="Completed"
-        value={formatPercent(s.statuses.completed, ended)}
-        context={`of the ${formatCount(ended)} runs that ended`}
-        tone="good"
-      />
-      <Tile
-        to={queryLink("/runs/failures", joinQuery(scope, started))}
-        label="Failed"
-        value={formatCount(s.statuses.failed)}
-        context={`+ ${formatCount(s.statuses.aborted)} aborted, ${formatCount(s.statuses.cancelled)} cancelled`}
-        tone={failed > 0 ? "critical" : undefined}
-      />
-      <Tile
-        to={queryLink("/runs/waiting", scope)}
-        label="Waiting now"
-        value={formatCount(waitingRuns(waiting))}
-        context={`${formatCount(waiting.signal)} on a signal, ${formatCount(waiting.approval)} on an approval`}
-        tone="info"
-      />
-      <Tile
-        to={durations ? link(started, `duration:>=${durations.p95}`) : link(started)}
-        label="Duration p95"
-        value={durations ? formatDuration(durations.p95) : "–"}
-        context={
-          durations
-            ? `p50 ${formatDuration(durations.p50)}, longest ${formatDuration(durations.max)}`
-            : "no run ended"
-        }
-      />
-    </section>
-  );
-}
-
-function RunsByDay({ runs, month }: { runs: MonthRuns; month: string }) {
-  const s = runs.stats.data;
-  const buckets = (s?.series ?? []).map((b) => {
-    const from = Date.parse(b.at);
-    return { from, to: from + DAY_MS, counts: b.statuses };
-  });
-  const day = (ms: number) => String(new Date(ms).getUTCDate());
-  return (
-    <section className="panel" aria-label="Runs started by day">
-      <div className="panel-head">
-        <h2>Runs started each day, by outcome</h2>
-        <span className="end muted">UTC days</span>
-      </div>
-      <div className="panel-body">
-        {!s ? (
-          <Loading />
-        ) : s.runs === 0 || buckets.length === 0 ? (
-          <Empty>No run started in {monthLabel(month)}.</Empty>
-        ) : (
-          <StackedBars
-            buckets={buckets}
-            title="Runs started"
-            tick={day}
-            bucketLabel={(b) => dayLabel(month, new Date(b.from).getUTCDate())}
-            href={(b, status: RunStatus) =>
-              queryLink(
-                "/runs",
-                joinQuery(
-                  runs.scope,
-                  `status:${status}`,
-                  `started:${queryTime(Math.max(b.from, runs.from))}..${queryTime(Math.min(b.to, runs.until))}`,
-                ),
-              )
-            }
-          />
-        )}
-      </div>
-    </section>
-  );
-}
-
-function FailsMost({ runs, month }: { runs: MonthRuns; month: string }) {
-  const fingerprints = runs.failures.data?.fingerprints ?? [];
-  const ended = `ended:${queryTime(runs.from)}..${queryTime(runs.until)}`;
-  return (
-    <section className="panel" aria-label="What fails most">
-      <div className="panel-head">
-        <h2>What fails most</h2>
-        <span className="end">
-          <Link to={queryLink("/runs/failures", joinQuery(runs.scope, runs.started))}>
-            Every failure →
-          </Link>
-        </span>
-      </div>
-      {runs.failures.isPending ? (
-        <Loading />
-      ) : fingerprints.length === 0 ? (
-        <Empty>Nothing failed in {monthLabel(month)}.</Empty>
-      ) : (
-        <ul className="rank-list">
-          {fingerprints.map((g) => (
-            <li key={g.fingerprint}>
-              <Link
-                to={queryLink(
-                  "/runs",
-                  joinQuery(runs.scope, `fingerprint:${g.fingerprint}`, ended),
-                )}
-                title={g.signature}
-              >
-                <span className="rank-name mono">{g.signature}</span>
-                <Meter
-                  value={g.runs}
-                  max={fingerprints[0]?.runs ?? 1}
-                  tone={isCancellation(g.error) ? "neutral" : "critical"}
-                />
-                <span className="num">{formatCount(g.runs)}</span>
-              </Link>
-            </li>
-          ))}
-        </ul>
-      )}
-    </section>
-  );
-}
-
-function ActionsUsed({ runs, month }: { runs: MonthRuns; month: string }) {
-  const actions = runs.stats.data?.facets.actions ?? [];
-  return (
-    <section className="panel" aria-label="Actions its runs call">
-      <div className="panel-head">
-        <h2>Actions its runs call</h2>
-        <span className="end muted">runs that called each</span>
-      </div>
-      {!runs.stats.data ? (
-        <Loading />
-      ) : actions.length === 0 ? (
-        <Empty>No run called an action in {monthLabel(month)}.</Empty>
-      ) : (
-        <ul className="rank-list">
-          {actions.map((t) => (
-            <li key={t.value}>
-              <Link
-                to={queryLink(
-                  "/runs",
-                  joinQuery(runs.scope, runs.started, fieldTerm("action", t.value)),
-                )}
-                title={`${t.runs} runs called ${t.value}`}
-              >
-                <span className="rank-name mono">{t.value}</span>
-                <Meter value={t.runs} max={actions[0]?.runs ?? 1} tone="info" />
-                <span className="num">{formatCount(t.runs)}</span>
-              </Link>
-            </li>
-          ))}
-        </ul>
-      )}
-    </section>
-  );
-}
-
-/**
- * Its runs started in the month, in the Runs table forced to the namespace and the month:
- * its headers order and filter them, in the page's URL.
- */
-function MonthRunList({ runs, month, label }: { runs: MonthRuns; month: string; label: string }) {
-  return (
-    <ScopedRuns
-      name={`namespace|${runs.scope}|${month}`}
-      label="Its runs"
-      title={`Runs in ${monthLabel(month)}`}
-      scope={joinQuery(runs.scope, runs.started)}
-      locked={[
-        { label: <>Namespace {label}</>, title: `Only the runs of ${label}` },
-        { label: <>Started in {monthLabel(month)}</>, title: "The month the page shows" },
-      ]}
-      empty={`No run started in ${monthLabel(month)}.`}
-    />
-  );
-}
-
-/** Its workflows and the organization's its runs executed, the most recently run first. */
-function WorkflowList({ name, scope, count }: { name: string; scope: string; count: number }) {
-  const navigate = useNavigate();
-  const workflows = useWorkflowList({ query: { limit: 10, q: scope }, namespace: name });
-  const open = (term: string) => void navigate(queryLink("/workflows", joinQuery(scope, term)));
-  return (
-    <section className="ns-section" aria-label="Its workflows">
-      <header className="ns-section-head">
-        <h2>
-          Workflows <span className="muted num">{formatCount(count)}</span>
-        </h2>
-        <Link to={queryLink("/workflows", scope)}>See its workflows →</Link>
-      </header>
-      <WorkflowTable
-        workflows={workflows}
-        scope={scope}
-        onPickAction={(action) => open(fieldTerm("action", action))}
-        empty="No workflow ran in this namespace yet."
-      />
-    </section>
-  );
-}
-
-/** The end user's own secrets, which its runs use as `ns/<name>`. */
-function NamespaceSecrets({ name }: { name: string }) {
-  const access = useAccess();
-  return (
-    <section className="ns-section" aria-label="Its secrets">
-      <header className="ns-section-head">
-        <h2>
-          Secrets
-          <InfoCard label="About its secrets">
-            <p>
-              This end user's own values, such as their GitHub token: only the runs of this
-              namespace use them, as <code>ns/&lt;name&gt;</code>, and nothing falls back on the
-              organization's.
-              {access.can("secrets:write") && access.limited
-                ? " Your grant is limited to labels: it reads them, and never writes one."
-                : ""}
-            </p>
-          </InfoCard>
-        </h2>
-      </header>
-      <SecretList namespace={name} />
-    </section>
-  );
-}
-
 function NamespacePage({ name }: { name: string }) {
   const [params, setParams] = useSearchParams();
   const access = useAccess();
@@ -539,7 +247,6 @@ function NamespacePage({ name }: { name: string }) {
   const month = asked && isMonth(asked) && asked <= current ? asked : current;
   const detail = useNamespaceDetail(name, month === current ? null : month);
   const defaults = useNamespaceDefaults();
-  const runs = useMonthRuns(name, month, now);
   const [renaming, setRenaming] = useState(false);
   const [editing, setEditing] = useState(false);
   const [erasing, setErasing] = useState(false);
@@ -585,23 +292,13 @@ function NamespacePage({ name }: { name: string }) {
   return (
     <div className="page">
       <PageHeader
-        crumbs={<Link to="/namespaces">Namespaces</Link>}
-        title={
-          <span className="copyable">
-            <NamespaceName name={ns.name} displayName={displayName} />
-            <CopyButton text={ns.name} label="Copy the namespace's id" />
-          </span>
-        }
+        title="Usage"
         info={
           <p>
-            {displayName && (
-              <>
-                Id <span className="mono">{ns.name}</span>
-                <br />
-              </>
-            )}
-            Created <Time ms={Date.parse(ns.createdAt)} />, active{" "}
-            <Ago ms={Date.parse(ns.lastActiveAt)} />.
+            {displayName ? `${displayName}, the namespace` : "The namespace"}{" "}
+            <span className="mono">{ns.name}</span>: its use of the month against its limits, its
+            tokens and its exceptions to the default limits. Created{" "}
+            <Time ms={Date.parse(ns.createdAt)} />, active <Ago ms={Date.parse(ns.lastActiveAt)} />.
           </p>
         }
         actions={
@@ -700,30 +397,7 @@ function NamespacePage({ name }: { name: string }) {
         </button>
       </nav>
 
-      {d.alerts.length > 0 && (
-        <section className="panel" aria-label="Alerts">
-          <div className="panel-head">
-            <h2>Alerts in {monthLabel(d.month)}</h2>
-          </div>
-          <ul className="alert-list">
-            {d.alerts.map((a) => (
-              <li key={`${a.quota}-${a.threshold}`}>
-                <AlertChip alert={a} />
-                <span>
-                  {QUOTA_NAMES[a.quota]} at {formatQuota(QUOTA_KEYS[a.quota], a.used)} of{" "}
-                  {formatQuota(QUOTA_KEYS[a.quota], a.limit)}
-                </span>
-                <span className="end muted">
-                  <Time ms={Date.parse(a.raisedAt)} />
-                  {a.sentAt ? " · webhook sent" : " · not sent yet"}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
-
-      <RunFigures runs={runs} month={month} />
+      <NamespaceAlerts alerts={d.alerts} month={d.month} />
 
       <div className="ns-columns">
         <div className="ns-column">
@@ -751,7 +425,35 @@ function NamespacePage({ name }: { name: string }) {
             </div>
           </section>
 
-          <RunsByDay runs={runs} month={month} />
+          <section className="panel" aria-label="Access">
+            <div className="panel-head">
+              <h2>Tokens and exceptions</h2>
+            </div>
+            <div className="panel-body">
+              <dl className="kv">
+                <div>
+                  <dt>Active tokens</dt>
+                  <dd className="num" data-testid="tokens">
+                    {formatCount(d.tokens)}
+                  </dd>
+                </div>
+                {d.tokensRevokedBefore && (
+                  <div>
+                    <dt>Signed tokens</dt>
+                    <dd>
+                      refused when issued before <Time ms={Date.parse(d.tokensRevokedBefore)} />
+                    </dd>
+                  </div>
+                )}
+                <div>
+                  <dt>Exceptions</dt>
+                  <dd>
+                    <Exceptions detail={d} defaults={defaults.data?.defaults ?? null} />
+                  </dd>
+                </div>
+              </dl>
+            </div>
+          </section>
         </div>
 
         <div className="ns-column">
@@ -791,45 +493,8 @@ function NamespacePage({ name }: { name: string }) {
               </dl>
             </div>
           </section>
-
-          <FailsMost runs={runs} month={month} />
-          <ActionsUsed runs={runs} month={month} />
-
-          <section className="panel" aria-label="Access">
-            <div className="panel-head">
-              <h2>Tokens and exceptions</h2>
-            </div>
-            <div className="panel-body">
-              <dl className="kv">
-                <div>
-                  <dt>Active tokens</dt>
-                  <dd className="num" data-testid="tokens">
-                    {formatCount(d.tokens)}
-                  </dd>
-                </div>
-                {d.tokensRevokedBefore && (
-                  <div>
-                    <dt>Signed tokens</dt>
-                    <dd>
-                      refused when issued before <Time ms={Date.parse(d.tokensRevokedBefore)} />
-                    </dd>
-                  </div>
-                )}
-                <div>
-                  <dt>Exceptions</dt>
-                  <dd>
-                    <Exceptions detail={d} defaults={defaults.data?.defaults ?? null} />
-                  </dd>
-                </div>
-              </dl>
-            </div>
-          </section>
         </div>
       </div>
-
-      <MonthRunList runs={runs} month={month} label={label} />
-      <WorkflowList name={ns.name} scope={runs.scope} count={ns.usage.workflows} />
-      {access.can("secrets:read") && <NamespaceSecrets name={ns.name} />}
     </div>
   );
 }

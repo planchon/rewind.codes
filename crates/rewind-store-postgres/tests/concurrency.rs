@@ -5,7 +5,7 @@
 //! Workflows created at once for one code without a name are one workflow, and with one name,
 //! one is created.
 
-mod support;
+use crate::support;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::{SystemTime, UNIX_EPOCH};

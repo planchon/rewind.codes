@@ -4,8 +4,10 @@
 // change stream reopens; never on a timer. The time a query names (`since`, `until`) is read at
 // each read: `makeQuery` is called then.
 //
-// These routes take a scope and a window only: the query sent holds the view's one `namespace:`
-// term, or none, and the server's fault at that term is placed back where the view's query has it.
+// These routes take a scope and a window only. In a namespace's scope, they read that namespace
+// (`Rewind-Namespace`) and no query; over every namespace, the query sent holds the view's one
+// `namespace:` term, or none, and the server's fault at that term is placed back where the view's
+// query has it.
 // Counters know no labels: a grant limited to labels reads none of them, and its views are told so
 // without asking the server, which would answer 403.
 import { useMemo } from "react";
@@ -21,6 +23,7 @@ import type {
 import { ApiError } from "../sources/client";
 import { useAccess } from "./access";
 import { type Read, toRead, useResource } from "./read";
+import { useScopeNamespace } from "./scope";
 import { useStore } from "./store";
 
 /** What the server answers a grant limited to labels on these routes. */
@@ -46,9 +49,10 @@ function useCounted<T>(key: string, load: (signal: AbortSignal) => Promise<T>): 
 /** `read` of the query cut down to its scope; a fault at the scope's term placed in the view's query. */
 async function scoped<Q extends { q?: string | null }, T>(
   query: Q,
+  namespace: string | null,
   read: (query: Q) => Promise<T>,
 ): Promise<T> {
-  const scope = statsScope(query.q ?? undefined);
+  const scope = statsScope(query.q ?? undefined, namespace);
   try {
     // A `q` left undefined is not sent.
     return await read({ ...query, q: scope.q });
@@ -62,19 +66,25 @@ async function scoped<Q extends { q?: string | null }, T>(
   }
 }
 
+/** The key of a read of the statistics: what was read for one namespace never shows for another. */
+const keyOf = (kind: string, namespace: string | null, key: string) =>
+  `${kind}|${namespace === null ? "*" : `ns:${namespace}`}|${key}`;
+
 /** Counts, series, durations and facets of the runs of a scope. */
 export function useRunStats(key: string, makeQuery: () => RunStatsQuery): Read<RunStats> {
   const { api } = useStore();
-  return useCounted(`stats|${key}`, (signal) =>
-    scoped(makeQuery(), (query) => api.runStats(query, signal)),
+  const namespace = useScopeNamespace();
+  return useCounted(keyOf("stats", namespace, key), (signal) =>
+    scoped(makeQuery(), namespace, (query) => api.runStats(query, signal, namespace)),
   );
 }
 
 /** Failed, cancelled and aborted runs of a scope, by fingerprint. */
 export function useFailures(key: string, makeQuery: () => FailuresQuery): Read<FingerprintPage> {
   const { api } = useStore();
-  return useCounted(`failures|${key}`, (signal) =>
-    scoped(makeQuery(), (query) => api.failures(query, signal)),
+  const namespace = useScopeNamespace();
+  return useCounted(keyOf("failures", namespace, key), (signal) =>
+    scoped(makeQuery(), namespace, (query) => api.failures(query, signal, namespace)),
   );
 }
 
@@ -84,7 +94,8 @@ export function useActionStats(
   makeQuery: () => ActionStatsQuery,
 ): Read<ActionStatsPage> {
   const { api } = useStore();
-  return useCounted(`action-stats|${key}`, (signal) =>
-    scoped(makeQuery(), (query) => api.actionStats(query, signal)),
+  const namespace = useScopeNamespace();
+  return useCounted(keyOf("action-stats", namespace, key), (signal) =>
+    scoped(makeQuery(), namespace, (query) => api.actionStats(query, signal, namespace)),
   );
 }

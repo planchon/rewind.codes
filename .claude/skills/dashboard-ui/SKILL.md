@@ -81,13 +81,22 @@ For every view in the shot list:
 
 - **The sidebar navigates; it holds no action.** A page's actions are in its header (a run's
   controls are a menu beside "Forks"). No status, id, "live" mark or connection dot in it.
-- An entry that opens its own sidebar (Observability, Testing, a run, Organization) has the "›"
+- An entry that opens its own sidebar (Runs, a run, a workflow, Organization) has the "›"
   chevron.
 - The sidebar folds by a click on its right edge (a drag resizes it): no fold button.
 - Paddings are symmetric: the same space left and right of what a sidebar or a card holds. A
   scrollbar that takes room on one side breaks it: the sidebar's panes scroll without one.
-- **The page header holds the title (and its crumbs) and the actions, nothing else.** No status
-  beside a run's handle; mock and quarantine tags only, when they apply.
+- **The page header holds the title (and its crumbs) and the actions, nothing else**, and at its
+  left the namespace picker, on every page but the organization's. No status beside a run's
+  handle; Test run and quarantine tags only, when they apply.
+- **The scope is always in sight.** In a namespace's scope (`/ns/<name>/`), the sidebar shows the
+  namespace under the organization picker, above Find: ‹, its mark, its display name; the row leads
+  back to the same view over every namespace, and stays above a page's own sidebar. A page of one
+  object of a namespace (a run, a namespace's workflow) shows that namespace the same way, at its
+  one address out of the scope. A view in a namespace's scope
+  says no namespace again: no Namespace column or facet, handles without their namespace.
+- **A namespace's mark is its pattern** (`NamespaceMark`), drawn from its name, wherever a
+  namespace stands as a scope (the picker, its list, the sidebar); the organization's mark is round.
 
 ### Text
 
@@ -102,13 +111,14 @@ For every view in the shot list:
 
 ### Names, never ids
 
-- **Never show a UUID or a digest as a name.** A script shows its title (a person's, else its
-  top comment's, else its workflow's name, else "Untitled script"); a run its handle
-  `namespace/origin/suffix` (`RunHandle`); a namespace its display name. Ids appear only on
-  hover, in a copy button, or in an (i) card.
+- **Never show a UUID or a digest as a name.** A workflow shows its name, else the first line of
+  its code's top comment, else its short id (`wf-7k2m9q`, its id and digest on hover); a run its
+  handle `namespace/origin/suffix` (`RunHandle`), its namespace by its display name when it has
+  one; a namespace its display name (`NamespaceName`). Ids appear only on hover, in a copy button, or in
+  an (i) card.
 - Every reference to a run carries its handle: when the API gives a run's UUID only, add the
   handle to the API rather than show the id (as `FailureSample.handle`).
-- What a person names, they can rename from the UI (a script's title and description, a
+- What a person names, they can rename from the UI (a workflow's name and description, a
   namespace's display name).
 
 ### Tables
@@ -117,8 +127,14 @@ For every view in the shot list:
   Each column has a least width and grows to what its rows hold; names, handles (their namespace
   whole: `RunHandle whole`), labels and numbers stay on one line; prose (an error's message)
   wraps, with a least width so its column never shrinks to a letter; a JSON value shows whole
-  and, past 400 characters, says how many more its dialog holds. Labels show whole up to a
-  budget, then "+N" opens them all.
+  and, past 400 characters, says how many more its dialog holds.
+- **A row's labels**: whole when they are at most three and short (`labelsFit`, 52 characters);
+  more, or longer, and one chip "6 labels" opens them all in a card that holds the labels and
+  nothing else, side by side up to 300 px, 6 px around them as in a menu, the card as wide as
+  their longest line (`RowLabels`). Never some of them then "+N", never a row that grows to several lines of
+  labels.
+- **A label never shows an id**: a value that is one (`isIdValue`) shows as its key and a link's
+  icon, `goal 🔗`, a link to every run with it (`IdLabel`); the id is in its title.
 - **A table wider than its page scrolls sideways** (`TableScroll`), a thin shadow on the edge
   past which columns hide. Never a fade over the text.
 - **The header follows the page** under the page's header, whether the table scrolls sideways
@@ -128,6 +144,11 @@ For every view in the shot list:
   top edge and takes no room. Nothing on screen moves on its own: answers swap in place, rows
   keyed by run, a changed search keeps its previous rows dimmed.
 - A header's menu orders and filters its column; its filters are terms of the query.
+
+### Windows of time
+
+- **A list of things (Workflows, Actions) has no window of time**: it shows them since the first
+  run. A window belongs to what happens over time (Runs, the Overview).
 
 ### Menus, popovers and dialogs
 
@@ -144,6 +165,11 @@ For every view in the shot list:
   band, nothing between a search and the table it filters beyond the page's gap.
 - **Controls breathe**: a segmented control has 4 px around its choice and 12 px each side of a
   label. Controls side by side share a height (36 px: the query bar, a segmented control).
+- **Nested corners are concentric**: a shape inside another has the outer radius less the space
+  between them (a menu: 12 px around 6 px items, 6 px apart; the labels' card: 4 px chips, 6 px
+  apart, 10 px corners; a segmented control: 8 px around a 4 px thumb, 4 px apart). Write it as
+  that sum in the CSS (`calc(var(--radius-md) - var(--seg-pad))`), never as two numbers that
+  drift apart.
 - Buttons of one row share one size and one icon size, centered on one line (a value's fold,
   copy and open buttons: 24 px, 28 px in a dialog).
 - A label in a sidebar is one line, never wider than the sidebar; its title says it whole.
@@ -170,10 +196,8 @@ For every view in the shot list:
 
 What still breaks a rule, to fix when a change touches these views:
 
-- Explanatory text under titles: the Scripts page ("Every distinct source executed…"), Connect
-  Claude's intro, a workflow's page ("Each passed its suite when it was saved…"), the count line
+- Explanatory text under titles: Connect Claude's intro, a workflow's page ("Each passed its suite when it was saved…"), the count line
   of Failures ("2 runs, 2 signatures, ended in the last 24 hours").
-- A run of a workflow shows its workflow as a tag beside its handle, whose middle already says it.
 - The documentation's screenshots (`docs/images/dashboard/`) predate these rules.
 
 ## Where the rules come from
@@ -191,3 +215,5 @@ What still breaks a rule, to fix when a change touches these views:
 | Details (23 Nov) | Padding of the 24h choice; no saved searches; no status in the run's header; alerts before the overview |
 | Tables again (23 Nov) | The corner and top border a different color when stuck; no ellipsis in a table: least widths and sideways scrolling |
 | This skill (23 Nov) | "I don't want to give the same feedback all the time, on small details": the rules in a skill, and a before/after review with screenshots as proof for every UI change |
+| Labels, names, windows (24 Nov) | Too many labels per run: past three, or too long, all in a card; the namespace's name rather than its id in a handle; no date filter on Scripts and Tools; then no text in the labels' card, never an id in a label (its key and a link instead), no "By kind" column in Tools; the labels' card padded "way too much", then "could be wider (~300 px max)", then "the border radius rule on the card: padding and radius look off" |
+| Hierarchy (24 Nov) | Organization › namespace › objects with a namespace picker; the namespace above the search input with a ‹ back to the organization's view; a pattern per namespace |
