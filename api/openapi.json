@@ -5594,7 +5594,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/Payload",
-                "description": "The input of `main`. Absent while the run is `pending`: its `run_started` waits in its\ninbox for the first activation, which commits it."
+                "description": "The input of `main`. Absent while the run is `queued`: its `run_started` waits in its\ninbox for the first activation, which commits it."
               },
               {
                 "type": "null"

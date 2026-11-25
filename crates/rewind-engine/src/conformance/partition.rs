@@ -2232,7 +2232,7 @@ pub async fn search_reads_the_scope_in_order_by_pages<S: PartitionStore>(store: 
     );
 }
 
-/// A run is listed from its creation, `pending` until its first activation.
+/// A run is listed from its creation, `queued` until its first activation.
 pub async fn a_pending_run_is_listed<S: PartitionStore>(store: &S) {
     let log = open(store, "n1").await;
     let pending = run(1);

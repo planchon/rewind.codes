@@ -150,7 +150,7 @@ pub struct Run {
     /// For a run a code started, that run and the call.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub started_by: Option<StartedBy>,
-    /// The input of `main`. Absent while the run is `pending`: its `run_started` waits in its
+    /// The input of `main`. Absent while the run is `queued`: its `run_started` waits in its
     /// inbox for the first activation, which commits it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input: Option<Payload>,

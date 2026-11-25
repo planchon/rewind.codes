@@ -434,7 +434,7 @@ pub struct CreateRun {
     pub events: Vec<HistoryEvent>,
     /// The payload records of the copied events.
     pub payloads: Vec<PayloadRecord>,
-    /// The run's summary from its creation, `pending` until its first activation: a pending
+    /// The run's summary from its creation, `queued` until its first activation: a queued
     /// run is listed and searched as any other.
     pub summary: IndexedSummary,
 }
