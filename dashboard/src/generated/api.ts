@@ -4335,14 +4335,14 @@ export interface components {
         QuotaReached: {
             /**
              * Format: int64
-             * @description The limit: a count for `active_runs`, `runs_per_month` and `scripts`.
+             * @description The limit: a count for `active_runs`, `runs_per_month` and `workflows`.
              */
             limit: number;
             quota: components["schemas"]["QuotaKind"];
             /**
              * Format: date-time
              * @description When a monthly quota frees: the first instant of the next month (UTC). Absent for
-             *     `active_runs` and `scripts`, which free when runs end or are erased.
+             *     `active_runs` and `workflows`, which free when runs end or are erased.
              */
             resetsAt?: string | null;
             scope: components["schemas"]["QuotaScope"];

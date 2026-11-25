@@ -176,7 +176,7 @@ function ChartRow({ status, n, strong }: { status: RunStatus; n: number; strong:
   );
 }
 
-/** A count per bucket, as small columns: the shape of a failure group over the window. */
+/** A count per interval, as small columns: the shape of a fingerprint over the window. */
 export function Sparkline({
   series,
   label,

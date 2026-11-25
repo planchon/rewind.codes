@@ -37,7 +37,7 @@ use std::time::Duration;
 
 use rewind_core::{
     Code, HistoryEvent, JsonValue, PartitionId, Payload, RunExport, RunHandle, RunId, RunMode,
-    RunStarted, SCRIPT_ORIGIN, Shape, WorkflowVersion, code_doc, origin_slug,
+    RunStarted, Shape, UNTITLED_ORIGIN, WorkflowVersion, code_doc, origin_slug,
 };
 
 use crate::checks::{self, BoundsError};
@@ -61,13 +61,14 @@ use crate::workflows::StartWorkflow;
 
 /// What a new run is the run of, the middle of its handle (`archi/06-storage-and-scale.md`,
 /// "Run handles"): its workflow's name, else its short id. A test run has no workflow: the first
-/// line of its code's top comment as a slug, else `script`, as before workflows had ids.
+/// line of its code's top comment as a slug, else `untitled` (a run stored before workflows had
+/// ids kept `script`).
 fn origin_of(metadata: &crate::ports::RunMetadata, code: &Code) -> String {
     match &metadata.workflow {
         Some(workflow) => workflow.origin(),
         None => code_doc(code.source())
             .and_then(|doc| origin_slug(&doc.title))
-            .unwrap_or_else(|| SCRIPT_ORIGIN.to_owned()),
+            .unwrap_or_else(|| UNTITLED_ORIGIN.to_owned()),
     }
 }
 use crate::{payloads, projector};

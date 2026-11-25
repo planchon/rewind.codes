@@ -329,11 +329,11 @@ fn quota_reached_fields() -> utoipa::openapi::schema::Object {
 pub struct QuotaReached {
     pub quota: QuotaKind,
     pub scope: QuotaScope,
-    /// The limit: a count for `active_runs`, `runs_per_month` and `scripts`.
+    /// The limit: a count for `active_runs`, `runs_per_month` and `workflows`.
     pub limit: u64,
     pub used: u64,
     /// When a monthly quota frees: the first instant of the next month (UTC). Absent for
-    /// `active_runs` and `scripts`, which free when runs end or are erased.
+    /// `active_runs` and `workflows`, which free when runs end or are erased.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resets_at: Option<Timestamp>,
 }

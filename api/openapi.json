@@ -5002,7 +5002,7 @@
         "description": "The quota a `quota-exceeded` problem reached. A monthly quota's answer also carries\n`Retry-After`.",
         "properties": {
           "limit": {
-            "description": "The limit: a count for `active_runs`, `runs_per_month` and `scripts`.",
+            "description": "The limit: a count for `active_runs`, `runs_per_month` and `workflows`.",
             "format": "int64",
             "minimum": 0,
             "type": "integer"
@@ -5011,7 +5011,7 @@
             "$ref": "#/components/schemas/QuotaKind"
           },
           "resetsAt": {
-            "description": "When a monthly quota frees: the first instant of the next month (UTC). Absent for\n`active_runs` and `scripts`, which free when runs end or are erased.",
+            "description": "When a monthly quota frees: the first instant of the next month (UTC). Absent for\n`active_runs` and `workflows`, which free when runs end or are erased.",
             "format": "date-time",
             "type": [
               "string",

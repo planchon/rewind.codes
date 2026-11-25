@@ -64,7 +64,8 @@ pub use event::{
 };
 pub use handle::{
     InvalidRunHandle, MAX_ORIGIN_LEN, MAX_SUFFIX_LEN, RunHandle, SCRIPT_ORIGIN, SUFFIX_LEN,
-    is_origin, origin_slug, run_suffix, suffix_len_apart, suffix_neighbours, suffix_ranges,
+    UNTITLED_ORIGIN, is_origin, origin_slug, run_suffix, suffix_len_apart, suffix_neighbours,
+    suffix_ranges,
 };
 pub use history::{HistoryError, validate_history};
 pub use ids::{

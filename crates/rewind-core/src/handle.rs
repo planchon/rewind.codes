@@ -22,8 +22,12 @@ pub const SUFFIX_LEN: usize = 12;
 /// The characters of the longest suffix: every bit of the UUID but its version and variant.
 pub const MAX_SUFFIX_LEN: usize = 25;
 
-/// The origin of a run without a workflow and whose code has no title.
+/// The origin of a run stored before workflows had ids, without a workflow nor a title: what a
+/// stored record leaves out, read as it was written.
 pub const SCRIPT_ORIGIN: &str = "script";
+
+/// The origin of a new run without a workflow (a test run) whose code has no top comment.
+pub const UNTITLED_ORIGIN: &str = "untitled";
 
 /// The longest origin, in characters.
 pub const MAX_ORIGIN_LEN: usize = 40;

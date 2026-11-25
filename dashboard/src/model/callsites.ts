@@ -108,7 +108,7 @@ function callsOnLine(index: SourceIndex, line: number): SyntaxNode[] {
 /**
  * The call expression a callsite points at: the one whose callee's last name is at the position,
  * else the first call on the line with one of `names` as its callee's last name. `null` when the
- * line has no such call (a callsite recorded by another version of the script).
+ * line has no such call (a callsite recorded by another version of the code).
  */
 export function resolveCall(
   index: SourceIndex,

@@ -92,7 +92,7 @@ export function stepFromParam(steps: readonly Step[], param: string | null): num
 
 /**
  * Whether the cursor stops at a step when it skips the empty ones: a step that issues nothing,
- * like a result the script does not resume on (it still waits in `Promise.all`), is skipped.
+ * like a result the code does not resume on (it still waits in `Promise.all`), is skipped.
  */
 export function stopsAt(steps: readonly Step[], n: number): boolean {
   const step = steps[n];
@@ -134,7 +134,7 @@ export type GutterMark =
   | { kind: "resumed"; threw: boolean }
   /** Issued in this step: its rank among what the step issued, from 1. */
   | { kind: "issued"; rank: number }
-  /** Still open after the step: the script is paused on it. */
+  /** Still open after the step: the code is paused on it. */
   | { kind: "paused" }
   /** Done in an earlier step. */
   | { kind: "done" }

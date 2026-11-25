@@ -6,7 +6,7 @@
 //!
 //! - **Admission.** The absolute counts each owner reports for each namespace, and the starts it
 //!   admitted that no report includes yet. `Admit` passes the namespace's limit and the tenant's
-//!   ceiling for `activeRuns`, `runsPerMonth` and `scripts`, or is refused with the quota; an
+//!   ceiling for `activeRuns`, `runsPerMonth` and `workflows`, or is refused with the quota; an
 //!   admission is written before it is answered, and released once a report includes its run.
 //! - **Alerts.** A threshold crossed is recorded once per namespace (or the tenant), quota,
 //!   month and threshold, with an outbox entry that sends `quota.alert`.
