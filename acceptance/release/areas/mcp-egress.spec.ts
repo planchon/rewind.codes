@@ -1,9 +1,9 @@
 /**
- * MCP servers, APIs, the `http` tool and egress (`archi/04-tools.md`, "Routes", "API tools",
- * "Authenticating calls", "Secrets", "Signed calls", "The `http` tool and egress", "Where MCP
+ * MCP servers, APIs, the `http` action and egress (`archi/04-tools.md`, "Routes", "API actions",
+ * "Authenticating calls", "Secrets", "Signed calls", "The `http` action and egress", "Where MCP
  * servers and APIs may be"; `archi/06-storage-and-scale.md`, "Security").
  *
- * A server that takes a secret gets the one the run attached (`org/<name>`, `ns/<name>`), never
+ * A server that takes a secret gets the one the run uses (`org/<name>`, `ns/<name>`), never
  * another; a deleted secret parks the call, a 401 too, and putting the secret again sends it with
  * the same idempotency key. A signed server checks every request with the SDK's
  * `verifyRewindCall` against the keys setup A publishes. An API is read from its OpenAPI document
@@ -11,9 +11,9 @@
  * embedded server).
  *
  * Success paths run on setup A, which lets MCP servers on 127.0.0.1 through, as an operator allows
- * an internal host. Egress attacks run on setup B, a deployed server's defaults: an MCP server or
+ * an internal address. Egress attacks run on setup B, a deployed server's defaults: an MCP server or
  * a webhook at a loopback, private, link-local or metadata address is refused, and the target, a
- * sink on 127.0.0.1, never receives a byte. The `http` tool refuses those addresses on every
+ * sink on 127.0.0.1, never receives a byte. The `http` action refuses those addresses on every
  * deployed server, A included.
  */
 import { existsSync } from "node:fs";
@@ -26,7 +26,7 @@ import { type RewindCall, RewindSignatureError, verifyRewindCall, verifyWebhook 
 import { createLocalJWKSet, decodeProtectedHeader, jwtVerify } from "jose";
 import { eventually } from "../../support/processes.js";
 import {
-  type Delivery,
+  type ReceivedWebhook,
   defaultTools,
   type FixtureTool,
   type McpFixture,
@@ -47,16 +47,16 @@ import {
   expectOk,
   expectProblem,
   expectRefused,
-  newTenant,
+  newOrg,
   stacks,
-  type Tenant,
+  type Org,
   test,
   unique,
 } from "../support/gate.js";
 import { detail, ended, startBroken, startRun, waitingCall } from "../support/actions-helpers.js";
 
-let a: Tenant;
-let b: Tenant;
+let a: Org;
+let b: Org;
 let mcp: McpFixture;
 let receiver: WebhookReceiver;
 let secret: string;
@@ -65,8 +65,8 @@ let redirector: Redirector;
 
 test.beforeAll(async () => {
   [a, b, mcp, receiver, sink, redirector] = await Promise.all([
-    newTenant("mcp-egress"),
-    newTenant("egress-strict", stacks().b),
+    newOrg("mcp-egress"),
+    newOrg("egress-strict", stacks().b),
     startMcpFixture(),
     startWebhookReceiver(),
     startSink(),
@@ -81,12 +81,12 @@ test.afterAll(async () => {
   await Promise.all([mcp?.close(), receiver?.close(), sink?.close(), redirector?.close()]);
 });
 
-/** Registers an action set of MCP servers on tenant `t`; the raw answer. */
-function register(t: Tenant, servers: Record<string, unknown>[], extra: Record<string, unknown> = {}) {
+/** Registers an action set of MCP servers on organization `t`; the raw answer. */
+function register(t: Org, servers: Record<string, unknown>[], extra: Record<string, unknown> = {}) {
   return t.api.post("/v1/action-sets", { mcp: servers, ...extra });
 }
 
-async function actionSetOf(t: Tenant, servers: Record<string, unknown>[], extra: Record<string, unknown> = {}): Promise<string> {
+async function actionSetOf(t: Org, servers: Record<string, unknown>[], extra: Record<string, unknown> = {}): Promise<string> {
   const reply = await register(t, servers, extra);
   expectOk(reply);
   return reply.json.id;
@@ -100,10 +100,10 @@ export default async function main(input: { id: string }) {
 }
 `;
 
-/** An MCP server's `auth` taking the attached secret in `Authorization`. */
+/** An MCP server's `auth` taking the secret the run uses in `Authorization`. */
 const BEARER = { type: "secret", header: "authorization", format: "Bearer {secret}" };
 
-/** A script that waits for `go` between two calls of `fx.lookup`. */
+/** Code that waits for `go` between two calls of `fx.lookup`. */
 const TWO_LOOKUPS = `import { fx } from "rewind:actions";
 import { signal } from "rewind";
 
@@ -115,17 +115,17 @@ export default async function main(input: { id: string }) {
 }
 `;
 
-/** The deliveries of `type` about `runId`, verified with the subscription's secret. */
-function deliveries(type: string, runId: string): { delivery: Delivery; event: any }[] {
-  return receiver.deliveries
-    .map((delivery) => ({ delivery, event: JSON.parse(delivery.body) }))
-    .filter(({ event }) => event.type === type && event.data?.runId === runId);
+/** The webhooks of `type` about `runId` received, each with its parsed body. */
+function webhooks(type: string, runId: string): { request: ReceivedWebhook; webhook: any }[] {
+  return receiver.received
+    .map((request) => ({ request, webhook: JSON.parse(request.body) }))
+    .filter(({ webhook }) => webhook.type === type && webhook.data?.runId === runId);
 }
 
 // ---------------------------------------------------------------------------------------------
 // Success
 
-test("a script calls an MCP server over streamable HTTP, with the idempotency key and trace context in _meta", { tag: "@success" }, async () => {
+test("a workflow calls an MCP server over streamable HTTP, with the idempotency key and trace context in _meta", { tag: "@success" }, async () => {
   const actionSet = await actionSetOf(a, [{ name: "fx", url: mcp.url }]);
   const before = mcp.calls.length;
   const run = await startRun(a.api.ns("alice"), { actionSet, code: LOOKUP, input: { id: "42" }, wait: "30s" });
@@ -141,7 +141,7 @@ test("a script calls an MCP server over streamable HTTP, with the idempotency ke
 
 test("MCP content without an output schema is read with text() and json()", { tag: "@success" }, async () => {
   const actionSet = await actionSetOf(a, [{ name: "fx", url: mcp.url }]);
-  const script = `import { fx } from "rewind:actions";
+  const code = `import { fx } from "rewind:actions";
 
 export default async function main() {
   const plain = await fx.echo({ text: "hello" });
@@ -149,15 +149,15 @@ export default async function main() {
   return { text: plain.text(), n: structured.json<{ n: number }>().n };
 }
 `;
-  const run = await startRun(a.api.ns("alice"), { actionSet, code: script, wait: "30s" });
+  const run = await startRun(a.api.ns("alice"), { actionSet, code, wait: "30s" });
   const done = run.status === "completed" ? run : await ended(a.api.ns("alice"), run.id);
   expect(done.status, JSON.stringify(done)).toBe("completed");
   expect(done.output.value).toEqual({ text: "hello", n: 7 });
 });
 
-test("an MCP tool's error reaches the script as a ActionError it can catch", { tag: "@success" }, async () => {
+test("an MCP tool's error reaches the code as an ActionError it can catch", { tag: "@success" }, async () => {
   const actionSet = await actionSetOf(a, [{ name: "fx", url: mcp.url }]);
-  const script = `import { fx } from "rewind:actions";
+  const code = `import { fx } from "rewind:actions";
 import { ActionError } from "rewind";
 
 export default async function main() {
@@ -170,13 +170,13 @@ export default async function main() {
   }
 }
 `;
-  const done = await ended(a.api.ns("alice"), (await startRun(a.api.ns("alice"), { actionSet, code: script })).id);
+  const done = await ended(a.api.ns("alice"), (await startRun(a.api.ns("alice"), { actionSet, code })).id);
   expect(done.status, JSON.stringify(done)).toBe("completed");
   expect(done.output.value.action).toBe("fx.fail");
   expect(done.output.value.message).toContain("failed: quota");
 });
 
-test("each run calls with the secret it attached: Alice's, Bob's or the organization's, never another's", { tag: "@success" }, async () => {
+test("each run calls with the secret it uses: Alice's, Bob's or the organization's, never another's", { tag: "@success" }, async () => {
   const server = await startMcpFixture();
   try {
     const values = { listing: `${canary()}-listing`, organization: `${canary()}-organization`, alice: `${canary()}-alice`, bob: `${canary()}-bob` };
@@ -185,15 +185,15 @@ test("each run calls with the secret it attached: Alice's, Bob's or the organiza
     expectOk(await a.api.put(`/v1/secrets/${name}`, { value: values.organization }), 201);
     expectOk(await a.api.put(`/v1/namespaces/alice/secrets/${name}`, { value: values.alice }), 201);
     expectOk(await a.api.put(`/v1/namespaces/bob/secrets/${name}`, { value: values.bob }), 201);
-    // The listing carries the organization's secret attached for it; no run keeps it.
+    // The listing uses the organization's secret named for it; no run keeps it.
     const actionSet = await actionSetOf(a, [{ name: "fx", url: server.url, auth: BEARER }], { secrets: { fx: `org/${name}-listing` } });
     expect(server.requests.filter((r) => r.body.includes('"tools/list"')).map((r) => r.headers.authorization)).toContain(`Bearer ${values.listing}`);
-    const seenBy = async (namespace: string, attached: string) => {
+    const seenBy = async (namespace: string, used: string) => {
       const before = server.calls.length;
-      const run = await startRun(a.api.ns(namespace), { actionSet, code: LOOKUP, input: { id: namespace }, secrets: { fx: attached }, wait: "30s" });
+      const run = await startRun(a.api.ns(namespace), { actionSet, code: LOOKUP, input: { id: namespace }, secrets: { fx: used }, wait: "30s" });
       const done = run.status === "completed" ? run : await ended(a.api.ns(namespace), run.id);
       expect(done.status, JSON.stringify(done)).toBe("completed");
-      expect(done.secrets).toEqual({ fx: attached });
+      expect(done.secrets).toEqual({ fx: used });
       const calls = server.calls.slice(before);
       expect(calls).toHaveLength(1);
       expect(calls[0]!.meta?.["codes.rewind/idempotency-key"]).toBe(`${run.id}/1`);
@@ -230,10 +230,10 @@ test("a secret deleted mid-run parks the call, and putting it again sends it wit
     expectOk(await a.api.post(`/v1/runs/${run.id}/signals/go`, {}));
     const parked = await waitingCall(a.api.ns("erin"), run.id, "parked");
     expect(parked.parked).toBe("secret_missing");
-    const hook = await eventually("secret.expired (missing) is delivered", () => deliveries("secret.expired", run.id)[0], 60_000);
-    expect(verifyWebhook(hook.delivery.body, hook.delivery.headers as never, secret).type).toBe("secret.expired");
-    expect(hook.event.data).toMatchObject({ runId: run.id, namespace: "erin", action: "fx.lookup", server: "fx", reason: "missing", secret: `ns/${name}`, callId: parked.callId });
-    expect(hook.event.data.message).toContain(`PUT /v1/namespaces/erin/secrets/${name}`);
+    const received = await eventually("secret.expired (missing) arrives", () => webhooks("secret.expired", run.id)[0], 60_000);
+    expect(verifyWebhook(received.request.body, received.request.headers as never, secret).type).toBe("secret.expired");
+    expect(received.webhook.data).toMatchObject({ runId: run.id, namespace: "erin", action: "fx.lookup", server: "fx", reason: "missing", secret: `ns/${name}`, callId: parked.callId });
+    expect(received.webhook.data.message).toContain(`PUT /v1/namespaces/erin/secrets/${name}`);
     const key = `${run.id}/${parked.seq}`;
     expect(server.calls.filter((c) => c.meta?.["codes.rewind/idempotency-key"] === key), "nothing was sent while parked").toEqual([]);
     expectOk(await a.api.put(`/v1/namespaces/erin/secrets/${name}`, { value: `${canary()}-erin-again` }), 201);
@@ -259,10 +259,10 @@ test("a call refused with 401 is parked, and sent again with the same key once t
     const run = await startRun(a.api.ns("carol"), { actionSet, code: LOOKUP, input: { id: "7" }, secrets: { fx: `org/${name}` } });
     const parked = await waitingCall(a.api.ns("carol"), run.id, "parked");
     expect(parked.parked).toBe("credentials_refused");
-    const hook = await eventually("secret.expired is delivered", () => deliveries("secret.expired", run.id)[0], 60_000);
-    expect(verifyWebhook(hook.delivery.body, hook.delivery.headers as never, secret).type).toBe("secret.expired");
-    expect(hook.event.data).toMatchObject({ runId: run.id, namespace: "carol", action: "fx.lookup", actionSet, reason: "refused", secret: `org/${name}` });
-    expect(hook.delivery.body).not.toContain(canary());
+    const received = await eventually("secret.expired arrives", () => webhooks("secret.expired", run.id)[0], 60_000);
+    expect(verifyWebhook(received.request.body, received.request.headers as never, secret).type).toBe("secret.expired");
+    expect(received.webhook.data).toMatchObject({ runId: run.id, namespace: "carol", action: "fx.lookup", actionSet, reason: "refused", secret: `org/${name}` });
+    expect(received.request.body).not.toContain(canary());
     const usage = await a.api.get(`/v1/secrets/${name}/usage`);
     expectOk(usage, 200);
     expect(usage.json.waitingRuns).toContain(run.id);
@@ -305,7 +305,7 @@ test("a signed MCP server checks every request with verifyRewindCall and learns 
     },
   });
   state.audience = server.url;
-  const script = `import { crm } from "rewind:actions";
+  const code = `import { crm } from "rewind:actions";
 
 export default async function main() {
   return (await crm.whoami({})).json();
@@ -320,12 +320,12 @@ export default async function main() {
     expect(keys.json).toMatchObject({ issuer, jwksUrl: `${issuer}/jwks.json` });
     const first = keys.json.keys[0].kid as string;
 
-    const run = await startRun(a.api.ns("alice"), { actionSet, code: script, labels: { env: "prod" }, wait: "30s" });
+    const run = await startRun(a.api.ns("alice"), { actionSet, code, labels: { env: "prod" }, wait: "30s" });
     const done = run.status === "completed" ? run : await ended(a.api.ns("alice"), run.id);
     expect(done.status, JSON.stringify(done)).toBe("completed");
     expect(done.output.value).toEqual({ namespace: "alice", labels: { env: "prod" } });
     const call = verified.get(`${run.id}/1`)!;
-    expect(call).toMatchObject({ namespace: "alice", run: run.id, tool: "crm.whoami", idempotencyKey: `${run.id}/1` });
+    expect(call).toMatchObject({ namespace: "alice", run: run.id, action: "crm.whoami", idempotencyKey: `${run.id}/1` });
     const signed = server.requests.find((r) => r.body.includes(`"${run.id}/1"`))!;
     const token = signed.headers.authorization!.replace(/^Bearer /, "");
     expect(decodeProtectedHeader(token)).toMatchObject({ alg: "EdDSA", kid: first });
@@ -351,12 +351,12 @@ export default async function main() {
     // harness approves it once the server takes them; it is sent again with the same key. The SDK
     // reads the keys again for an unknown kid at most every 10 s: past that, the new key is known.
     await new Promise((resolve) => setTimeout(resolve, 11_000));
-    const dev = await startRun(a.api.ns("bob"), { actionSet, code: script, labels: { env: "dev" } });
+    const dev = await startRun(a.api.ns("bob"), { actionSet, code, labels: { env: "dev" } });
     const parked = await waitingCall(a.api.ns("bob"), dev.id, "parked");
     expect(parked.parked).toBe("credentials_refused");
-    const hook = await eventually("secret.expired (refused) is delivered", () => deliveries("secret.expired", dev.id)[0], 60_000);
-    expect(hook.event.data).toMatchObject({ runId: dev.id, reason: "refused", server: "crm" });
-    expect(hook.event.data.secret).toBeUndefined();
+    const received = await eventually("secret.expired (refused) arrives", () => webhooks("secret.expired", dev.id)[0], 60_000);
+    expect(received.webhook.data).toMatchObject({ runId: dev.id, reason: "refused", server: "crm" });
+    expect(received.webhook.data.secret).toBeUndefined();
     state.labels = {};
     expectOk(await a.api.post(`/v1/calls/${parked.callId}/approve`));
     const devDone = await ended(a.api.ns("bob"), dev.id);
@@ -372,7 +372,7 @@ export default async function main() {
   }
 });
 
-test("an API is read from its OpenAPI document by URL: one tool per operation, the others skipped, its key attached at start", { tag: "@success" }, async () => {
+test("an API is read from its OpenAPI document by URL: one action per operation, the others skipped, its key used at start", { tag: "@success" }, async () => {
   const fixture = await startApiFixture({ server: "https://measures.example.com/v1" });
   try {
     const reply = await a.api.post("/v1/action-sets", { apis: [{ name: "dax", openapi: fixture.documentUrl }] });
@@ -384,31 +384,31 @@ test("an API is read from its OpenAPI document by URL: one tool per operation, t
       expect.objectContaining({
         name: "dax",
         baseUrl: "https://measures.example.com/v1",
-        tools: 2,
+        actions: 2,
         auth: expect.objectContaining({ type: "secret", header: expect.stringMatching(/^x-api-key$/i) }),
       }),
     ]);
     expect(actionSet.skipped).toEqual([expect.objectContaining({ method: "put", path: "/measures/{id}" })]);
     const create = actionSet.actions.find((t: { name: string }) => t.name === "dax.createMeasure");
-    expect(create.policy.onInterruption, "a POST declaring Idempotency-Key may be sent again").toBe("retry");
-    // The declarations type-check scripts before they run.
+    expect(create.policy.idempotent, "a POST declaring Idempotency-Key may be delivered again").toBe(true);
+    // The declarations type-check code before it runs.
     const wrong = `import { dax } from "rewind:actions";\nexport default async function main() { return await dax.getMeasure({ id: 42 }); }\n`;
     const checked = await a.api.ns("alice").post("/v1/check", { code: wrong, actionSet: actionSet.id });
     expectOk(checked, 200);
     expect(JSON.stringify(checked.json)).toContain("TS2322");
-    // Its key is a secret the run attaches: none attached, the start is refused.
+    // Its key is a secret the run uses: with none named, the start is refused.
     const right = `import { dax } from "rewind:actions";\nexport default async function main() { return await dax.getMeasure({ id: "42" }); }\n`;
     const refused = await a.api.ns("alice").post("/v1/runs", { code: right, actionSet: actionSet.id });
     expectProblem(refused, 422, "secret-required");
     expect(refused.json.secrets[0]).toMatchObject({ server: "dax", problem: "missing" });
     expect(fixture.requests, "the API itself was never called").toEqual([]);
-    evidence(`the document read once from ${fixture.documentUrl}; dax.createMeasure and dax.getMeasure pinned, PUT /measures/{id} skipped (text/csv); auth from its apiKey scheme; a wrong argument → TS2322; no key attached → 422 secret-required`);
+    evidence(`the document read once from ${fixture.documentUrl}; dax.createMeasure and dax.getMeasure pinned, PUT /measures/{id} skipped (text/csv); auth from its apiKey scheme; a wrong argument → TS2322; no key named → 422 secret-required`);
   } finally {
     await fixture.close();
   }
 });
 
-test("a tool whose schema changed parks the call, tells the harness, and goes on once approved", { tag: "@success" }, async () => {
+test("an action whose MCP tool changed its schema parks the call, tells the harness, and goes on once approved", { tag: "@success" }, async () => {
   test.setTimeout(4 * 60_000);
   const server = await startMcpFixture();
   try {
@@ -430,9 +430,9 @@ test("a tool whose schema changed parks the call, tells the harness, and goes on
     const parked = await waitingCall(a.api.ns("alice"), run.id, "parked");
     expect(parked.parked).toBe("schema_changed");
     expect(server.calls.filter((c) => c.tool === "lookup"), "nothing is sent while parked").toHaveLength(0);
-    const hook = await eventually("action.schema_changed is delivered", () => deliveries("action.schema_changed", run.id)[0], 60_000);
-    expect(verifyWebhook(hook.delivery.body, hook.delivery.headers as never, secret).type).toBe("action.schema_changed");
-    expect(hook.event.data).toMatchObject({ runId: run.id, namespace: "alice", action: "fx.lookup", callId: parked.callId });
+    const received = await eventually("action.schema_changed arrives", () => webhooks("action.schema_changed", run.id)[0], 60_000);
+    expect(verifyWebhook(received.request.body, received.request.headers as never, secret).type).toBe("action.schema_changed");
+    expect(received.webhook.data).toMatchObject({ runId: run.id, namespace: "alice", action: "fx.lookup", callId: parked.callId });
     expectOk(await a.api.post(`/v1/calls/${parked.callId}/approve`));
     const done = await ended(a.api.ns("alice"), run.id);
     expect(done.status, JSON.stringify(done)).toBe("completed");
@@ -444,14 +444,14 @@ test("a tool whose schema changed parks the call, tells the harness, and goes on
 
 test("a stdio MCP server runs where the operator allows it", { tag: "@success" }, async () => {
   const actionSet = await actionSetOf(a, [{ name: "everything", command: "npx", args: ["-y", "@modelcontextprotocol/server-everything@2.2.1", "stdio"] }]);
-  const script = `import { everything } from "rewind:actions";
+  const code = `import { everything } from "rewind:actions";
 
 export default async function main() {
   const echoed = await everything.echo({ message: "over stdio" });
   return echoed.text();
 }
 `;
-  const run = await startRun(a.api.ns("alice"), { actionSet, code: script, wait: "60s" });
+  const run = await startRun(a.api.ns("alice"), { actionSet, code, wait: "60s" });
   const done = run.status === "completed" ? run : await ended(a.api.ns("alice"), run.id, 120_000);
   expect(done.status, JSON.stringify(done)).toBe("completed");
   expect(done.output.value).toContain("over stdio");
@@ -460,15 +460,15 @@ export default async function main() {
 test("fetch reaches a public host of the http action's allow-list", { tag: "@success" }, async () => {
   const actionSet = await a.api.post("/v1/action-sets", { http: { allow: ["rewind.codes"] } });
   expectOk(actionSet);
-  const script = `export default async function main() {
+  const code = `export default async function main() {
   const response = await fetch("https://rewind.codes/");
   const body = await response.text();
   return { status: response.status, ok: response.ok, url: response.url, html: body.includes("<html") || body.includes("<!doctype") || body.includes("<!DOCTYPE") };
 }
 `;
-  const run = await startRun(a.api.ns("alice"), { actionSet: actionSet.json.id, code: script, wait: "60s" });
+  const run = await startRun(a.api.ns("alice"), { actionSet: actionSet.json.id, code, wait: "60s" });
   const done = run.status === "completed" || run.status === "failed" ? run : await ended(a.api.ns("alice"), run.id, 90_000);
-  expect(done.status, `the http tool reached https://rewind.codes/ (this check needs the internet): ${JSON.stringify(done.error ?? done)}`).toBe("completed");
+  expect(done.status, `the http action reached https://rewind.codes/ (this check needs the internet): ${JSON.stringify(done.error ?? done)}`).toBe("completed");
   expect(done.output.value).toMatchObject({ status: 200, ok: true, html: true });
 });
 
@@ -501,12 +501,12 @@ test("a deployed server calls APIs over https only", { tag: "@failure" }, async 
 });
 
 test("invalid action sets are refused with invalid-action-set", { tag: "@failure" }, async () => {
-  const host = (name: string) => ({ name, description: "d", inputSchema: { type: "object" } });
+  const harness = (name: string) => ({ name, description: "d", inputSchema: { type: "object" } });
   const cases: [string, Record<string, unknown>][] = [
-    ["a duplicate host tool", { harness: [host("crm.find"), host("crm.find")] }],
-    ["a reserved word as a host tool", { harness: [host("default")] }],
-    ["a reserved word as a group", { harness: [host("class.find")] }],
-    ["the reserved namespace workflows", { harness: [host("workflows.find")] }],
+    ["a duplicate harness action", { harness: [harness("crm.find"), harness("crm.find")] }],
+    ["a reserved word as a harness action", { harness: [harness("default")] }],
+    ["a reserved word as a group", { harness: [harness("class.find")] }],
+    ["the reserved group workflows", { harness: [harness("workflows.find")] }],
     ["a server with both url and command", { mcp: [{ name: "fx", url: mcp.url, command: "true" }] }],
     ["a server with neither url nor command", { mcp: [{ name: "fx" }] }],
   ];
@@ -530,13 +530,13 @@ test("an action set whose input schema is not a JSON Schema is refused with inva
 test("arguments outside an MCP tool's schema throw a TypeError, and the server receives nothing", { tag: "@failure" }, async () => {
   const actionSet = await actionSetOf(a, [{ name: "fx", url: mcp.url }]);
   const before = mcp.calls.length;
-  const script = `import { fx } from "rewind:actions";
+  const code = `import { fx } from "rewind:actions";
 
 export default async function main() {
   return await fx.lookup({ id: 42 } as any);
 }
 `;
-  const done = await ended(a.api.ns("alice"), (await startRun(a.api.ns("alice"), { actionSet, code: script })).id);
+  const done = await ended(a.api.ns("alice"), (await startRun(a.api.ns("alice"), { actionSet, code })).id);
   expect(done.status).toBe("failed");
   expect(done.error.name).toBe("TypeError");
   expect(mcp.calls.length).toBe(before);
@@ -544,13 +544,13 @@ export default async function main() {
 
 test("an MCP call past its execution timeout fails with kind timeout", { tag: "@failure" }, async () => {
   const actionSet = await actionSetOf(a, [{ name: "fx", url: mcp.url, policies: { slow: { timeout: "1s", idempotent: false } } }]);
-  const script = `import { fx } from "rewind:actions";
+  const code = `import { fx } from "rewind:actions";
 
 export default async function main() {
   return (await fx.slow({ ms: 5000 })).text();
 }
 `;
-  const done = await ended(a.api.ns("alice"), (await startRun(a.api.ns("alice"), { actionSet, code: script })).id);
+  const done = await ended(a.api.ns("alice"), (await startRun(a.api.ns("alice"), { actionSet, code })).id);
   expect(done.status, JSON.stringify(done)).toBe("failed");
   expect(done.error.failedCall).toMatchObject({ action: "fx.slow", error: { kind: "timeout" } });
 });
@@ -658,7 +658,7 @@ test("an MCP server that redirects to another origin is refused, and its secret 
   }
 });
 
-test("what an internal MCP server answers is never quoted to the tenant", { tag: "@attack" }, async () => {
+test("what an internal MCP server answers is never quoted to the organization", { tag: "@attack" }, async () => {
   const marker = `INTERNAL-ONLY-${unique()}`;
   const broken = await startBroken(500, `stack trace with ${marker} and db password`);
   try {
@@ -667,7 +667,7 @@ test("what an internal MCP server answers is never quoted to the tenant", { tag:
     expectProblem(reply, 502, "action-set-unavailable");
     expect(broken.hits).toBeGreaterThan(0);
     expect(reply.text).not.toContain(marker);
-    evidence(`the internal server answered 500 with a body; the tenant got: ${detail(reply)}`);
+    evidence(`the internal server answered 500 with a body; the organization got: ${detail(reply)}`);
   } finally {
     await broken.close();
   }
@@ -689,7 +689,7 @@ test("no secret's value is stored in clear: a dump of setup A's database holds n
   const hex = Buffer.from(canary()).toString("hex");
   expect(dump.stdout.includes(canary()), "a value in clear").toBe(false);
   expect(dump.stdout.toLowerCase().includes(hex), "a value in clear, as bytes").toBe(false);
-  evidence(`pg_dump of setup A (${(dump.stdout.length / 1e6).toFixed(1)} MB) holds the canary neither as text nor as hex: secrets are sealed under the tenant's data key`);
+  evidence(`pg_dump of setup A (${(dump.stdout.length / 1e6).toFixed(1)} MB) holds the canary neither as text nor as hex: secrets are sealed under the organization's data key`);
 });
 
 // ---------------------------------------------------------------------------------------------
@@ -699,7 +699,7 @@ test("fetch to an internal address is refused even when the allow-list names it"
   for (const t of [a, b]) {
     const actionSet = await t.api.post("/v1/action-sets", { http: { allow: ["127.0.0.1", "localhost", "169.254.169.254", "10.0.0.1"] } });
     expectOk(actionSet);
-    const script = `import { ActionError } from "rewind";
+    const code = `import { ActionError } from "rewind";
 
 export default async function main(input: { urls: string[] }) {
   const refused: string[] = [];
@@ -717,7 +717,7 @@ export default async function main(input: { urls: string[] }) {
 `;
     const urls = [`${sink.origin}/secret`, `http://localhost:${sink.port}/secret`, "http://169.254.169.254/latest/meta-data/", "http://10.0.0.1/"];
     const before = sink.hits.length;
-    const done = await ended(t.api.ns("alice"), (await startRun(t.api.ns("alice"), { actionSet: actionSet.json.id, code: script, input: { urls } })).id);
+    const done = await ended(t.api.ns("alice"), (await startRun(t.api.ns("alice"), { actionSet: actionSet.json.id, code, input: { urls } })).id);
     expect(done.status, JSON.stringify(done)).toBe("completed");
     const messages: string[] = done.output.value;
     expect(messages).toHaveLength(urls.length);
@@ -730,7 +730,7 @@ export default async function main(input: { urls: string[] }) {
 test("fetch outside the allow-list, or with another scheme, is refused", { tag: "@attack" }, async () => {
   const actionSet = await a.api.post("/v1/action-sets", { http: { allow: ["rewind.codes"] } });
   expectOk(actionSet);
-  const script = `import { ActionError } from "rewind";
+  const code = `import { ActionError } from "rewind";
 
 export default async function main(input: { urls: string[] }) {
   const out: string[] = [];
@@ -739,7 +739,7 @@ export default async function main(input: { urls: string[] }) {
       await fetch(url);
       out.push("SENT " + url);
     } catch (error) {
-      // A refused host is a ActionError; a scheme fetch does not speak is refused before any call.
+      // A refused host is an ActionError; a scheme fetch does not speak is refused before any call.
       out.push(\`\${error instanceof ActionError ? "ActionError" : (error as Error).name}: \${(error as Error).message}\`);
     }
   }
@@ -747,10 +747,10 @@ export default async function main(input: { urls: string[] }) {
 }
 `;
   const urls = ["https://example.org/", "https://rewind.codes.evil.example/", "https://evil.example/?x=rewind.codes", "file:///etc/passwd", "ftp://rewind.codes/"];
-  const done = await ended(a.api.ns("alice"), (await startRun(a.api.ns("alice"), { actionSet: actionSet.json.id, code: script, input: { urls } })).id);
+  const done = await ended(a.api.ns("alice"), (await startRun(a.api.ns("alice"), { actionSet: actionSet.json.id, code, input: { urls } })).id);
   expect(done.status, JSON.stringify(done)).toBe("completed");
-  const [org, suffix, query, file, ftp] = done.output.value as string[];
-  for (const refused of [org, suffix, query]) expect(refused).toMatch(/^ActionError: .*not in the actionSet's allow-list/);
+  const [example, suffix, query, file, ftp] = done.output.value as string[];
+  for (const refused of [example, suffix, query]) expect(refused).toMatch(/^ActionError: .*not in the action set's allow-list/);
   for (const refused of [file, ftp]) expect(refused).toMatch(/^(ActionError|TypeError): .*only sends http and https/);
   // Nothing reached the network: the history holds no completed http call.
   const exported = await a.api.ns("alice").get(`/v1/runs/${done.id}/export`);
@@ -759,7 +759,7 @@ export default async function main(input: { urls: string[] }) {
 });
 
 // ---------------------------------------------------------------------------------------------
-// Attack: lifecycle webhooks to internal addresses
+// Attack: webhooks to internal addresses
 
 test("a webhook subscription to an internal or plain-HTTP address is refused on a deployed server", { tag: "@attack" }, async () => {
   const list = async () => (await b.api.get("/v1/subscriptions")).json;

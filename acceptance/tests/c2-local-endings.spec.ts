@@ -1,14 +1,14 @@
 /**
  * Criterion 2 (`archi/09-roadmap.md`, "0.1 is done when"), the part `crates/rewind/tests/cli.rs`
  * does not prove on its own: a forgotten `await`, an unhandled rejection and a deadlock each end
- * as `archi/03-execution.md` ("How a script ends") specifies, through `rewind` and the embedded
+ * as `archi/03-execution.md` ("How a run ends") specifies, through `rewind` and the embedded
  * server it starts. The harness actions are served by the SDK's worker over the server's socket.
  *
  * `cli.rs` proves the rest, through the same binary: a run that sleeps, whose server is killed,
  * resumes in another process (`rewind run`, `rewind signal`, `rewind status`, `rewind transcript`, `rewind replay`);
  * `run.sh` runs it as part of this criterion.
  */
-import { HostToolError, type HostToolWorker } from "@rewind.codes/sdk";
+import { HarnessActionError, type Worker } from "@rewind.codes/sdk";
 import { expect, test } from "@playwright/test";
 import { Project } from "../support/project.js";
 
@@ -27,15 +27,15 @@ const ACTION_SET = {
   ],
 };
 
-/** Calls of the harness's tools, in the order they were answered. */
-const answered: { tool: string; at: number; ok: boolean }[] = [];
-/** The runs by script. */
+/** Calls of the harness actions, in the order they were answered. */
+const answered: { action: string; at: number; ok: boolean }[] = [];
+/** The runs by file. */
 const runs = new Map<string, string>();
 
-test.describe.serial("criterion 2: how a script ends, through the CLI", () => {
+test.describe.serial("criterion 2: how a run ends, through the CLI", () => {
   let project: Project;
   let actionSet: string;
-  let worker: HostToolWorker;
+  let worker: Worker;
 
   test.beforeAll(async () => {
     project = new Project("rewind-c2");
@@ -46,16 +46,16 @@ test.describe.serial("criterion 2: how a script ends, through the CLI", () => {
     actionSet = added.value.id;
     worker = project.client().worker({
       actionSet,
-      tools: {
+      actions: {
         // A card is always declined.
         "payments.charge": async () => {
-          answered.push({ tool: "payments.charge", at: Date.now(), ok: false });
-          throw new HostToolError("card declined");
+          answered.push({ action: "payments.charge", at: Date.now(), ok: false });
+          throw new HarnessActionError("card declined");
         },
         // An audit record takes a second.
         "audit.record": async () => {
           await new Promise((resolve) => setTimeout(resolve, 1000));
-          answered.push({ tool: "audit.record", at: Date.now(), ok: true });
+          answered.push({ action: "audit.record", at: Date.now(), ok: true });
           return { ok: true };
         },
       },
@@ -69,9 +69,9 @@ test.describe.serial("criterion 2: how a script ends, through the CLI", () => {
   });
 
   /** `rewind run` with the action set, to its end; the run and the events of its history. */
-  async function run(name: string, script: string) {
-    project.write(name, script);
-    // `rewind check` would refuse a forgotten await: these scripts run anyway.
+  async function run(name: string, code: string) {
+    project.write(name, code);
+    // `rewind check` would refuse a forgotten await: this code runs anyway.
     const started = await project.json(["run", name, "--action-set", actionSet, "--no-check", "--wait", "60s"]);
     const id: string = started.value.id;
     runs.set(name, id);
@@ -81,26 +81,26 @@ test.describe.serial("criterion 2: how a script ends, through the CLI", () => {
   }
 
   test("a forgotten await is caught by rewind check, and its call still happens before the run ends", async () => {
-    const script = `import { audit } from "rewind:actions";
+    const code = `import { audit } from "rewind:actions";
 
 export default async function main() {
   audit.record({ event: "triaged" }); // no await
   return "done";
 }
 `;
-    project.write("forgotten.ts", script);
+    project.write("forgotten.ts", code);
     const checked = await project.rewind(["check", "forgotten.ts", "--action-set", "actionSet.json"]);
     expect(checked.code).toBe(65);
     expect(checked.stdout + checked.stderr).toContain("rewind/floating-promise");
 
     const before = answered.length;
-    const ended = await run("forgotten.ts", script);
+    const ended = await run("forgotten.ts", code);
     expect(ended.code, JSON.stringify(ended.run)).toBe(0);
     expect(ended.run.status).toBe("completed");
     expect(ended.run.output.value).toBe("done");
     // main returned first; complete_run waited for the call's outcome.
     expect(ended.events).toEqual(["run_started", "schedule_call", "call_completed", "complete_run"]);
-    expect(answered.slice(before).map((a) => a.tool)).toEqual(["audit.record"]);
+    expect(answered.slice(before).map((a) => a.action)).toEqual(["audit.record"]);
     expect(Date.parse(ended.run.endedAt)).toBeGreaterThanOrEqual(answered.at(-1)!.at - 50);
   });
 
@@ -160,7 +160,7 @@ export default async function main() {
     expect(ended.events.at(-1)).toBe("fail_run");
   });
 
-  test("a script nothing can wake fails with DeadlockError", async () => {
+  test("a run nothing can wake fails with DeadlockError", async () => {
     const ended = await run(
       "deadlock.ts",
       `export default async function main() {

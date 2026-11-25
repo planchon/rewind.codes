@@ -22,7 +22,7 @@ import {
   waitingRun,
 } from "../support/access-helpers.js";
 import { startWebhookReceiver } from "../support/fixtures.js";
-import { TaskStream } from "../support/actions-helpers.js";
+import { CallStream } from "../support/actions-helpers.js";
 import {
   Api,
   evidence,
@@ -30,11 +30,11 @@ import {
   expectOk,
   expectProblem,
   expectRefused,
-  newTenant,
+  newOrg,
   operator,
   type Reply,
   stacks,
-  type Tenant,
+  type Org,
   test,
   unique,
 } from "../support/gate.js";
@@ -42,17 +42,17 @@ import {
 // ---------------------------------------------------------------------------------------------
 // The matrix
 
-/** A run id, a digest, a task token and ids no one was given. */
+/** A run id, a digest, a call token and ids no one was given. */
 const NO_RUN = "01930000-0000-7000-8000-00000000abcd";
 const NO_DIGEST = "ab".repeat(32);
-const NO_TASK = "01930000-0000-7000-8000-00000000dcba";
+const NO_CALL = "01930000-0000-7000-8000-00000000dcba";
 const NO_TOKEN = "rewind_tt_unknown";
 
 /**
  * Who may call an operation: a permission of the catalog, any caller, the operator only, a member
  * signed in on the dashboard only, no one (WorkOS's sign-in and the OAuth of MCP clients, absent
  * from a server without it),
- * nobody needs to (an inbound webhook, whose unknown token is not found), or anyone, answered
+ * nobody needs to (a signal URL, whose unknown token is not found), or anyone, answered
  * without credentials (the public keys of signed calls).
  */
 type Need = { permission: string } | "any" | "operator" | "member" | "auth" | "public" | "open";
@@ -64,7 +64,7 @@ interface Probe {
   /** `METHOD /path` as `api/openapi.json` writes it. */
   op: string;
   need: Need;
-  /** A second permission the request needs, checked after `need`'s (attaching a secret). */
+  /** A second permission the request needs, checked after `need`'s (using a secret). */
   also?: string;
   /** The request sent: a path with ids filled in, and a body valid for the operation. */
   path: string;
@@ -72,7 +72,7 @@ interface Probe {
   query?: Record<string, string>;
   /** Names the namespace with a key (`Rewind-Namespace`), required to create in one. */
   namespaced?: boolean;
-  /** Answers an event stream that never ends when allowed: its head is read, its body closed. */
+  /** Answers a stream that never ends when allowed: its head is read, its body closed. */
   stream?: true;
   /** Refused (403) to these principals even when they hold the permission, by a rule of 06. */
   refusedTo?: Scope[];
@@ -83,7 +83,7 @@ const p = (permission: string): Need => ({ permission });
 /**
  * One minimal request per operation. Allowed, each answers without changing anything another
  * check relies on: ids no one has are not found, bodies are refused after the permission check
- * (an unknown role, a script that does not parse, a URL that is not one), and what is created is
+ * (an unknown role, code that does not parse, a URL that is not one), and what is created is
  * named for the matrix alone.
  */
 const PROBES: Probe[] = [
@@ -112,7 +112,7 @@ const PROBES: Probe[] = [
   { op: "DELETE /v1/connections/{id}", need: "member", path: "/v1/connections/cn_unknown" },
   { op: "GET /v1/oauth/consent", need: "member", path: "/v1/oauth/consent", query: { request: "unknown" } },
   { op: "POST /v1/oauth/consent", need: "member", path: "/v1/oauth/consent", body: { request: "unknown", decision: "deny" } },
-  // Inbound webhooks: no token, an unguessable URL.
+  // Signal URLs: no token, an unguessable URL.
   { op: "POST /hooks/{token}", need: "public", path: `/hooks/whk_${"0".repeat(40)}`, body: { hello: "world" } },
   // Keys.
   { op: "GET /v1/api-keys", need: p("api_keys:read"), path: "/v1/api-keys" },
@@ -169,7 +169,7 @@ const PROBES: Probe[] = [
   { op: "GET /v1/organization/namespace-names", need: p("namespaces:read"), path: "/v1/organization/namespace-names" },
   { op: "PUT /v1/organization/namespace-defaults", need: p("namespaces:write"), path: "/v1/organization/namespace-defaults", body: { defaults: {} } },
   { op: "GET /v1/organization/quota-alerts", need: p("namespaces:read"), path: "/v1/organization/quota-alerts" },
-  // The signing keys: read with secrets:read, replaced by organization:write (the matrix's tenant's own key).
+  // The signing keys: read with secrets:read, replaced by organization:write (the matrix's organization's own key).
   { op: "GET /v1/organization/signing-keys", need: p("secrets:read"), path: "/v1/organization/signing-keys", refusedTo: ["token"] },
   { op: "POST /v1/organization/signing-keys", need: p("organization:write"), path: "/v1/organization/signing-keys" },
   { op: "GET /v1/organization/token-keys", need: p("tokens:write"), path: "/v1/organization/token-keys" },
@@ -218,24 +218,24 @@ const PROBES: Probe[] = [
   { op: "GET /v1/secrets/{name}/usage", need: p("secrets:read"), path: "/v1/secrets/matrix-never-put/usage", refusedTo: ["token"] },
   // The public keys of signed calls: no credentials, whoever asks.
   { op: "GET /organizations/{organization}/jwks.json", need: "open", path: "/organizations/{organization}/jwks.json" },
-  // Lifecycle webhooks.
+  // Webhooks.
   { op: "GET /v1/subscriptions", need: p("subscriptions:read"), path: "/v1/subscriptions" },
   { op: "POST /v1/subscriptions", need: p("subscriptions:write"), path: "/v1/subscriptions", body: { url: "not a url" } },
   { op: "DELETE /v1/subscriptions/{id}", need: p("subscriptions:write"), path: "/v1/subscriptions/sub_unknown" },
   // Harness calls.
   { op: "GET /v1/calls/stream", need: p("calls:work"), path: "/v1/calls/stream", stream: true },
-  { op: "POST /v1/calls/{id}/approve", need: p("calls:approve"), path: `/v1/calls/${NO_TASK}/approve` },
-  { op: "POST /v1/calls/{id}/reject", need: p("calls:approve"), path: `/v1/calls/${NO_TASK}/reject`, body: {} },
+  { op: "POST /v1/calls/{id}/approve", need: p("calls:approve"), path: `/v1/calls/${NO_CALL}/approve` },
+  { op: "POST /v1/calls/{id}/reject", need: p("calls:approve"), path: `/v1/calls/${NO_CALL}/reject`, body: {} },
   { op: "POST /v1/calls/{token}/complete", need: p("calls:work"), path: `/v1/calls/${NO_TOKEN}/complete`, body: { result: null } },
   { op: "POST /v1/calls/{token}/defer", need: p("calls:work"), path: `/v1/calls/${NO_TOKEN}/defer`, body: {} },
   { op: "POST /v1/calls/{token}/fail", need: p("calls:work"), path: `/v1/calls/${NO_TOKEN}/fail`, body: { message: "matrix" } },
   // Tokens.
   { op: "DELETE /v1/tokens/{id}", need: p("tokens:write"), path: `/v1/tokens/${NO_DIGEST}` },
-  // Tool statistics span the tenant: not for a grant limited to labels.
+  // Action statistics span the organization: not for a grant limited to labels.
   { op: "GET /v1/actions/stats", need: p("runs:read"), path: "/v1/actions/stats", refusedTo: ["labels"] },
   // Action sets.
   { op: "GET /v1/action-sets", need: p("actions:read"), path: "/v1/action-sets" },
-  // Attaching an organization's secret to list a server needs secrets:use as well; no server of
+  // Naming an organization's secret for a listed server needs secrets:use as well; no server of
   // the request takes it, so a holder is answered 422 secret-required and nothing is registered.
   {
     op: "POST /v1/action-sets",
@@ -297,11 +297,11 @@ interface Cell {
   why?: string;
 }
 
-async function send(api: Api, probe: Probe, principal: Principal, tenant: string): Promise<Reply> {
+async function send(api: Api, probe: Probe, principal: Principal, org: string): Promise<Reply> {
   const method = probe.op.split(" ")[0]!;
   let target = api;
   if (probe.namespaced && principal.scope !== "token") target = target.ns("matrix-ns");
-  return target.request(method, probe.path.replace("{organization}", tenant), {
+  return target.request(method, probe.path.replace("{organization}", org), {
     json: probe.body,
     query: probe.query,
     stream: probe.stream,
@@ -313,11 +313,11 @@ async function send(api: Api, probe: Probe, principal: Principal, tenant: string
  * (neither 401 nor 403) what it holds, refused the operator's and members' endpoints, 404 for
  * `/auth` without WorkOS.
  */
-async function matrix(tenant: Tenant, principal: Principal): Promise<Cell[]> {
+async function matrix(org: Org, principal: Principal): Promise<Cell[]> {
   const api = new Api(stacks().a.url, principal.bearer);
   const cells: Cell[] = [];
   for (const probe of PROBES) {
-    const reply = await send(api, probe, principal, tenant.id);
+    const reply = await send(api, probe, principal, org.id);
     const detail = String(reply.json?.detail ?? "");
     let expected: Cell["expected"];
     let ok: boolean;
@@ -329,7 +329,7 @@ async function matrix(tenant: Tenant, principal: Principal): Promise<Cell[]> {
     } else if (probe.need === "public") {
       expected = "not found";
       ok = reply.status === 404 && reply.slug === "not-found";
-      why = "no inbound webhook has this token";
+      why = "no signal URL has this token";
     } else if (probe.need === "any") {
       expected = "answered";
       ok = reply.status === 200;
@@ -381,17 +381,17 @@ function expectMatrix(principal: string, cells: Cell[]): void {
 }
 
 test.describe("the permission matrix", () => {
-  let tenant: Tenant;
+  let org: Org;
 
   test.beforeAll(async () => {
-    tenant = await newTenant("access-matrix");
+    org = await newOrg("access-matrix");
   });
 
   test("the catalog and the built-in roles are 06's", { tag: "@success" }, async () => {
-    const catalog = await tenant.api.get("/v1/permissions");
+    const catalog = await org.api.get("/v1/permissions");
     expectOk(catalog, 200);
     expect((catalog.json.permissions as { permission: string }[]).map((p) => p.permission)).toEqual([...PERMISSIONS]);
-    const roles = await tenant.api.get("/v1/roles");
+    const roles = await org.api.get("/v1/roles");
     expectOk(roles, 200);
     const builtIn = Object.fromEntries(
       (roles.json.roles as { name: string; permissions: string[]; builtIn: boolean }[]).filter((r) => r.builtIn).map((r) => [r.name, r.permissions]),
@@ -431,45 +431,45 @@ test.describe("the permission matrix", () => {
     evidence("each of the 25 permissions is held by at least one principal of the matrix and lacked by another");
   });
 
-  test("an owner key reaches every operation of its tenant but the operator's and the members'", { tag: "@success" }, async () => {
-    const whoami = await tenant.api.get("/v1/whoami");
+  test("an owner key reaches every operation of its organization but the operator's and the members'", { tag: "@success" }, async () => {
+    const whoami = await org.api.get("/v1/whoami");
     expect([...whoami.json.permissions].sort()).toEqual([...PERMISSIONS].sort());
-    expectMatrix("owner", await matrix(tenant, { name: "owner", bearer: tenant.ownerKey, holds: PERMISSIONS }));
+    expectMatrix("owner", await matrix(org, { name: "owner", bearer: org.ownerKey, holds: PERMISSIONS }));
   });
 
   for (const role of ["harness", "worker", "reader"] as const) {
     test(`a ${role} key is refused, naming the permission, everything its role does not give`, { tag: "@attack" }, async () => {
-      const { key } = await createKey(tenant.api, role, { name: `matrix ${role}` });
+      const { key } = await createKey(org.api, role, { name: `matrix ${role}` });
       const whoami = await new Api(stacks().a.url, key).get("/v1/whoami");
       expectOk(whoami, 200);
       expect([...whoami.json.permissions].sort()).toEqual([...BUILT_IN[role]!].sort());
       expect(whoami.json.grant?.role).toBe(role);
-      expectMatrix(role, await matrix(tenant, { name: role, bearer: key, holds: BUILT_IN[role]! }));
+      expectMatrix(role, await matrix(org, { name: role, bearer: key, holds: BUILT_IN[role]! }));
     });
   }
 
   test("a key of a role of the organization holding one permission reaches that permission only", { tag: "@attack" }, async () => {
     const role = `approver-${unique()}`;
-    expectOk(await tenant.api.put(`/v1/roles/${role}`, { description: "approves calls", permissions: ["calls:approve"] }));
-    const { key } = await createKey(tenant.api, role);
-    expectMatrix(role, await matrix(tenant, { name: role, bearer: key, holds: ["calls:approve"] }));
+    expectOk(await org.api.put(`/v1/roles/${role}`, { description: "approves calls", permissions: ["calls:approve"] }));
+    const { key } = await createKey(org.api, role);
+    expectMatrix(role, await matrix(org, { name: role, bearer: key, holds: ["calls:approve"] }));
   });
 
   test("an owner key limited to labels cannot administer or read statistics", { tag: "@attack" }, async () => {
-    const { key } = await createKey(tenant.api, "owner", { name: "matrix owner red", allowedLabels: { team: "red" } });
+    const { key } = await createKey(org.api, "owner", { name: "matrix owner red", allowedLabels: { team: "red" } });
     const whoami = await new Api(stacks().a.url, key).get("/v1/whoami");
     const holds = PERMISSIONS.filter((p) => !ADMINISTRATION.includes(p));
     expect([...whoami.json.permissions].sort()).toEqual([...holds].sort());
     expect(whoami.json.grant?.allowedLabels).toEqual({ team: "red" });
-    expectMatrix("owner limited to labels", await matrix(tenant, { name: "owner limited to labels", bearer: key, holds, scope: "labels" }));
+    expectMatrix("owner limited to labels", await matrix(org, { name: "owner limited to labels", bearer: key, holds, scope: "labels" }));
   });
 
   test("an end user's token holds its default permissions, in its namespace, and nothing else", { tag: "@attack" }, async () => {
-    const { token } = await mintToken(tenant.api, "matrix-alice");
+    const { token } = await mintToken(org.api, "matrix-alice");
     const whoami = await new Api(stacks().a.url, token).get("/v1/whoami");
     expectOk(whoami, 200);
     expect([...whoami.json.permissions].sort()).toEqual([...TOKEN_DEFAULT].sort());
-    expectMatrix("end user's token", await matrix(tenant, { name: "token", bearer: token, holds: TOKEN_DEFAULT, scope: "token" }));
+    expectMatrix("end user's token", await matrix(org, { name: "token", bearer: token, holds: TOKEN_DEFAULT, scope: "token" }));
   });
 });
 
@@ -477,49 +477,49 @@ test.describe("the permission matrix", () => {
 // Roles and grants
 
 test.describe("roles and grants", () => {
-  let tenant: Tenant;
+  let org: Org;
 
   test.beforeAll(async () => {
-    tenant = await newTenant("access-roles");
+    org = await newOrg("access-roles");
   });
 
   test("a role of the organization is created, listed, changed for its holders at once, and deleted", { tag: "@success" }, async () => {
     const role = `auditor-${unique()}`;
-    const created = await tenant.api.put(`/v1/roles/${role}`, { description: "reads runs", permissions: ["runs:read"] });
+    const created = await org.api.put(`/v1/roles/${role}`, { description: "reads runs", permissions: ["runs:read"] });
     expectOk(created, 201);
     expect(created.json).toMatchObject({ name: role, permissions: ["runs:read"], builtIn: false });
-    const listed = await tenant.api.get("/v1/roles");
+    const listed = await org.api.get("/v1/roles");
     expect((listed.json.roles as { name: string }[]).map((r) => r.name)).toContain(role);
 
-    const { key, id } = await createKey(tenant.api, role);
+    const { key, id } = await createKey(org.api, role);
     const holder = new Api(stacks().a.url, key);
     expectOk(await holder.get("/v1/runs"), 200);
     expectProblem(await holder.get("/v1/action-sets"), 403, "forbidden");
 
     // Changed: the next request of its holder follows the role.
-    expectOk(await tenant.api.put(`/v1/roles/${role}`, { description: "reads actionSets", permissions: ["actions:read"] }));
+    expectOk(await org.api.put(`/v1/roles/${role}`, { description: "reads action sets", permissions: ["actions:read"] }));
     expectOk(await holder.get("/v1/action-sets"), 200);
     const refused = await holder.get("/v1/runs");
     expectProblem(refused, 403, "forbidden");
     expect(refused.json.detail).toContain("`runs:read`");
 
     // Deleted once no grant points to it.
-    expectOk(await tenant.api.delete(`/v1/api-keys/${id}`), 204);
-    expectOk(await tenant.api.delete(`/v1/roles/${role}`), 204);
-    const after = await tenant.api.get("/v1/roles");
+    expectOk(await org.api.delete(`/v1/api-keys/${id}`), 204);
+    expectOk(await org.api.delete(`/v1/roles/${role}`), 204);
+    const after = await org.api.get("/v1/roles");
     expect((after.json.roles as { name: string }[]).map((r) => r.name)).not.toContain(role);
     evidence("PUT /v1/roles/{name} creates and changes; a holder's next request follows the change; DELETE once unused → 204");
   });
 
   test("a role a grant points to cannot be deleted", { tag: "@failure" }, async () => {
     const role = `held-${unique()}`;
-    expectOk(await tenant.api.put(`/v1/roles/${role}`, { permissions: ["runs:read"] }));
-    const { key } = await createKey(tenant.api, role);
+    expectOk(await org.api.put(`/v1/roles/${role}`, { permissions: ["runs:read"] }));
+    const { key } = await createKey(org.api, role);
     await expectRefused({
-      attempt: () => tenant.api.delete(`/v1/roles/${role}`),
+      attempt: () => org.api.delete(`/v1/roles/${role}`),
       status: 409,
       slug: "role-in-use",
-      probe: async () => (await tenant.api.get("/v1/roles")).json.roles.find((r: { name: string }) => r.name === role)?.permissions,
+      probe: async () => (await org.api.get("/v1/roles")).json.roles.find((r: { name: string }) => r.name === role)?.permissions,
     });
     expectOk(await new Api(stacks().a.url, key).get("/v1/runs"), 200);
     evidence("DELETE /v1/roles/{name} of a role a key holds → 409 role-in-use; the key keeps its rights");
@@ -527,27 +527,27 @@ test.describe("roles and grants", () => {
 
   test("a role's name and permissions are checked", { tag: "@failure" }, async () => {
     for (const name of ["owner", "harness", "worker", "reader", "operator", "Upper", "a".repeat(65), "spa%20ce"]) {
-      const reply = await tenant.api.put(`/v1/roles/${name}`, { permissions: ["runs:read"] });
+      const reply = await org.api.put(`/v1/roles/${name}`, { permissions: ["runs:read"] });
       expect(reply.status, `PUT /v1/roles/${name}: ${reply.text}`).toBe(400);
       expect(reply.slug).toBe("invalid-request");
     }
-    const unknown = await tenant.api.put(`/v1/roles/fine-${unique()}`, { permissions: ["runs:read", "runs:everything"] });
+    const unknown = await org.api.put(`/v1/roles/fine-${unique()}`, { permissions: ["runs:read", "runs:everything"] });
     expect(unknown.status, unknown.text).toBe(400);
     evidence("built-in names, operator, uppercase, 65 characters and an unknown permission → 400 invalid-request");
   });
 
   test("no one gives a key more than they hold", { tag: "@attack" }, async () => {
-    const keys = async () => (await tenant.api.get("/v1/api-keys")).json.keys.map((k: { id: string }) => k.id).sort();
-    const { key: harness } = await createKey(tenant.api, "harness");
-    const asHarness = tenant.api.as(harness);
+    const keys = async () => (await org.api.get("/v1/api-keys")).json.keys.map((k: { id: string }) => k.id).sort();
+    const { key: harness } = await createKey(org.api, "harness");
+    const asHarness = org.api.as(harness);
     // The harness role has no api_keys:write: refused by permission.
     await expectRefused({ attempt: () => asHarness.post("/v1/api-keys", { name: "escalate", role: "owner" }), status: 403, slug: "forbidden", probe: keys });
 
     // A role that writes keys but holds little: it may give only what it holds.
     const role = `keymaker-${unique()}`;
-    expectOk(await tenant.api.put(`/v1/roles/${role}`, { permissions: ["api_keys:write", "api_keys:read", "runs:read"] }));
-    const { key: keymaker } = await createKey(tenant.api, role);
-    const asKeymaker = tenant.api.as(keymaker);
+    expectOk(await org.api.put(`/v1/roles/${role}`, { permissions: ["api_keys:write", "api_keys:read", "runs:read"] }));
+    const { key: keymaker } = await createKey(org.api, role);
+    const asKeymaker = org.api.as(keymaker);
     for (const target of ["owner", "harness", "reader"]) {
       const reply = await expectRefused({ attempt: () => asKeymaker.post("/v1/api-keys", { name: "escalate", role: target }), status: 403, slug: "forbidden", probe: keys });
       expect(reply.json.detail).toContain("no one gives more than they hold");
@@ -555,20 +555,20 @@ test.describe("roles and grants", () => {
     // Its own role, which it holds entirely, it may give.
     expectOk(await asKeymaker.post("/v1/api-keys", { name: "same", role }), 201);
     // Only the operator gives `operator`, even to an owner.
-    await expectRefused({ attempt: () => tenant.api.post("/v1/api-keys", { name: "op", role: "operator" }), status: 403, slug: "forbidden", probe: keys });
+    await expectRefused({ attempt: () => org.api.post("/v1/api-keys", { name: "op", role: "operator" }), status: 403, slug: "forbidden", probe: keys });
     // Taking a grant away needs its role's permissions too: the keymaker cannot revoke the owner's key.
-    const ownerId = (await tenant.api.get("/v1/whoami")).json.principal.id as string;
+    const ownerId = (await org.api.get("/v1/whoami")).json.principal.id as string;
     await expectRefused({ attempt: () => asKeymaker.delete(`/v1/api-keys/${ownerId}`), status: 403, slug: "forbidden", probe: keys });
-    expectOk(await tenant.api.get("/v1/runs"), 200);
+    expectOk(await org.api.get("/v1/runs"), 200);
     evidence("harness → owner key: 403; a role with api_keys:write → owner, harness, reader keys: 403 \"no one gives more than they hold\"; owner → operator key: 403; revoking the owner key without its permissions: 403");
   });
 
   test("no one writes a role giving more than they hold", { tag: "@attack" }, async () => {
-    const roles = async () => (await tenant.api.get("/v1/roles")).json.roles.map((r: { name: string; permissions: string[] }) => `${r.name}:${r.permissions.join(",")}`).sort();
+    const roles = async () => (await org.api.get("/v1/roles")).json.roles.map((r: { name: string; permissions: string[] }) => `${r.name}:${r.permissions.join(",")}`).sort();
     const writer = `role-writer-${unique()}`;
-    expectOk(await tenant.api.put(`/v1/roles/${writer}`, { permissions: ["roles:write", "roles:read", "runs:read"] }));
-    const { key } = await createKey(tenant.api, writer);
-    const asWriter = tenant.api.as(key);
+    expectOk(await org.api.put(`/v1/roles/${writer}`, { permissions: ["roles:write", "roles:read", "runs:read"] }));
+    const { key } = await createKey(org.api, writer);
+    const asWriter = org.api.as(key);
     // A new role with a permission it lacks.
     await expectRefused({ attempt: () => asWriter.put(`/v1/roles/escalated-${unique()}`, { permissions: ["runs:delete"] }), status: 403, slug: "forbidden", probe: roles });
     // Its own role, widened.
@@ -583,17 +583,17 @@ test.describe("roles and grants", () => {
     // A role someone else wrote that gives more than it holds cannot be changed by it: the
     // change would take away what its holders have.
     const wide = `wide-${unique()}`;
-    expectOk(await tenant.api.put(`/v1/roles/${wide}`, { permissions: ["runs:delete", "runs:read"] }));
+    expectOk(await org.api.put(`/v1/roles/${wide}`, { permissions: ["runs:delete", "runs:read"] }));
     await expectRefused({ attempt: () => asWriter.put(`/v1/roles/${wide}`, { permissions: ["runs:read"] }), status: 403, slug: "forbidden", probe: roles });
     evidence("a key with roles:write is refused (403) a role with a permission it lacks, widening its own role, and narrowing a role that gives more than it holds");
   });
 
   test("keys never count as the organization's owner: its only owner key can be revoked", { tag: "@failure" }, async () => {
     // archi/08 (accounts): `keep` refuses only a write that takes `owner` from the last member
-    // (`member:`) holding it; keys and pending invitations never count as holders. A tenant the
+    // (`member:`) holding it; keys and pending invitations never count as holders. An organization the
     // operator made has no owner member, so its owner keys can all go; `last-owner` protects
     // members, which only WorkOS brings (criterion 8).
-    const lone = await newTenant("access-last-owner");
+    const lone = await newOrg("access-last-owner");
     const ownerId = (await lone.api.get("/v1/whoami")).json.principal.id as string;
     const second = await createKey(lone.api, "owner", { name: "second owner" });
     expectOk(await lone.api.as(second.key).delete(`/v1/api-keys/${ownerId}`), 204);
@@ -601,7 +601,7 @@ test.describe("roles and grants", () => {
     const last = await lone.api.as(second.key).delete(`/v1/api-keys/${second.id}`);
     expectOk(last, 204);
     expectProblem(await lone.api.as(second.key).get("/v1/whoami"), 401, "unauthorized");
-    // The operator still reaches the tenant: it makes a new owner key.
+    // The operator still reaches the organization: it makes a new owner key.
     const again = await operator().post("/v1/api-keys", { organizationId: lone.id, role: "owner", name: "new owner" });
     expectOk(again, 201);
     expectOk(await lone.api.as(again.json.key).get("/v1/whoami"), 200);
@@ -609,27 +609,27 @@ test.describe("roles and grants", () => {
   });
 
   test("a revoked key is refused from its next request", { tag: "@attack" }, async () => {
-    const { key, id } = await createKey(tenant.api, "harness");
-    const asKey = tenant.api.as(key);
+    const { key, id } = await createKey(org.api, "harness");
+    const asKey = org.api.as(key);
     expectOk(await asKey.get("/v1/runs"), 200);
-    expectOk(await tenant.api.delete(`/v1/api-keys/${id}`), 204);
+    expectOk(await org.api.delete(`/v1/api-keys/${id}`), 204);
     expectProblem(await asKey.get("/v1/runs"), 401, "unauthorized");
     expectProblem(await asKey.get("/v1/whoami"), 401, "unauthorized");
-    const actionSets = async () => (await tenant.api.get("/v1/action-sets")).json;
+    const actionSets = async () => (await org.api.get("/v1/action-sets")).json;
     await expectRefused({ attempt: () => asKey.post("/v1/action-sets", {}), status: 401, slug: "unauthorized", probe: actionSets });
     // Revoked twice: not found.
-    expectProblem(await tenant.api.delete(`/v1/api-keys/${id}`), 404, "not-found");
+    expectProblem(await org.api.delete(`/v1/api-keys/${id}`), 404, "not-found");
     evidence("after DELETE /v1/api-keys/{id}, the key's next request → 401 unauthorized");
   });
 
   test("a role narrowed takes the permission away from the next request", { tag: "@attack" }, async () => {
     const role = `shrinking-${unique()}`;
-    expectOk(await tenant.api.put(`/v1/roles/${role}`, { permissions: ["runs:read", "runs:start"] }));
-    const { key } = await createKey(tenant.api, role);
-    const asKey = tenant.api.as(key);
+    expectOk(await org.api.put(`/v1/roles/${role}`, { permissions: ["runs:read", "runs:start"] }));
+    const { key } = await createKey(org.api, role);
+    const asKey = org.api.as(key);
     expectOk(await startRun(asKey, "shrinking", { wait: "30s" }));
-    expectOk(await tenant.api.put(`/v1/roles/${role}`, { permissions: ["runs:read"] }));
-    const runs = async () => (await tenant.api.ns("shrinking").get("/v1/runs")).json.runs.length;
+    expectOk(await org.api.put(`/v1/roles/${role}`, { permissions: ["runs:read"] }));
+    const runs = async () => (await org.api.ns("shrinking").get("/v1/runs")).json.runs.length;
     const refused = await expectRefused({ attempt: () => startRun(asKey, "shrinking", { wait: "30s" }), status: 403, slug: "forbidden", probe: runs });
     expect(refused.json.detail).toContain("`runs:start`");
     evidence("a role changed from [runs:read, runs:start] to [runs:read]: its key's next start → 403 naming runs:start, no run created");
@@ -640,7 +640,7 @@ test.describe("roles and grants", () => {
 // Keys limited to labels
 
 /**
- * An API whose key is a secret the run attaches: its document inline, its base URL public and
+ * An API whose key is a secret the run uses: its document inline, its base URL public and
  * never called (a start refused for its secrets sends nothing).
  */
 const CRM_API = {
@@ -665,22 +665,22 @@ const CRM_API = {
     },
   ],
 };
-const CRM_SCRIPT = `import { crm } from "rewind:actions";\nexport default async function main() { return await crm.find({ id: "1" }); }\n`;
+const CRM_CODE = `import { crm } from "rewind:actions";\nexport default async function main() { return await crm.find({ id: "1" }); }\n`;
 
 test.describe("keys limited to labels", () => {
-  let tenant: Tenant;
+  let org: Org;
   let red: Api;
   let redRun: string;
   let blueRun: string;
   let blueWaiting: string;
 
   test.beforeAll(async () => {
-    tenant = await newTenant("access-labels");
-    const created = await createKey(tenant.api, "harness", { name: "red agent", allowedLabels: { team: "red" } });
+    org = await newOrg("access-labels");
+    const created = await createKey(org.api, "harness", { name: "red agent", allowedLabels: { team: "red" } });
     red = new Api(stacks().a.url, created.key);
-    redRun = (await startRun(tenant.api, "labels", { labels: { team: "red" }, wait: "30s" })).json.id;
-    blueRun = (await startRun(tenant.api, "labels", { labels: { team: "blue" }, wait: "30s" })).json.id;
-    blueWaiting = (await waitingRun(tenant, "labels", "blue waits", { team: "blue" })).id;
+    redRun = (await startRun(org.api, "labels", { labels: { team: "red" }, wait: "30s" })).json.id;
+    blueRun = (await startRun(org.api, "labels", { labels: { team: "blue" }, wait: "30s" })).json.id;
+    blueWaiting = (await waitingRun(org, "labels", "blue waits", { team: "blue" })).id;
   });
 
   test("a key limited to labels reads only the runs carrying them", { tag: "@attack" }, async () => {
@@ -699,8 +699,8 @@ test.describe("keys limited to labels", () => {
 
   test("a key limited to labels cannot signal, cancel, fork or erase a run it does not see", { tag: "@attack" }, async () => {
     const probe = async () => {
-      const state = await tenant.api.get(`/v1/runs/${blueWaiting}`);
-      const exported = await tenant.api.get(`/v1/runs/${blueWaiting}/export`);
+      const state = await org.api.get(`/v1/runs/${blueWaiting}`);
+      const exported = await org.api.get(`/v1/runs/${blueWaiting}/export`);
       return { status: state.json.status, events: exported.json.events.length };
     };
     await expectRefused({ attempt: () => red.post(`/v1/runs/${blueWaiting}/signals/go`, { n: 1 }), status: 404, slug: "not-found", probe });
@@ -714,7 +714,7 @@ test.describe("keys limited to labels", () => {
     const started = await startRun(red, "labels", { wait: "30s" });
     expectOk(started);
     expect(started.json.labels).toMatchObject({ team: "red" });
-    const count = async () => (await tenant.api.ns("labels").get("/v1/runs", { query: { label: "team:blue" } })).json.runs.length;
+    const count = async () => (await org.api.ns("labels").get("/v1/runs", { query: { label: "team:blue" } })).json.runs.length;
     const refused = await expectRefused({ attempt: () => startRun(red, "labels", { labels: { team: "blue" }, wait: "30s" }), status: 403, slug: "forbidden", probe: count });
     expect(refused.json.detail).toContain("team:red");
     // Its forks too: a fork of its run cannot be relabelled away.
@@ -723,54 +723,54 @@ test.describe("keys limited to labels", () => {
     evidence("a run started by the red key gets team:red; asking team:blue for a run or a fork → 403 forbidden, no blue run created");
   });
 
-  test("a key limited to labels sees, lists for and attaches only the organization's secrets carrying them, and never writes a namespace's", { tag: "@attack" }, async () => {
-    expectOk(await tenant.api.put("/v1/secrets/blue-crm", { value: "blue's", labels: { team: "blue" } }), 201);
+  test("a key limited to labels sees, lists for and uses only the organization's secrets carrying them, and never writes a namespace's", { tag: "@attack" }, async () => {
+    expectOk(await org.api.put("/v1/secrets/blue-crm", { value: "blue's", labels: { team: "blue" } }), 201);
     const written = await red.put("/v1/secrets/red-crm", { value: "red's" });
     expectOk(written, 201);
     expect(written.json.labels, "the secrets it writes take its labels").toEqual({ team: "red" });
     const listed = await red.get("/v1/secrets");
     expect(listed.json.secrets.map((s: { reference: string }) => s.reference)).toEqual(["org/red-crm"]);
-    const secrets = async () => (await tenant.api.get("/v1/secrets")).json.secrets.map((s: { reference: string; labels?: object }) => [s.reference, s.labels]);
+    const secrets = async () => (await org.api.get("/v1/secrets")).json.secrets.map((s: { reference: string; labels?: object }) => [s.reference, s.labels]);
     await expectRefused({ attempt: () => red.get("/v1/secrets/blue-crm/usage"), status: 404, slug: "not-found" });
     await expectRefused({ attempt: () => red.delete("/v1/secrets/blue-crm"), status: 404, slug: "not-found", probe: secrets });
     await expectRefused({ attempt: () => red.put("/v1/secrets/blue-crm", { value: "red's now" }), status: 403, slug: "forbidden", probe: secrets });
     await expectRefused({ attempt: () => red.put("/v1/secrets/other", { value: "x", labels: { team: "blue" } }), status: 403, slug: "forbidden", probe: secrets });
     // A namespace's secret serves the end user's runs whatever their labels: it reads them, never writes one.
-    expectOk(await tenant.api.put("/v1/namespaces/labels/secrets/crm", { value: "the end user's" }), 201);
+    expectOk(await org.api.put("/v1/namespaces/labels/secrets/crm", { value: "the end user's" }), 201);
     expectOk(await red.get("/v1/namespaces/labels/secrets"), 200);
     await expectRefused({ attempt: () => red.put("/v1/namespaces/labels/secrets/crm", { value: "red's" }), status: 403, slug: "forbidden", probe: secrets });
     await expectRefused({ attempt: () => red.delete("/v1/namespaces/labels/secrets/crm"), status: 403, slug: "forbidden", probe: secrets });
-    // Attaching: blue's is unknown to it, for a listing as for a run.
+    // Using one: blue's is unknown to it, for a listing as for a run.
     const actionSet = { mcp: [{ name: "crm", url: "http://127.0.0.1:9/mcp", auth: { type: "secret", header: "authorization" } }] };
     const listing = await red.post("/v1/action-sets", { ...actionSet, secrets: { crm: "org/blue-crm" } });
     expectProblem(listing, 422, "secret-required");
     expect(listing.json.secrets[0]).toMatchObject({ server: "crm", problem: "unknown", secret: "org/blue-crm" });
     expect(listing.json.secrets[0].usable).toEqual(["org/red-crm"]);
-    const api = await tenant.api.post("/v1/action-sets", CRM_API);
+    const api = await org.api.post("/v1/action-sets", CRM_API);
     expectOk(api);
-    const run = await red.ns("labels").post("/v1/runs", { code: CRM_SCRIPT, actionSet: api.json.id, secrets: { crm: "org/blue-crm" } });
+    const run = await red.ns("labels").post("/v1/runs", { code: CRM_CODE, actionSet: api.json.id, secrets: { crm: "org/blue-crm" } });
     expectProblem(run, 422, "secret-required");
     expect(run.json.secrets[0]).toMatchObject({ server: "crm", problem: "unknown", secret: "org/blue-crm" });
     evidence("the red key lists org/red-crm only (written with team:red); blue's usage and deletion → 404, replacing it or labelling one blue → 403; a namespace's secret read, never written (403); org/blue-crm named for a listing or a run → 422 secret-required (unknown), usable org/red-crm");
   });
 
-  test("attaching an organization's secret takes secrets:use", { tag: "@attack" }, async () => {
+  test("using an organization's secret takes secrets:use", { tag: "@attack" }, async () => {
     const role = `starter-${unique()}`;
-    expectOk(await tenant.api.put(`/v1/roles/${role}`, { description: "starts runs, registers actionSets", permissions: ["runs:start", "runs:read", "actions:write", "actions:read"] }));
-    const starter = tenant.api.as((await createKey(tenant.api, role)).key);
-    expectOk(await tenant.api.put("/v1/secrets/shared-crm", { value: "the organization's" }), 201);
+    expectOk(await org.api.put(`/v1/roles/${role}`, { description: "starts runs, registers action sets", permissions: ["runs:start", "runs:read", "actions:write", "actions:read"] }));
+    const starter = org.api.as((await createKey(org.api, role)).key);
+    expectOk(await org.api.put("/v1/secrets/shared-crm", { value: "the organization's" }), 201);
     const listing = await starter.post("/v1/action-sets", {
       mcp: [{ name: "crm", url: "http://127.0.0.1:9/mcp", auth: { type: "secret", header: "authorization" } }],
       secrets: { crm: "org/shared-crm" },
     });
     expectProblem(listing, 403, "forbidden");
     expect(listing.json.detail).toContain("`secrets:use`");
-    const actionSet = await tenant.api.post("/v1/action-sets", CRM_API);
+    const actionSet = await org.api.post("/v1/action-sets", CRM_API);
     expectOk(actionSet);
-    const started = async () => (await tenant.api.get("/v1/namespaces/use")).json?.namespace?.usage?.runsStarted ?? 0;
+    const started = async () => (await org.api.get("/v1/namespaces/use")).json?.namespace?.usage?.runsStarted ?? 0;
     const run = await expectRefused({
       attempt: () =>
-        starter.ns("use").post("/v1/runs", { code: CRM_SCRIPT, actionSet: actionSet.json.id, secrets: { crm: "org/shared-crm" } }),
+        starter.ns("use").post("/v1/runs", { code: CRM_CODE, actionSet: actionSet.json.id, secrets: { crm: "org/shared-crm" } }),
       status: 422,
       slug: "secret-required",
       probe: started,
@@ -792,51 +792,51 @@ test.describe("keys limited to labels", () => {
   });
 
   test("a worker key limited to labels is handed and answers the harness calls of its runs only", { tag: "@attack" }, async () => {
-    // One action set for both teams, as two environments of a tenant register the same harness actions.
-    const actionSet = await tenant.api.post("/v1/action-sets", {
+    // One action set for both teams, as two environments of an organization register the same harness actions.
+    const actionSet = await org.api.post("/v1/action-sets", {
       harness: [{ name: "team.lookup", description: "Looks something up.", inputSchema: { type: "object" } }],
     });
     expectOk(actionSet);
-    const script = `import { team } from "rewind:actions";
+    const code = `import { team } from "rewind:actions";
 export default async function main() { return await team.lookup({}); }
 `;
-    const redWorker = new Api(stacks().a.url, (await createKey(tenant.api, "worker", { name: "red worker", allowedLabels: { team: "red" } })).key);
+    const redWorker = new Api(stacks().a.url, (await createKey(org.api, "worker", { name: "red worker", allowedLabels: { team: "red" } })).key);
     const query = { actionSet: actionSet.json.id, actions: ["team.lookup"], slots: 10 };
-    const reds = await TaskStream.open(redWorker, query);
+    const reds = await CallStream.open(redWorker, query);
     try {
-      const ask = (labels: Record<string, string>) => startRun(tenant.api, "labels", { script, actionSet: actionSet.json.id, labels });
+      const ask = (labels: Record<string, string>) => startRun(org.api, "labels", { code, actionSet: actionSet.json.id, labels });
       const redAsks = await ask({ team: "red" });
       const blueAsks = await ask({ team: "blue" });
       expectOk(redAsks);
       expectOk(blueAsks);
 
-      const ours = await reds.task("the red run's task", (task) => task.runId === redAsks.json.id);
+      const ours = await reds.call("the red run's call", (c) => c.runId === redAsks.json.id);
       expect(ours.labels).toMatchObject({ team: "red" });
 
-      // The blue task, handed to a worker of the tenant: the red worker is never handed it, and
+      // The blue call, handed to a worker of the organization: the red worker is never handed it, and
       // cannot answer it.
-      const all = await TaskStream.open(tenant.api, query);
+      const all = await CallStream.open(org.api, query);
       try {
-        const blue = await all.task("the blue run's task", (task) => task.runId === blueAsks.json.id);
-        expect(reds.handed.map((task) => task.runId), "the blue run's task is not the red worker's").toEqual([redAsks.json.id]);
-        const probe = async () => (await tenant.api.get(`/v1/runs/${blueAsks.json.id}`)).json.status;
+        const blue = await all.call("the blue run's call", (c) => c.runId === blueAsks.json.id);
+        expect(reds.handed.map((c) => c.runId), "the blue run's call is not the red worker's").toEqual([redAsks.json.id]);
+        const probe = async () => (await org.api.get(`/v1/runs/${blueAsks.json.id}`)).json.status;
         await expectRefused({ attempt: () => redWorker.post(`/v1/calls/${blue.token}/complete`, { result: "from red" }), status: 410, slug: "call-gone", probe });
         await expectRefused({ attempt: () => redWorker.post(`/v1/calls/${blue.token}/defer`, {}), status: 410, slug: "call-gone", probe });
 
         expectOk(await redWorker.post(`/v1/calls/${ours.token}/complete`, { result: "red's" }), 204);
-        expectOk(await tenant.api.post(`/v1/calls/${blue.token}/complete`, { result: "blue's" }), 204);
+        expectOk(await org.api.post(`/v1/calls/${blue.token}/complete`, { result: "blue's" }), 204);
       } finally {
         await all.close();
       }
       for (const [run, answer] of [[redAsks.json.id, "red's"], [blueAsks.json.id, "blue's"]]) {
-        const done = await tenant.api.get(`/v1/runs/${run}`, { query: { wait: "20s" } });
+        const done = await org.api.get(`/v1/runs/${run}`, { query: { wait: "20s" } });
         expect(done.json.status).toBe("completed");
         expect(done.json.output.value).toBe(answer);
       }
     } finally {
       await reds.close();
     }
-    evidence("the task stream of a worker key limited to team:red → the red run's task only; the blue task's token → 410 call-gone for it");
+    evidence("the call stream of a worker key limited to team:red → the red run's call only; the blue call's token → 410 call-gone for it");
   });
 
   test("a subscription a key limited to labels creates carries them", { tag: "@success" }, async () => {
@@ -858,42 +858,42 @@ export default async function main() { return await team.lookup({}); }
 // The operator
 
 test.describe("the operator's endpoints", () => {
-  let tenant: Tenant;
+  let org: Org;
 
   test.beforeAll(async () => {
-    tenant = await newTenant("access-operator");
+    org = await newOrg("access-operator");
   });
 
-  test("an owner cannot set a ceiling, stop the server, nor make keys in another tenant", { tag: "@attack" }, async () => {
-    const ceiling = async () => (await tenant.api.get("/v1/organization/namespace-defaults")).json;
+  test("an owner cannot set a ceiling, stop the server, nor make keys in another organization", { tag: "@attack" }, async () => {
+    const ceiling = async () => (await org.api.get("/v1/organization/namespace-defaults")).json;
     await expectRefused({
-      attempt: () => tenant.api.put(`/v1/organizations/${tenant.id}/quotas`, { ceiling: { activeRuns: 1_000_000 } }),
+      attempt: () => org.api.put(`/v1/organizations/${org.id}/quotas`, { ceiling: { activeRuns: 1_000_000 } }),
       status: 403,
       slug: "forbidden",
       probe: ceiling,
     });
-    expectProblem(await tenant.api.post("/v1/server/stop"), 403, "forbidden");
+    expectProblem(await org.api.post("/v1/server/stop"), 403, "forbidden");
     const other = `access-elsewhere-${unique()}`;
-    const reply = await tenant.api.post("/v1/api-keys", { name: "elsewhere", role: "owner", organizationId: other });
+    const reply = await org.api.post("/v1/api-keys", { name: "elsewhere", role: "owner", organizationId: other });
     expectProblem(reply, 403, "forbidden");
     expect(reply.json.detail).toContain("operator");
     // The server still answers: it was not stopped.
-    expectOk(await tenant.api.get("/v1/server"), 200);
-    evidence("owner: PUT /v1/organizations/{own}/quotas, POST /v1/server/stop, a key in another tenant → 403 forbidden; the server still answers");
+    expectOk(await org.api.get("/v1/server"), 200);
+    evidence("owner: PUT /v1/organizations/{own}/quotas, POST /v1/server/stop, a key in another organization → 403 forbidden; the server still answers");
   });
 
-  test("the operator sets a tenant's ceiling, and makes keys in any tenant", { tag: "@success" }, async () => {
-    const set = await operator().put(`/v1/organizations/${tenant.id}/quotas`, { ceiling: { activeRuns: 7 } });
+  test("the operator sets an organization's ceiling, and makes keys in any organization", { tag: "@success" }, async () => {
+    const set = await operator().put(`/v1/organizations/${org.id}/quotas`, { ceiling: { activeRuns: 7 } });
     expectOk(set);
-    const seen = await tenant.api.get("/v1/organization/namespace-defaults");
+    const seen = await org.api.get("/v1/organization/namespace-defaults");
     expectOk(seen, 200);
     expect(JSON.stringify(seen.json)).toContain('"activeRuns":7');
-    const made = await operator().post("/v1/api-keys", { name: "reader by operator", role: "reader", organizationId: tenant.id });
+    const made = await operator().post("/v1/api-keys", { name: "reader by operator", role: "reader", organizationId: org.id });
     expectOk(made, 201);
-    const whoami = await tenant.api.as(made.json.key).get("/v1/whoami");
-    expect(whoami.json.organizationId).toBe(tenant.id);
+    const whoami = await org.api.as(made.json.key).get("/v1/whoami");
+    expect(whoami.json.organizationId).toBe(org.id);
     expect(whoami.json.operator).toBe(false);
-    evidence("the operator's PUT /v1/organizations/{organization}/quotas shows in the tenant's namespace defaults; its key of another tenant is that tenant's reader");
+    evidence("the operator's PUT /v1/organizations/{organization}/quotas shows in the organization's namespace defaults; its key of another organization is that organization's reader");
   });
 });
 
@@ -901,22 +901,22 @@ test.describe("the operator's endpoints", () => {
 // Forged identity
 
 test.describe("forged credentials", () => {
-  let tenant: Tenant;
+  let org: Org;
 
   test.beforeAll(async () => {
-    tenant = await newTenant("access-forged");
+    org = await newOrg("access-forged");
   });
 
   test("no credential, or a malformed or unknown one, is refused with 401 and creates nothing", { tag: "@attack" }, async () => {
     const url = stacks().a.url;
-    const actionSets = async () => (await tenant.api.get("/v1/action-sets")).json;
-    const realKey = tenant.ownerKey;
+    const actionSets = async () => (await org.api.get("/v1/action-sets")).json;
+    const realKey = org.ownerKey;
     const attempts: [string, () => Promise<Reply>][] = [
       ["no Authorization", () => new Api(url).post("/v1/action-sets", {})],
       ["an empty Bearer", () => new Api(url).post("/v1/action-sets", {}, { headers: { authorization: "Bearer " } })],
       ["a random rewind_sk_", () => new Api(url, `rewind_sk_${randomBytes(24).toString("hex")}`).post("/v1/action-sets", {})],
       ["a real key with one character changed", () => new Api(url, `${realKey.slice(0, -1)}${realKey.endsWith("0") ? "1" : "0"}`).post("/v1/action-sets", {})],
-      ["the key's id (its SHA-256) as a Bearer", async () => new Api(url, (await tenant.api.get("/v1/whoami")).json.principal.id).post("/v1/action-sets", {})],
+      ["the key's id (its SHA-256) as a Bearer", async () => new Api(url, (await org.api.get("/v1/whoami")).json.principal.id).post("/v1/action-sets", {})],
       ["the key under Basic", () => new Api(url).post("/v1/action-sets", {}, { headers: { authorization: `Basic ${Buffer.from(`${realKey}:`).toString("base64")}` } })],
       ["the key in the query string", () => new Api(url).post("/v1/action-sets", {}, { query: { api_key: realKey, key: realKey } })],
       ["the key in a cookie", () => new Api(url).post("/v1/action-sets", {}, { headers: { cookie: `rewind_session=${realKey}; api_key=${realKey}` } })],
@@ -936,14 +936,14 @@ test.describe("forged credentials", () => {
   test("an access token shaped like WorkOS's is refused by a server without WorkOS", { tag: "@attack" }, async () => {
     const { privateKey } = await generateKeyPair("RS256");
     const now = Math.floor(Date.now() / 1000);
-    const jwt = await new SignJWT({ sid: "session_forged", org_id: tenant.id, role: "owner", permissions: ["api_keys:write"] })
+    const jwt = await new SignJWT({ sid: "session_forged", org_id: org.id, role: "owner", permissions: ["api_keys:write"] })
       .setProtectedHeader({ alg: "RS256", kid: "sso_oidc_key_pair_forged", typ: "JWT" })
       .setIssuer("https://api.workos.com")
       .setSubject("user_forged")
       .setIssuedAt(now)
       .setExpirationTime(now + 300)
       .sign(privateKey);
-    const keys = async () => (await tenant.api.get("/v1/api-keys")).json.keys.length;
+    const keys = async () => (await org.api.get("/v1/api-keys")).json.keys.length;
     for (const stack of [stacks().a, stacks().b]) {
       const api = new Api(stack.url, jwt);
       await expectRefused({ attempt: () => api.post("/v1/api-keys", { name: "forged", role: "owner" }), status: 401, slug: "unauthorized", probe: stack === stacks().a ? keys : undefined });

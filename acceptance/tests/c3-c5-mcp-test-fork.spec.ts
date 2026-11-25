@@ -1,12 +1,12 @@
 /**
  * Criteria 3 and 5 (`archi/09-roadmap.md`, "0.1 is done when"):
  *
- * - 3: a script calls a real MCP server, with types checked beforehand. The server is the
+ * - 3: a workflow calls a real MCP server, with types checked beforehand. The server is the
  *   reference `@modelcontextprotocol/server-everything`, over stdio through `npx`. A wrong
- *   argument type is refused by `rewind check` (and at start) before any run exists; a correct
- *   script runs to completion.
+ *   argument type is refused by `rewind check` (and at start) before any run exists; correct
+ *   code runs to completion.
  * - 5: `rewind test` replays that recorded real run as a test, from its cassette; `rewind fork`
- *   continues a failed run with a corrected script without repeating its recorded calls.
+ *   continues a failed run with corrected code without repeating its recorded calls.
  *
  * The MCP server's call log: the action set starts it behind `tee`, which appends every JSON-RPC
  * message the client sends to a file. A `tools/call` there is a call the server received.
@@ -95,7 +95,7 @@ test.describe.serial("criteria 3 and 5: a real MCP server, rewind check, rewind 
     await project?.dispose();
   });
 
-  test("criterion 3: a wrong argument type is refused before any run exists; a correct script completes", async () => {
+  test("criterion 3: a wrong argument type is refused before any run exists; correct code completes", async () => {
     const added = await project.json(["action-sets", "add", "actionSet.json"]);
     expect(added.code, added.ran.stderr).toBe(0);
     actionSet = added.value.id;
@@ -175,23 +175,23 @@ test.describe.serial("criteria 3 and 5: a real MCP server, rewind check, rewind 
     const failed = await project.json(["run", "failing.ts", "--action-set", actionSet, "--wait", "120s"]);
     expect(failed.code, JSON.stringify(failed.value)).toBe(1);
     expect(failed.value.error.name).toBe("SyntaxError");
-    const parent: string = failed.value.id;
+    const source: string = failed.value.id;
     expect(toolCalls().slice(before).map((call) => call.name)).toEqual(["echo", "get-sum"]);
 
     // What a fork reuses.
-    const replay = await project.rewind(["replay", parent, "--code", "fixed.ts"]);
+    const replay = await project.rewind(["replay", source, "--code", "fixed.ts"]);
     expect(replay.stdout).toContain("a fork reuses: #1 everything.echo");
 
     const afterFailure = toolCalls().length;
-    const fork = await project.json(["fork", parent, "--code", "fixed.ts", "--wait", "120s"]);
+    const fork = await project.json(["fork", source, "--code", "fixed.ts", "--wait", "120s"]);
     expect(fork.code, JSON.stringify(fork.value)).toBe(0);
     expect(fork.value.status).toBe("completed");
     expect(fork.value.output.value).toEqual({ echoed: "Echo: step 1", total: 42 });
-    expect(fork.value.source.run).toBe(parent);
+    expect(fork.value.source.run).toBe(source);
     // The MCP server received no call: both outcomes came from the source's history.
     expect(toolCalls()).toHaveLength(afterFailure);
 
-    const forks = await project.json(["runs", "--source", parent]);
+    const forks = await project.json(["runs", "--source", source]);
     expect(forks.value.runs.map((run: { id: string }) => run.id)).toEqual([fork.value.id]);
   });
 });

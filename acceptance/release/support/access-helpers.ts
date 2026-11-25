@@ -4,7 +4,7 @@
  * `archi/06-storage-and-scale.md` ("What the caller may do") as the specification writes it.
  */
 import { expect } from "@playwright/test";
-import { type Api, expectOk, type Reply, type Tenant } from "./gate.js";
+import { type Api, expectOk, type Reply, type Org } from "./gate.js";
 
 /** The catalog, in 06's order. */
 export const PERMISSIONS = [
@@ -72,13 +72,13 @@ export const ADMINISTRATION = ["members:invite", "members:manage", "roles:write"
 export const TOKEN_DEFAULT = ["runs:read", "runs:start", "runs:control", "actions:read"];
 
 /** A run that returns its input's `n` doubled at once. */
-export const QUICK_SCRIPT = `export default async function main(input: { n: number }) {
+export const QUICK_CODE = `export default async function main(input: { n: number }) {
   return { doubled: input.n * 2 };
 }
 `;
 
 /** A run that waits for the signal `go` and returns its payload's `n`. */
-export const WAITING_SCRIPT = `import { signal } from "rewind";
+export const WAITING_CODE = `import { signal } from "rewind";
 
 export default async function main(input: { note: string }) {
   const go = await signal<{ n: number }>("go");
@@ -86,7 +86,7 @@ export default async function main(input: { note: string }) {
 }
 `;
 
-/** A key of the tenant with `role`, limited to `allowedLabels` when given. */
+/** A key of the organization with `role`, limited to `allowedLabels` when given. */
 export async function createKey(
   api: Api,
   role: string,
@@ -112,31 +112,31 @@ export async function mintToken(
 export async function startRun(
   api: Api,
   namespace: string,
-  body: { script?: string; input?: unknown; labels?: Record<string, string>; wait?: string; actionSet?: string },
+  body: { code?: string; input?: unknown; labels?: Record<string, string>; wait?: string; actionSet?: string },
   headers: Record<string, string> = {},
 ): Promise<Reply> {
   return api.ns(namespace).post(
     "/v1/runs",
-    { code: body.script ?? QUICK_SCRIPT, input: body.input ?? { n: 1 }, labels: body.labels, wait: body.wait, actionSet: body.actionSet },
+    { code: body.code ?? QUICK_CODE, input: body.input ?? { n: 1 }, labels: body.labels, wait: body.wait, actionSet: body.actionSet },
     { headers },
   );
 }
 
 /** A run that completed, for reads. */
-export async function completedRun(tenant: Tenant, namespace: string, labels?: Record<string, string>, n = 1): Promise<any> {
-  const reply = await startRun(tenant.api, namespace, { input: { n }, labels, wait: "30s" });
+export async function completedRun(org: Org, namespace: string, labels?: Record<string, string>, n = 1): Promise<any> {
+  const reply = await startRun(org.api, namespace, { input: { n }, labels, wait: "30s" });
   expectOk(reply);
   expect(reply.json.status, reply.text).toBe("completed");
   return reply.json;
 }
 
 /** A run waiting for the signal `go`, once it waits. */
-export async function waitingRun(tenant: Tenant, namespace: string, note = "waiting", labels?: Record<string, string>): Promise<any> {
-  const reply = await startRun(tenant.api, namespace, { script: WAITING_SCRIPT, input: { note }, labels });
+export async function waitingRun(org: Org, namespace: string, note = "waiting", labels?: Record<string, string>): Promise<any> {
+  const reply = await startRun(org.api, namespace, { code: WAITING_CODE, input: { note }, labels });
   expectOk(reply);
   const id = reply.json.id as string;
   for (let attempt = 0; attempt < 120; attempt++) {
-    const state = await tenant.api.get(`/v1/runs/${id}`);
+    const state = await org.api.get(`/v1/runs/${id}`);
     if (state.json?.waitingFor?.some((w: { kind: string; name?: string }) => w.kind === "signal" && w.name === "go")) return state.json;
     await new Promise((resolve) => setTimeout(resolve, 250));
   }

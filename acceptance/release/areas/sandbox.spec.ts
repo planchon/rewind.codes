@@ -1,13 +1,13 @@
 /**
- * Area "Sandbox" of the release gate, on setup A: what a script written by a model can reach.
+ * Area "Sandbox" of the release gate, on setup A: what code written by a model can reach.
  *
  * - Determinism: logical time, the seeded `Math.random` and `crypto`; a replay of the run
  *   export recomputes every value; two runs differ (`archi/01-product.md`, "What exists in the
  *   sandbox"; `archi/03-execution.md`, "Logical time", "Replay").
  * - Escape: the globals are exactly the sandbox lib's; no module but `rewind`, `rewind:actions` and
- *   `rewind:workflows`, statically, dynamically or through `eval`; no tool outside the action set;
- *   no `fetch` without the `http` tool; nothing a run leaves in its isolate reaches another run;
- *   stack traces name no host path; a secret the run attaches never enters the isolate.
+ *   `rewind:workflows`, statically, dynamically or through `eval`; no action outside the action set;
+ *   no `fetch` without the `http` action; nothing a run leaves in its isolate reaches another run;
+ *   stack traces name no path of the server; a secret the run uses never enters the isolate.
  * - Exhaustion (`archi/03-execution.md`, "Resource limits"): CPU per call, heap, array buffers
  *   (a catchable `RangeError`), commands per activation, commands and logs per trigger, payloads;
  *   each attack is followed by a canary run, and at the end every node still activates runs.
@@ -24,9 +24,9 @@ import {
   expectHealthy,
   expectOk,
   expectRefused,
-  newTenant,
+  newOrg,
   stacks,
-  type Tenant,
+  type Org,
   test,
   unique,
 } from "../support/gate.js";
@@ -35,28 +35,28 @@ import {
   ended,
   eventTypes,
   expectLimit,
-  journal,
+  runExport,
   replayDocument,
-  runScript,
+  runCode,
 } from "../support/sandbox-helpers.js";
 import { handedWithin } from "../support/actions-helpers.js";
 
-let tenant: Tenant;
+let org: Org;
 /** An action set of harness actions nobody serves: `t.noop`. */
-let hostActionSet: string;
+let harnessActionSet: string;
 
 test.beforeAll(async () => {
-  tenant = await newTenant("sandbox");
-  const created = await tenant.api.post("/v1/action-sets", {
+  org = await newOrg("sandbox");
+  const created = await org.api.post("/v1/action-sets", {
     harness: [{ name: "t.noop", description: "Does nothing.", inputSchema: { type: "object" } }],
   });
   expectOk(created);
-  hostActionSet = created.json.id;
+  harnessActionSet = created.json.id;
 });
 
 /** The runs of a namespace, as the read model lists them. */
 async function runsIn(namespace: string): Promise<string[]> {
-  const reply = await tenant.api.ns(namespace).get("/v1/runs", { query: { limit: 100 } });
+  const reply = await org.api.ns(namespace).get("/v1/runs", { query: { limit: 100 } });
   expectOk(reply);
   return (reply.json.runs as { id: string }[]).map((run) => run.id).sort();
 }
@@ -82,14 +82,14 @@ export default async function main() {
 `;
 
 test("time is logical and randomness is seeded: a replay recomputes every value, two runs differ", { tag: "@success" }, async () => {
-  const first = await runScript(tenant.api, DETERMINISM);
-  const second = await runScript(tenant.api, DETERMINISM);
+  const first = await runCode(org.api, DETERMINISM);
+  const second = await runCode(org.api, DETERMINISM);
   for (const run of [first, second]) expect(run.status, JSON.stringify(run)).toBe("completed");
   const one = first.output.value;
   const two = second.output.value;
 
-  // Logical time: the time of the trigger the script reacts to, in UTC and en-US.
-  const { doc, text } = await journal(tenant.api, first.id);
+  // Logical time: the time of the trigger the code reacts to, in UTC and en-US.
+  const { doc, text } = await runExport(org.api, first.id);
   expect(eventTypes(doc)).toEqual(["run_started", "start_timer", "timer_fired", "complete_run"]);
   expect(one.a.now).toBe(doc.events[0].recorded_at);
   expect(one.a.iso).toBe(new Date(one.a.now).toISOString());
@@ -115,11 +115,11 @@ test("time is logical and randomness is seeded: a replay recomputes every value,
 // ---------------------------------------------------------------------------------------------
 // Escape
 
-test("a script finds no host global, and eval sees the same sandbox", { tag: "@attack" }, async () => {
+test("code finds no global of Node, Deno or a browser, and eval sees the same sandbox", { tag: "@attack" }, async () => {
   const lib = JSON.parse(readFileSync(join(root, "crates", "rewind-runtime", "lib", "globals.json"), "utf8"));
   const declared = [...lib.ecmascript, ...lib.sandbox].sort();
-  const run = await runScript(
-    tenant.api,
+  const run = await runCode(
+    org.api,
     `export default async function main() {
   const names = ["process", "Deno", "Bun", "require", "module", "exports", "__dirname", "Buffer", "global", "window", "self",
     "navigator", "fetch", "XMLHttpRequest", "WebSocket", "Worker", "importScripts", "setImmediate", "WebAssembly",
@@ -161,7 +161,7 @@ test("a module outside rewind, rewind:actions and rewind:workflows is refused be
   for (const specifier of SPECIFIERS) {
     const reply = await expectRefused({
       attempt: () =>
-        tenant.api.ns(namespace).post("/v1/runs", {
+        org.api.ns(namespace).post("/v1/runs", {
           code: `import x from ${JSON.stringify(specifier)};\nexport default async function main() { return String(x); }\n`,
           check: false,
         }),
@@ -180,7 +180,7 @@ test("a dynamic import() is refused before any run exists", { tag: "@attack" }, 
   for (const specifier of ["node:fs", "data:text/javascript,export default 1", "rewind"]) {
     const reply = await expectRefused({
       attempt: () =>
-        tenant.api.ns(namespace).post("/v1/runs", {
+        org.api.ns(namespace).post("/v1/runs", {
           code: `export default async function main() { const m = await import(${JSON.stringify(specifier)}); return Object.keys(m); }\n`,
           check: false,
         }),
@@ -194,7 +194,7 @@ test("a dynamic import() is refused before any run exists", { tag: "@attack" }, 
 });
 
 test("an import() hidden in eval or new Function loads nothing", { tag: "@attack" }, async () => {
-  const script = `export default async function main(input: { specifier: string; how: string }) {
+  const code = `export default async function main(input: { specifier: string; how: string }) {
   const p: Promise<any> = input.how === "eval"
     ? (0, eval)("import(" + JSON.stringify(input.specifier) + ")")
     : new Function("s", "return import(s)")(input.specifier);
@@ -207,7 +207,7 @@ test("an import() hidden in eval or new Function loads nothing", { tag: "@attack
   const outcomes: string[] = [];
   for (const specifier of ["node:fs", "file:///etc/passwd", "data:text/javascript,export default 42", "rewind", "rewind:actions"]) {
     for (const how of ["eval", "Function"]) {
-      const run = await runScript(tenant.api, script, { input: { specifier, how } });
+      const run = await runCode(org.api, code, { input: { specifier, how } });
       expect(run.status, JSON.stringify(run.error)).toBe("completed");
       // Spec silent on a hidden import: it never settles, or it rejects; it never loads.
       expect(String(run.output.value)).toMatch(/^(PENDING|REJECTED )/);
@@ -217,12 +217,12 @@ test("an import() hidden in eval or new Function loads nothing", { tag: "@attack
   evidence(`hidden import() never loads a module (${[...new Set(outcomes.map((o) => o.split(": ")[1]))].join(", ")})`);
 });
 
-test("a tool outside the action set: an absent group is refused at start, an absent calls nothing", { tag: "@attack" }, async () => {
-  const namespace = unique("tools-");
+test("an action outside the action set: an absent group is refused at start, an absent action calls nothing", { tag: "@attack" }, async () => {
+  const namespace = unique("actions-");
   const refused = await expectRefused({
     attempt: () =>
-      tenant.api.ns(namespace).post("/v1/runs", {
-        actionSet: hostActionSet,
+      org.api.ns(namespace).post("/v1/runs", {
+        actionSet: harnessActionSet,
         code: `import { payments } from "rewind:actions";\nexport default async function main() { return await payments.refund({ amount: 100 }); }\n`,
         check: false,
       }),
@@ -232,23 +232,23 @@ test("a tool outside the action set: an absent group is refused at start, an abs
   });
   expect(refused.json.detail).toContain('has no export named "payments"');
 
-  const run = await runScript(
-    tenant.api,
+  const run = await runCode(
+    org.api,
     `import { t } from "rewind:actions";\nexport default async function main() { return await (t as any).refund({ amount: 100 }); }\n`,
-    { actionSet: hostActionSet, namespace },
+    { actionSet: harnessActionSet, namespace },
   );
   expect(run.status).toBe("failed");
   expect(run.error).toMatchObject({ name: "TypeError" });
   // No call was scheduled: the history holds the start and the failure only.
-  expect(eventTypes((await journal(tenant.api, run.id)).doc)).toEqual(["run_started", "fail_run"]);
-  evidence("absent group: 422 invalid-code; absent tool: TypeError, no schedule_call");
+  expect(eventTypes((await runExport(org.api, run.id)).doc)).toEqual(["run_started", "fail_run"]);
+  evidence("absent group: 422 invalid-code; absent action: TypeError, no schedule_call");
 });
 
 test("fetch does not exist without the http action, and nothing reaches the network", { tag: "@attack" }, async () => {
   const sink: Sink = await startSink();
   try {
-    const run = await runScript(
-      tenant.api,
+    const run = await runCode(
+      org.api,
       `declare const fetch: (url: string) => Promise<unknown>;\nexport default async function main(input: { url: string }) { return await fetch(input.url); }\n`,
       { input: { url: `${sink.origin}/steal` } },
     );
@@ -263,8 +263,8 @@ test("fetch does not exist without the http action, and nothing reaches the netw
 
 test("what a run leaves in its isolate never reaches another run", { tag: "@attack" }, async () => {
   const namespace = unique("pollution-");
-  const polluter = await runScript(
-    tenant.api,
+  const polluter = await runCode(
+    org.api,
     `import { signal } from "rewind";
 export default async function main() {
   (Object.prototype as any).polluted = "yes";
@@ -294,22 +294,22 @@ export default async function main() {
 }
 `;
   // Several runs, so that both workers, which hold the polluter's instance in their cache, serve some.
-  const victims = await Promise.all(Array.from({ length: 6 }, () => runScript(tenant.api, VICTIM, { namespace })));
+  const victims = await Promise.all(Array.from({ length: 6 }, () => runCode(org.api, VICTIM, { namespace })));
   for (const victim of victims) {
     expect(victim.status, JSON.stringify(victim.error)).toBe("completed");
     expect(victim.output.value).toEqual({ polluted: null, leak: null, includes: false, random: false, leaked: null, upper: "ABC" });
   }
-  const signalled = await tenant.api.ns(namespace).post(`/v1/runs/${polluter.id}/signals/go`, "now");
+  const signalled = await org.api.ns(namespace).post(`/v1/runs/${polluter.id}/signals/go`, "now");
   expectOk(signalled);
-  const done = await ended(tenant.api, polluter.id);
+  const done = await ended(org.api, polluter.id);
   // The pollution was real, in the polluter's own isolate.
   expect(done.output?.value ?? done.error, JSON.stringify(done)).toMatchObject({ go: "now", mine: "yes", includes: true });
   evidence("prototypes, globals and Math.random changed by one run: 6 runs started meanwhile saw none of it");
 });
 
-test("stack traces name the script and the runtime, never a host path", { tag: "@attack" }, async () => {
-  const run = await runScript(
-    tenant.api,
+test("stack traces name the code and the runtime, never a path of the server", { tag: "@attack" }, async () => {
+  const run = await runCode(
+    org.api,
     `import { t } from "rewind:actions";
 export default async function main() {
   (Error as any).prepareStackTrace = (_e: unknown, frames: unknown[]) => frames;
@@ -322,33 +322,33 @@ export default async function main() {
   throw new Error("the end");
 }
 `,
-    { actionSet: hostActionSet },
+    { actionSet: harnessActionSet },
   );
   expect(run.status).toBe("failed");
   const text = JSON.stringify(run);
-  for (const host of ["/Users/", "/home/", "/root/", "/private/", "/var/", "target/", ".rs:", "cargo", "deno_core", "node_modules"]) {
-    expect(text, `the run names ${host}`).not.toContain(host);
+  for (const path of ["/Users/", "/home/", "/root/", "/private/", "/var/", "target/", ".rs:", "cargo", "deno_core", "node_modules"]) {
+    expect(text, `the run names ${path}`).not.toContain(path);
   }
   expect(run.error.stack).toContain("workflow.ts");
-  // Glue frames reach the script as text only: no CallSite object to reach the runtime through.
-  const { doc } = await journal(tenant.api, run.id);
+  // Glue frames reach the code as text only: no CallSite object to reach the runtime through.
+  const { doc } = await runExport(org.api, run.id);
   const failed = doc.events.at(-1).event;
   expect(JSON.stringify(failed)).not.toContain("/Users/");
-  evidence("stacks name workflow.ts and rewind:bootstrap frames; prepareStackTrace never hands the script a CallSite");
+  evidence("stacks name workflow.ts and rewind:bootstrap frames; prepareStackTrace never hands the code a CallSite");
 });
 
-test("a secret the run attaches never enters the isolate, a run export, a transcript or an answer", { tag: "@attack" }, async () => {
+test("a secret the run uses never enters the isolate, a run export, a transcript or an answer", { tag: "@attack" }, async () => {
   const mcp: McpFixture = await startMcpFixture();
   const secret = canary();
   try {
-    expectOk(await tenant.api.put("/v1/secrets/sandbox-fx", { value: secret }));
-    const created = await tenant.api.post("/v1/action-sets", {
+    expectOk(await org.api.put("/v1/secrets/sandbox-fx", { value: secret }));
+    const created = await org.api.post("/v1/action-sets", {
       mcp: [{ name: "fx", url: mcp.url, auth: { type: "secret", header: "authorization", format: "Bearer {secret}" } }],
     });
     expectOk(created);
-    const run = await runScript(
-      tenant.api,
-      `import * as tools from "rewind:actions";
+    const run = await runCode(
+      org.api,
+      `import * as actions from "rewind:actions";
 import * as rewind from "rewind";
 import { fx } from "rewind:actions";
 export default async function main() {
@@ -367,7 +367,7 @@ export default async function main() {
       walk(item, depth + 1);
     }
   };
-  for (const root of [globalThis, tools, rewind, result, Object.getPrototypeOf(result)]) walk(root, 0);
+  for (const root of [globalThis, actions, rewind, result, Object.getPrototypeOf(result)]) walk(root, 0);
   try { await (fx as any).echo(); } catch (e: any) { dump.push(String(e), String(e.stack), JSON.stringify(e)); }
   try { await (fx as any).echo({ text: 1 }); } catch (e: any) { dump.push(String(e), String(e.stack)); }
   const text = dump.join("\\n");
@@ -380,25 +380,25 @@ export default async function main() {
     expect(run.status, JSON.stringify(run.error)).toBe("completed");
     expect(run.output.value.reached).toBeGreaterThan(100);
     expect(run.secrets).toEqual({ fx: "org/sandbox-fx" });
-    // The call carried the attached secret to the MCP server, in its transport.
+    // The call carried the secret the run uses to the MCP server, in its transport.
     expect(mcp.calls.length).toBeGreaterThan(0);
     expect(mcp.calls[0]!.headers.authorization).toBe(`Bearer ${secret}`);
-    // Nothing the script reached, logged or returned holds it; nor its history or transcript.
+    // Nothing the code reached, logged or returned holds it; nor its history or transcript.
     expect(JSON.stringify(run)).not.toContain(secret);
-    const exported = await journal(tenant.api, run.id);
+    const exported = await runExport(org.api, run.id);
     expect(exported.text).not.toContain(secret);
-    const transcript = await tenant.api.get(`/v1/runs/${run.id}/transcript`);
+    const transcript = await org.api.get(`/v1/runs/${run.id}/transcript`);
     expectOk(transcript);
     expect(transcript.text).not.toContain(secret);
-    const cassette = await tenant.api.get(`/v1/runs/${run.id}/export`, { query: { as: "cassette" } });
+    const cassette = await org.api.get(`/v1/runs/${run.id}/export`, { query: { as: "cassette" } });
     expectOk(cassette);
     expect(cassette.text).not.toContain(secret);
-    const actionSets = await tenant.api.get("/v1/action-sets");
+    const actionSets = await org.api.get("/v1/action-sets");
     expect(actionSets.text).not.toContain(secret);
-    const events = await tenant.api.get(`/v1/runs/${run.id}/events`);
+    const events = await org.api.get(`/v1/runs/${run.id}/events`);
     expectOk(events);
     expect(events.text).not.toContain(secret);
-    evidence(`the script walked ${run.output.value.reached} names it can reach; the canary secret, attached as org/sandbox-fx, reached the MCP server only`);
+    evidence(`the code walked ${run.output.value.reached} names it can reach; the canary secret, used as org/sandbox-fx, reached the MCP server only`);
   } finally {
     await mcp.close();
   }
@@ -408,56 +408,56 @@ export default async function main() {
 // Exhaustion: each attack ends as archi/03 says, then the canary run still completes.
 
 test("an infinite loop is stopped after 5 s of CPU time", { tag: "@attack" }, async () => {
-  const run = await runScript(tenant.api, "export default async function main() { for (;;) {} }\n");
+  const run = await runCode(org.api, "export default async function main() { for (;;) {} }\n");
   expectLimit(run, "more than 5000ms of CPU time reacting to one trigger");
-  expect(eventTypes((await journal(tenant.api, run.id)).doc)).toEqual(["run_started", "run_aborted"]);
-  await expectHealthy(tenant);
+  expect(eventTypes((await runExport(org.api, run.id)).doc)).toEqual(["run_started", "run_aborted"]);
+  await expectHealthy(org);
   evidence("run_aborted limit_exceeded: more than 5000ms of CPU time");
 });
 
 test("catastrophic regex backtracking is stopped by the CPU limit", { tag: "@attack" }, async () => {
-  const run = await runScript(tenant.api, 'export default async function main() { return /^(a+)+$/.test("a".repeat(48) + "!"); }\n');
+  const run = await runCode(org.api, 'export default async function main() { return /^(a+)+$/.test("a".repeat(48) + "!"); }\n');
   expectLimit(run, "more than 5000ms of CPU time");
-  await expectHealthy(tenant);
+  await expectHealthy(org);
   evidence("run_aborted limit_exceeded: the regex was interrupted at 5 s of CPU");
 });
 
 test("a heap bomb is stopped at 128 MiB", { tag: "@attack" }, async () => {
-  const run = await runScript(
-    tenant.api,
+  const run = await runCode(
+    org.api,
     "export default async function main() { const hoard: number[][] = []; for (;;) hoard.push(new Array(100_000).fill(1)); }\n",
   );
   expectLimit(run, "more than 128 MiB of heap");
-  await expectHealthy(tenant);
+  await expectHealthy(org);
   evidence("run_aborted limit_exceeded: more than 128 MiB of heap");
 });
 
 test("a built-in asked to fill a billion elements is stopped before V8 runs it", { tag: "@attack" }, async () => {
-  const run = await runScript(tenant.api, "export default async function main() { return new Array(1e9).fill(0).length; }\n");
+  const run = await runCode(org.api, "export default async function main() { return new Array(1e9).fill(0).length; }\n");
   expectLimit(run, "more than 128 MiB of heap");
-  await expectHealthy(tenant);
+  await expectHealthy(org);
   evidence("new Array(1e9).fill(0): run_aborted limit_exceeded (heap), the worker kept serving");
 });
 
 test("strings past V8's length or the heap end the run, catchably for the first", { tag: "@attack" }, async () => {
-  const repeat = await runScript(
-    tenant.api,
+  const repeat = await runCode(
+    org.api,
     'export default async function main() { try { return "x".repeat(2 ** 29).length; } catch (e: any) { return e.name + ": " + e.message; } }\n',
   );
   expect(repeat.status).toBe("completed");
   expect(repeat.output.value).toBe("RangeError: Invalid string length");
-  const doubling = await runScript(
-    tenant.api,
+  const doubling = await runCode(
+    org.api,
     'export default async function main() { let s = "xxxxxxxx"; const keep: string[] = []; for (;;) { s = s + s; keep.push(s.slice(1)); } }\n',
   );
   expectLimit(doubling, "more than 128 MiB of heap");
-  await expectHealthy(tenant);
-  evidence('"x".repeat(2**29): RangeError caught by the script; doubling kept strings: heap limit');
+  await expectHealthy(org);
+  evidence('"x".repeat(2**29): RangeError caught by the code; doubling kept strings: heap limit');
 });
 
-test("array buffers past their 128 MiB budget fail with a RangeError the script catches", { tag: "@attack" }, async () => {
-  const run = await runScript(
-    tenant.api,
+test("array buffers past their 128 MiB budget fail with a RangeError the code catches", { tag: "@attack" }, async () => {
+  const run = await runCode(
+    org.api,
     `export default async function main() {
   const keep: ArrayBuffer[] = [];
   let caught = "";
@@ -477,90 +477,90 @@ test("array buffers past their 128 MiB budget fail with a RangeError the script 
     resizable: "RangeError: Array buffer allocation failed",
     after: 1024 * 1024,
   });
-  await expectHealthy(tenant);
+  await expectHealthy(org);
   evidence("7 × 16 MiB held, the 8th refused with a catchable RangeError; a resizable buffer's maximum counts");
 });
 
 test("a million timers in one trigger end the run", { tag: "@attack" }, async () => {
-  const run = await runScript(
-    tenant.api,
+  const run = await runCode(
+    org.api,
     'import { sleep } from "rewind";\nexport default async function main() { await Promise.all(Array.from({ length: 1_000_000 }, () => sleep(1))); }\n',
   );
   expectLimit(run, "reacting to one trigger");
   expect(run.historyLen).toBe(2);
-  await expectHealthy(tenant);
+  await expectHealthy(org);
   evidence(String(run.abort.message));
 });
 
-test("a million calls in one trigger end the run, and no task is created", { tag: "@attack" }, async () => {
-  const run = await runScript(
-    tenant.api,
+test("a million calls in one trigger end the run, and no call is handed to the harness", { tag: "@attack" }, async () => {
+  const run = await runCode(
+    org.api,
     'import { t } from "rewind:actions";\nexport default async function main() { await Promise.all(Array.from({ length: 1_000_000 }, () => t.noop({}))); }\n',
-    { actionSet: hostActionSet },
+    { actionSet: harnessActionSet },
   );
   expectLimit(run, "reacting to one trigger");
-  expect(eventTypes((await journal(tenant.api, run.id)).doc)).toEqual(["run_started", "run_aborted"]);
-  const worker = await tenant.key("worker");
-  expect(await handedWithin(tenant.api.as(worker.key), { actionSet: hostActionSet, slots: 100 })).toEqual([]);
-  await expectHealthy(tenant);
-  evidence(`${String(run.abort.message)}; no task handed on a stream`);
+  expect(eventTypes((await runExport(org.api, run.id)).doc)).toEqual(["run_started", "run_aborted"]);
+  const worker = await org.key("worker");
+  expect(await handedWithin(org.api.as(worker.key), { actionSet: harnessActionSet, slots: 100 })).toEqual([]);
+  await expectHealthy(org);
+  evidence(`${String(run.abort.message)}; no call handed on a stream`);
 });
 
 test("more than 10,000 commands in one activation end the run", { tag: "@attack" }, async () => {
-  const run = await runScript(
-    tenant.api,
+  const run = await runCode(
+    org.api,
     "export default async function main() { for (let i = 0; i < 20_000; i++) setInterval(() => {}, 1); return 1; }\n",
   );
   expectLimit(run, "more than 10000 commands in one activation");
   expect(run.waitingFor ?? []).toEqual([]);
-  await expectHealthy(tenant);
+  await expectHealthy(org);
   evidence("20,000 intervals: run_aborted limit_exceeded, no timer kept");
 });
 
-test("infinite recursion is a RangeError the script can catch", { tag: "@attack" }, async () => {
-  const caught = await runScript(
-    tenant.api,
+test("infinite recursion is a RangeError the code can catch", { tag: "@attack" }, async () => {
+  const caught = await runCode(
+    org.api,
     "export default async function main() { function f(n: number): number { return f(n + 1) + 1; } try { return f(0); } catch (e: any) { return e.name + ': ' + e.message; } }\n",
   );
   expect(caught.status).toBe("completed");
   expect(caught.output.value).toBe("RangeError: Maximum call stack size exceeded");
-  const uncaught = await runScript(
-    tenant.api,
+  const uncaught = await runCode(
+    org.api,
     "export default async function main() { function f(n: number): number { return f(n + 1) + 1; } return f(0); }\n",
   );
   expect(uncaught.status).toBe("failed");
   expect(uncaught.error).toMatchObject({ name: "RangeError", message: "Maximum call stack size exceeded" });
-  await expectHealthy(tenant);
+  await expectHealthy(org);
   evidence("stack overflow: a catchable RangeError; uncaught, the run fails with it");
 });
 
 test("an output above 8 MiB ends the run", { tag: "@attack" }, async () => {
-  const run = await runScript(tenant.api, 'export default async function main() { return "x".repeat(9 * 1024 * 1024); }\n');
+  const run = await runCode(org.api, 'export default async function main() { return "x".repeat(9 * 1024 * 1024); }\n');
   expectLimit(run, "the payload of complete_run is");
   expectLimit(run, "above the limit of 8388608 bytes");
-  await expectHealthy(tenant);
+  await expectHealthy(org);
   evidence(String(run.abort.message));
 });
 
 test("logs are bounded: 64 MiB of logs in one trigger end the run", { tag: "@attack" }, async () => {
-  const within = await runScript(
-    tenant.api,
+  const within = await runCode(
+    org.api,
     'export default async function main() { const s = "y".repeat(1024 * 1024); for (let i = 0; i < 8; i++) console.log(s); return "logged"; }\n',
   );
   expect(within.status).toBe("completed");
   expect(within.historyLen).toBe(10);
-  const flood = await runScript(
-    tenant.api,
+  const flood = await runCode(
+    org.api,
     'export default async function main() { const s = "z".repeat(1024 * 1024); for (let i = 0; i < 120; i++) console.log(s); return "logged"; }\n',
   );
   expectLimit(flood, "more than 64 MiB of commands and logs reacting to one trigger");
   expect(flood.historyLen).toBe(2);
-  const many = await runScript(
-    tenant.api,
+  const many = await runCode(
+    org.api,
     'export default async function main() { for (let i = 0; i < 200_000; i++) console.log("line " + i); return "logged"; }\n',
   );
   expectLimit(many, "commands and logs reacting to one trigger");
-  await expectHealthy(tenant);
+  await expectHealthy(org);
   evidence("8 MiB of logs kept; 120 MiB and 200,000 lines in one trigger: run_aborted limit_exceeded");
 });
 
@@ -571,7 +571,7 @@ test("after every attack, every node still activates runs", { tag: "@success" },
   // Runs of three activations, each with a little CPU, each in a namespace of its own: the
   // namespaces spread over the partitions, so over the nodes that own them. Batches until each
   // node's activation spans reach the Collector.
-  const SCRIPT = `import { sleep } from "rewind";
+  const CODE = `import { sleep } from "rewind";
 function spin(n: number): number { let x = 0; for (let i = 0; i < n; i++) x = (x + i) % 1000003; return x; }
 export default async function main() { spin(20_000_000); await sleep(1); spin(20_000_000); await sleep(1); return "done"; }
 `;
@@ -585,13 +585,13 @@ export default async function main() { spin(20_000_000); await sleep(1); spin(20
   for (let batch = 0; batch < 6 && seen().size < a.nodes.length; batch++) {
     const runs = await Promise.all(
       Array.from({ length: 8 }, async () => {
-        const started = await tenant.api.ns(unique("nodes-")).post("/v1/runs", { code: SCRIPT, check: false });
+        const started = await org.api.ns(unique("nodes-")).post("/v1/runs", { code: CODE, check: false });
         expectOk(started);
         ids.add(started.json.id);
         return started.json.id as string;
       }),
     );
-    for (const id of runs) expect((await ended(tenant.api, id)).status).toBe("completed");
+    for (const id of runs) expect((await ended(org.api, id)).status).toBe("completed");
     await eventually("the batch's activation spans reach the Collector", () => (seen().size > 0 ? true : undefined), 30_000, 500).catch(() => undefined);
   }
   const nodes = await eventually(

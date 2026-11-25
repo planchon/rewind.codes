@@ -20,9 +20,9 @@ import { type Server, startServer } from "../support/deployment.js";
 import { resultDir } from "../support/paths.js";
 import { type Created, NO_STAGING, stagingCredentials, WorkOsStaging } from "../support/workos.js";
 
-/** A run id no run has, and ids of WorkOS's shape it never gave. */
+/** A run id no run has, and ids of WorkOS's shape it never gave (a member is a WorkOS user). */
 const UNKNOWN_RUN = "01930000-0000-7000-8000-00000000abcd";
-const UNKNOWN_USER = "user_01JZZZZZZZZZZZZZZZZZZZZZZZ";
+const UNKNOWN_MEMBER = "user_01JZZZZZZZZZZZZZZZZZZZZZZZ";
 const UNKNOWN_INVITATION = "invitation_01JZZZZZZZZZZZZZZZZZZZZZZZ";
 
 /**
@@ -48,7 +48,7 @@ const PROBES: { permission: string; method: string; path: string; body?: unknown
   { permission: "subscriptions:write", method: "DELETE", path: "/v1/subscriptions/unknown" },
   { permission: "members:read", method: "GET", path: "/v1/organization/members" },
   { permission: "members:invite", method: "POST", path: `/v1/organization/invitations/${UNKNOWN_INVITATION}/resend` },
-  { permission: "members:manage", method: "PUT", path: `/v1/organization/members/${UNKNOWN_USER}/grant`, body: { role: "reader" } },
+  { permission: "members:manage", method: "PUT", path: `/v1/organization/members/${UNKNOWN_MEMBER}/grant`, body: { role: "reader" } },
   { permission: "roles:read", method: "GET", path: "/v1/roles" },
   { permission: "roles:write", method: "DELETE", path: "/v1/roles/unknown-role" },
   { permission: "api_keys:read", method: "GET", path: "/v1/api-keys" },
@@ -227,7 +227,7 @@ test.describe("criterion 8: accounts, organizations and access", () => {
       // A run started with the key, in the organization, for one of its end users.
       const harness = new Rewind({ url: server.url, apiKey: key }).namespace("c8-user");
       const started = await harness.runs.start({
-        script: "export default async function main() { return { answer: 42 }; }",
+        code: "export default async function main() { return { answer: 42 }; }",
         labels: { suite: "c8" },
       });
       const run = await harness.runs.get(started.id, { wait: "60s" });

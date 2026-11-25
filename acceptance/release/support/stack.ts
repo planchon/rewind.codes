@@ -24,7 +24,7 @@ import { CONTROL_DATABASE, type Collector, Containers, type Minio, startCollecto
 import { rewindBinary } from "../../support/paths.js";
 import { eventually, freePort, Processes } from "../../support/processes.js";
 
-/** The tenant of the operator key of every setup. */
+/** The organization of the operator key of every setup. */
 export const OPERATOR_TENANT = "gate-operator";
 
 /** One `rewind server` process of a setup: a node, with its HTTP edge. */
@@ -47,7 +47,7 @@ export interface StackInfo {
   url: string;
   /** Each node's own HTTP edge, behind the setup's edge, in the order of `nodes`. */
   nodeUrls: string[];
-  /** The operator's key (`--admin-key`), tenant `gate-operator`. */
+  /** The operator's key (`--admin-key`), organization `gate-operator`. */
   operatorKey: string;
   /** Where the servers' logs are. */
   logDir: string;
@@ -115,7 +115,7 @@ export async function startDeployed(options: DeployedOptions): Promise<Stack> {
     postgresContainer = postgres.name;
     const operatorKey = `rewind_sk_${randomBytes(24).toString("hex")}`;
     const edgePort = await freePort();
-    // Clients and the webhooks scripts hand out reach the setup at its edge.
+    // Clients and the signal URLs workflows hand out reach the setup at its edge.
     const url = `http://127.0.0.1:${edgePort}`;
     const common = [
       "--store",

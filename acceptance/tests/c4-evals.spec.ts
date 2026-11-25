@@ -4,8 +4,8 @@
  *
  * Real models need API keys that are not available to this suite: the report is proven with
  * two scripted models, which replay turns from a file through the same harness (agent tools,
- * engine, fake MCP servers, checker). One gets the script right the first time; the other
- * submits a script that does not type-check, then fixes it. Run with real models, the same
+ * engine, fake MCP servers, checker). One gets the code right the first time; the other
+ * submits code that does not type-check, then fixes it. Run with real models, the same
  * command takes `--model claude-…` or `--model gpt-…` and their keys.
  */
 import { spawn } from "node:child_process";
@@ -23,10 +23,11 @@ export default async function main() {
 }
 `;
 
-/** A text where the tool takes a string: refused by the check. */
+/** A number where the action takes a string: refused by the check. */
 const WRONG = SOLUTION.replace('text: "Deploy freeze starts Friday 18:00 UTC"', "text: 18");
 
-const runScript = (code: string) => ({ calls: [{ name: "run_workflow", input: { code } }] });
+/** A scripted model's turn that runs `code` with the agent tool `run_workflow`. */
+const runCode = (code: string) => ({ calls: [{ name: "run_workflow", input: { code } }] });
 
 interface Summary {
   model: string;
@@ -46,8 +47,8 @@ test("criterion 4: the evals report per model and prompt rendering (scripted mod
   const dir = mkdtempSync(join(resultDir("c4-evals"), "run-"));
   const careful = join(dir, "careful.json");
   const hasty = join(dir, "hasty.json");
-  writeFileSync(careful, JSON.stringify([runScript(SOLUTION), { text: "Posted to #ops." }]));
-  writeFileSync(hasty, JSON.stringify([runScript(WRONG), runScript(SOLUTION), { text: "Posted to #ops." }]));
+  writeFileSync(careful, JSON.stringify([runCode(SOLUTION), { text: "Posted to #ops." }]));
+  writeFileSync(hasty, JSON.stringify([runCode(WRONG), runCode(SOLUTION), { text: "Posted to #ops." }]));
   const out = join(dir, "out");
 
   const ran = await finish(

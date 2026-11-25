@@ -78,7 +78,7 @@ export function flattenSpans(exports: unknown[]): SpanRecord[] {
   return spans;
 }
 
-/** The harness's own span: the LLM call that wrote a script, the parent of its run. */
+/** The harness's own span: the LLM call that wrote the code, the parent of its run. */
 export class HarnessSpan {
   readonly traceId = randomBytes(16).toString("hex");
   readonly spanId = randomBytes(8).toString("hex");

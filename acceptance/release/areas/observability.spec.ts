@@ -1,28 +1,28 @@
 /**
  * Observability (`archi/05-testing-and-observability.md`, "Observability"), on setup A: the read
- * model searched with the query language, statistics, failure groups, scripts, tool statistics,
- * payloads read on demand; one OpenTelemetry trace per run in the Collector; lifecycle webhooks
- * signed with Standard Webhooks, and `quota.alert`. The attacks: the query language as an
- * injection vector, logs and payloads kept out of text search, forged deliveries, and a payload
- * read through a run that does not hold it.
+ * model searched with the query language, statistics, fingerprints, workflows, action statistics,
+ * payloads read on demand; one OpenTelemetry trace per run in the Collector; webhooks signed with
+ * Standard Webhooks, and `quota.alert`. The attacks: the query language as an injection vector,
+ * logs and payloads kept out of text search, forged webhooks, and a payload read through a run
+ * that does not hold it.
  */
 import { createHash } from "node:crypto";
 import { verifyWebhook } from "@rewind.codes/sdk";
 import { flattenSpans, HarnessSpan, parseTraceparent } from "../../support/otlp.js";
 import { eventually } from "../../support/processes.js";
 import { type McpFixture, startMcpFixture, startWebhookReceiver, type WebhookReceiver } from "../support/fixtures.js";
-import { evidence, expect, expectOk, expectProblem, expectRefused, newTenant, stacks, type Tenant, test, unique } from "../support/gate.js";
+import { evidence, expect, expectOk, expectProblem, expectRefused, newOrg, stacks, type Org, test, unique } from "../support/gate.js";
 import { ended, startRun, waitingCall } from "../support/actions-helpers.js";
 import { readFileSync, existsSync } from "node:fs";
 
-let t: Tenant;
+let t: Org;
 let mcp: McpFixture;
 let receiver: WebhookReceiver;
 let secret: string;
 let actionSet: string;
 
 test.beforeAll(async () => {
-  [t, mcp, receiver] = await Promise.all([newTenant("observability"), startMcpFixture(), startWebhookReceiver()]);
+  [t, mcp, receiver] = await Promise.all([newOrg("observability"), startMcpFixture(), startWebhookReceiver()]);
   const subscription = await t.api.post("/v1/subscriptions", { url: receiver.url });
   expectOk(subscription, 201);
   secret = subscription.json.secret;
@@ -37,7 +37,7 @@ test.afterAll(async () => {
 
 const alice = () => t.api.ns("alice");
 
-const SCRIPTS = {
+const CODE = {
   lookup: `import { fx } from "rewind:actions";
 
 export default async function main() {
@@ -54,7 +54,7 @@ export default async function main() {
   return await signal<{ ok: boolean }>("approval");
 }
 `,
-  toolFails: `import { fx } from "rewind:actions";
+  actionFails: `import { fx } from "rewind:actions";
 
 export default async function main() {
   await fx.fail({ reason: "denied" });
@@ -74,14 +74,14 @@ async function query(q: string, extra: Record<string, string | string[]> = {}): 
  * waits until their summaries have them settled.
  */
 async function corpus(c: string, namespace = "alice") {
-  const start = (script: string, labels: Record<string, string>) => startRun(t.api.ns(namespace), { actionSet, code: script, labels: { case: c, ...labels } });
-  const [completed, rateLimited, waiting, toolFails] = await Promise.all([
-    start(SCRIPTS.lookup, { agent: "triage" }),
-    start(SCRIPTS.rateLimited, { agent: "billing" }),
-    start(SCRIPTS.waiting, { agent: "triage" }),
-    start(SCRIPTS.toolFails, { agent: "support-bot" }),
+  const start = (code: string, labels: Record<string, string>) => startRun(t.api.ns(namespace), { actionSet, code, labels: { case: c, ...labels } });
+  const [completed, rateLimited, waiting, actionFails] = await Promise.all([
+    start(CODE.lookup, { agent: "triage" }),
+    start(CODE.rateLimited, { agent: "billing" }),
+    start(CODE.waiting, { agent: "triage" }),
+    start(CODE.actionFails, { agent: "support-bot" }),
   ]);
-  const ids = { completed: completed.id as string, rateLimited: rateLimited.id as string, waiting: waiting.id as string, toolFails: toolFails.id as string };
+  const ids = { completed: completed.id as string, rateLimited: rateLimited.id as string, waiting: waiting.id as string, actionFails: actionFails.id as string };
   await eventually(
     "the read model has every run settled",
     async () => {
@@ -91,8 +91,8 @@ async function corpus(c: string, namespace = "alice") {
       const settled =
         status[ids.completed] === "completed" &&
         status[ids.rateLimited] === "failed" &&
-        status[ids.toolFails] === "failed" &&
-        status[ids.waiting] === "active" &&
+        status[ids.actionFails] === "failed" &&
+        status[ids.waiting] === "waiting" &&
         (await query(`@case:${c} waiting:signal`)).length === 1;
       return settled ? true : undefined;
     },
@@ -105,7 +105,7 @@ async function corpus(c: string, namespace = "alice") {
 // ---------------------------------------------------------------------------------------------
 // Success
 
-test("the query language finds runs by label, status, tool, error, wait and text", { tag: "@success" }, async () => {
+test("the query language finds runs by label, status, action, error, wait and text", { tag: "@success" }, async () => {
   const c = unique("q");
   const r = await corpus(c);
   const all = Object.values(r).sort();
@@ -116,14 +116,15 @@ test("the query language finds runs by label, status, tool, error, wait and text
     [`@case:${c} @agent:tri*`, sorted(r.completed, r.waiting)],
     [`@case:${c} @agent:*`, all],
     [`@case:${c} @agent:triage,billing`, sorted(r.completed, r.waiting, r.rateLimited)],
-    [`@case:${c} status:failed`, sorted(r.rateLimited, r.toolFails)],
+    [`@case:${c} status:failed`, sorted(r.rateLimited, r.actionFails)],
     [`@case:${c} -status:failed`, sorted(r.completed, r.waiting)],
     [`@case:${c} status:completed,active`, sorted(r.completed, r.waiting)],
+    [`@case:${c} status:waiting`, [r.waiting]],
     [`@case:${c} action:fx.lookup`, [r.completed]],
-    [`@case:${c} action:fx.*`, sorted(r.completed, r.toolFails)],
-    [`@case:${c} error:ActionError`, [r.toolFails]],
+    [`@case:${c} action:fx.*`, sorted(r.completed, r.actionFails)],
+    [`@case:${c} error:ActionError`, [r.actionFails]],
     [`@case:${c} error:Error`, [r.rateLimited]],
-    [`@case:${c} error:error`, [r.toolFails]],
+    [`@case:${c} error:error`, [r.actionFails]],
     [`@case:${c} waiting:signal`, [r.waiting]],
     [`@case:${c} waiting:*`, [r.waiting]],
     [`@case:${c} signal:approval`, [r.waiting]],
@@ -131,8 +132,8 @@ test("the query language finds runs by label, status, tool, error, wait and text
     [`@case:${c} rate`, [r.rateLimited]],
     [`@case:${c} namespace:alice`, all],
     [`@case:${c} namespace:bob`, []],
-    [`@case:${c} calls:>=1`, sorted(r.completed, r.toolFails)],
-    [`@case:${c} errors:>0`, [r.toolFails]],
+    [`@case:${c} calls:>=1`, sorted(r.completed, r.actionFails)],
+    [`@case:${c} errors:>0`, [r.actionFails]],
     [`@case:${c} id:${r.waiting}`, [r.waiting]],
     [`@case:${c} started:>now-1h`, all],
     [`@case:${c} started:<now-1h`, []],
@@ -143,12 +144,12 @@ test("the query language finds runs by label, status, tool, error, wait and text
   // The same filters as parameters.
   expect(await query(`@case:${c}`, { label: ["agent:triage"], status: "failed" })).toEqual([]);
   expect(await query(`@case:${c}`, { action: "fx.lookup" })).toEqual([r.completed]);
-  expect(await query(`@case:${c}`, { error: "ActionError" })).toEqual([r.toolFails]);
+  expect(await query(`@case:${c}`, { error: "ActionError" })).toEqual([r.actionFails]);
   evidence(`${cases.length} queries answered exactly`);
 });
 
 test("statistics count the runs of a namespace, by status and by wait", { tag: "@success" }, async () => {
-  // Statistics come from the hourly counters of one namespace or the tenant: a namespace of its
+  // Statistics come from the hourly counters of one namespace or the organization: a namespace of its
   // own holds the case's runs alone.
   const c = unique("s");
   const namespace = `stats-${c}`;
@@ -156,7 +157,7 @@ test("statistics count the runs of a namespace, by status and by wait", { tag: "
   const reply = await t.api.get("/v1/runs/stats", { query: { q: `namespace:${namespace}` } });
   expectOk(reply);
   expect(reply.json.runs).toBe(4);
-  expect(reply.json.statuses).toMatchObject({ completed: 1, failed: 2, active: 1, cancelled: 0, aborted: 0 });
+  expect(reply.json.statuses).toMatchObject({ completed: 1, failed: 2, queued: 0, running: 0, waiting: 1, cancelled: 0, aborted: 0 });
   expect(reply.json.waiting.signal).toBe(1);
   // The same scope named by the header.
   const header = await t.api.ns(namespace).get("/v1/runs/stats");
@@ -164,16 +165,16 @@ test("statistics count the runs of a namespace, by status and by wait", { tag: "
   expect(header.json.runs).toBe(4);
 });
 
-test("failures are grouped by fingerprint, numbers and quoted strings set aside", { tag: "@success" }, async () => {
+test("failures share a fingerprint when they differ only by numbers and quoted strings", { tag: "@success" }, async () => {
   const c = unique("f");
   const namespace = `failures-${c}`;
   const own = t.api.ns(namespace);
   const fail = (order: number, quoted: string) =>
     startRun(own, { code: `export default async function main() {\n  throw new Error('order ${order} of "${quoted}" not found');\n}\n`, labels: { case: c } });
-  const runs = await Promise.all([fail(1234, "ada"), fail(99, "grace"), startRun(own, { code: SCRIPTS.rateLimited, labels: { case: c } })]);
+  const runs = await Promise.all([fail(1234, "ada"), fail(99, "grace"), startRun(own, { code: CODE.rateLimited, labels: { case: c } })]);
   for (const run of runs) await ended(own, run.id);
-  const groups = await eventually(
-    "the failures are grouped",
+  const page = await eventually(
+    "the failures have their fingerprints",
     async () => {
       const reply = await t.api.get("/v1/runs/failures", { query: { q: `namespace:${namespace}` } });
       expectOk(reply);
@@ -181,8 +182,8 @@ test("failures are grouped by fingerprint, numbers and quoted strings set aside"
     },
     60_000,
   );
-  expect(groups.totalFingerprints).toBe(2);
-  const orders = groups.fingerprints.find((g: any) => g.runs === 2);
+  expect(page.totalFingerprints).toBe(2);
+  const orders = page.fingerprints.find((f: any) => f.runs === 2);
   expect(orders.error).toBe("Error");
   expect(orders.signature).toContain("<n>");
   expect(orders.signature).not.toContain("1234");
@@ -225,7 +226,7 @@ test("a code's runs are runs of one workflow, listed with its runs and actions, 
 
 test("a workflow shows the comment at the top of its code; named, its runs take its name", { tag: "@success" }, async () => {
   const c = unique("ti");
-  const own = t.api.ns(`titles-${c}`);
+  const own = t.api.ns(`names-${c}`);
   const source = `// Look up ${c}\nimport { fx } from "rewind:actions";\nexport default async function main() {\n  return (await fx.lookup({ id: "1" })).tier;\n}\n`;
   const run = await startRun(own, { actionSet, code: source, labels: { case: c } });
   expect((await ended(own, run.id)).status).toBe("completed");
@@ -254,7 +255,7 @@ test("a workflow shows the comment at the top of its code; named, its runs take 
 
 test("a name or a description out of bounds is refused as invalid-workflow", { tag: "@failure" }, async () => {
   const c = unique("tb");
-  const own = t.api.ns(`titles-${c}`);
+  const own = t.api.ns(`names-${c}`);
   const source = `import { fx } from "rewind:actions";\n// ${c}\nexport default async function main() {\n  return (await fx.lookup({ id: "1" })).tier;\n}\n`;
   const run = await startRun(own, { actionSet, code: source });
   expect((await ended(own, run.id)).status).toBe("completed");
@@ -268,12 +269,12 @@ test("a name or a description out of bounds is refused as invalid-workflow", { t
   expect(read.json.description ?? null).toBeNull();
 });
 
-test("tool statistics count each tool's calls, errors and their kinds", { tag: "@success" }, async () => {
+test("action statistics count each action's calls, errors and their kinds", { tag: "@success" }, async () => {
   const server = await startMcpFixture();
   try {
     const own = await t.api.post("/v1/action-sets", { mcp: [{ name: "st", url: server.url }] });
     expectOk(own);
-    const script = `import { st } from "rewind:actions";
+    const code = `import { st } from "rewind:actions";
 import { ActionError } from "rewind";
 
 export default async function main() {
@@ -284,10 +285,10 @@ export default async function main() {
   return "done";
 }
 `;
-    const run = await startRun(alice(), { actionSet: own.json.id, code: script });
+    const run = await startRun(alice(), { actionSet: own.json.id, code });
     expect((await ended(alice(), run.id)).status).toBe("completed");
     const stats = await eventually(
-      "the tool statistics count the calls",
+      "the action statistics count the calls",
       async () => {
         // Per action, filtered by their group: counters keep no action set.
         const reply = await t.api.get("/v1/actions/stats", { query: { group: "st" } });
@@ -320,7 +321,7 @@ test("each run is one trace in the Collector, under the harness's span", { tag: 
   const collector = stacks().a.collector;
   expect(collector, "setup A has a Collector").toBeDefined();
   const harness = new HarnessSpan(`chat ${unique()}`);
-  const script = `import { fx } from "rewind:actions";
+  const code = `import { fx } from "rewind:actions";
 import { sleep } from "rewind";
 
 export default async function main() {
@@ -330,7 +331,7 @@ export default async function main() {
   return customer.tier;
 }
 `;
-  const run = await startRun(alice(), { actionSet, code: script, traceparent: harness.traceparent });
+  const run = await startRun(alice(), { actionSet, code, traceparent: harness.traceparent });
   expect(run.traceId).toBe(harness.traceId);
   expect((await ended(alice(), run.id)).status).toBe("completed");
   const mine = await eventually(
@@ -359,11 +360,11 @@ export default async function main() {
   evidence(`${mine.length} spans in trace ${harness.traceId}: ${[...new Set(mine.map((s) => s.name))].join(", ")}`);
 });
 
-test("lifecycle webhooks arrive signed: completed, failed, waiting and cancelled", { tag: "@success" }, async () => {
+test("webhooks arrive signed: completed, failed, waiting and cancelled", { tag: "@success" }, async () => {
   const c = unique("w");
   const completed = await startRun(alice(), { code: `export default async function main() { return 1; }\n`, labels: { case: c } });
-  const failed = await startRun(alice(), { code: SCRIPTS.rateLimited, labels: { case: c } });
-  const waiting = await startRun(alice(), { code: SCRIPTS.waiting, labels: { case: c } });
+  const failed = await startRun(alice(), { code: CODE.rateLimited, labels: { case: c } });
+  const waiting = await startRun(alice(), { code: CODE.waiting, labels: { case: c } });
   await ended(alice(), completed.id);
   await ended(alice(), failed.id);
   await eventually("the run waits", async () => ((await alice().get(`/v1/runs/${waiting.id}`)).json.waitingFor?.length ? true : undefined));
@@ -376,11 +377,11 @@ test("lifecycle webhooks arrive signed: completed, failed, waiting and cancelled
     ["run.cancelled", waiting.id],
   ];
   const got = await eventually(
-    "every lifecycle event is delivered",
+    "every webhook arrives",
     () => {
-      const found = expected.map(([type, id]) => receiver.deliveries.find((d) => {
-        const event = JSON.parse(d.body);
-        return event.type === type && event.data?.run?.id === id;
+      const found = expected.map(([type, id]) => receiver.received.find((d) => {
+        const webhook = JSON.parse(d.body);
+        return webhook.type === type && webhook.data?.run?.id === id;
       }));
       return found.every(Boolean) ? found : undefined;
     },
@@ -388,14 +389,14 @@ test("lifecycle webhooks arrive signed: completed, failed, waiting and cancelled
     250,
   );
   const ids = new Set<string>();
-  for (const delivery of got) {
-    const event = verifyWebhook(delivery!.body, delivery!.headers as never, secret);
-    expect((event as any).data.run.namespace).toBe("alice");
-    expect((event as any).data.run.labels).toEqual({ case: c });
-    expect(delivery!.headers["webhook-signature"]).toMatch(/^v1,/);
-    ids.add(delivery!.headers["webhook-id"]!);
+  for (const received of got) {
+    const webhook = verifyWebhook(received!.body, received!.headers as never, secret);
+    expect((webhook as any).data.run.namespace).toBe("alice");
+    expect((webhook as any).data.run.labels).toEqual({ case: c });
+    expect(received!.headers["webhook-signature"]).toMatch(/^v1,/);
+    ids.add(received!.headers["webhook-id"]!);
   }
-  expect(ids.size, "each delivery has its own webhook-id").toBe(4);
+  expect(ids.size, "each webhook has its own webhook-id").toBe(4);
 });
 
 test("quota.alert is sent when a namespace crosses 80 % and 100 % of its runs per month, not before", { tag: "@success" }, async () => {
@@ -416,17 +417,17 @@ test("quota.alert is sent when a namespace crosses 80 % and 100 % of its runs pe
   // The fourth crosses 80 % and 100 % at once.
   await one(4);
   const alert = await eventually(
-    "quota.alert at 100 % is delivered",
+    "quota.alert at 100 % arrives",
     () =>
-      receiver.deliveries.find((d) => {
-        const event = JSON.parse(d.body);
-        return event.type === "quota.alert" && event.data?.namespace === namespace && event.data?.threshold === 100;
+      receiver.received.find((d) => {
+        const webhook = JSON.parse(d.body);
+        return webhook.type === "quota.alert" && webhook.data?.namespace === namespace && webhook.data?.threshold === 100;
       }),
     90_000,
     250,
   );
-  const event = verifyWebhook(alert.body, alert.headers as never, secret) as any;
-  expect(event.data).toMatchObject({ namespace, quota: "runs_per_month", threshold: 100, used: 4, limit: 4 });
+  const webhook = verifyWebhook(alert.body, alert.headers as never, secret) as any;
+  expect(webhook.data).toMatchObject({ namespace, quota: "runs_per_month", threshold: 100, used: 4, limit: 4 });
   expect(await alerts()).toEqual([
     ["runs_per_month", 100],
     ["runs_per_month", 80],
@@ -482,7 +483,7 @@ test("the query language is no injection vector: SQL and wildcards are text", { 
   const r = await corpus(c);
   const all = Object.values(r).sort();
   const scoped = (q: string) => query(`@case:${c} ${q}`);
-  const attempts: [string, string[]][] = [
+  const injections: [string, string[]][] = [
     [`"'; DROP TABLE run_summaries; --"`, []],
     [`"' OR '1'='1"`, []],
     [`@agent:%`, []],
@@ -495,7 +496,7 @@ test("the query language is no injection vector: SQL and wildcards are text", { 
     [`"\\"; SELECT 1; --"`, []],
   ];
   const seen: string[] = [];
-  for (const [q, expected] of attempts) {
+  for (const [q, expected] of injections) {
     const reply = await t.api.get("/v1/runs", { query: { q: `@case:${c} ${q}`, limit: 100 } });
     if (reply.status === 400) {
       expectProblem(reply, 400, "invalid-query");
@@ -530,13 +531,13 @@ test("logs and payloads are never searched", { tag: "@attack" }, async () => {
   evidence(`a value logged and returned by a run: no run matches "${needle}"`);
 });
 
-test("a forged or replayed delivery fails verification", { tag: "@attack" }, async () => {
+test("a forged or replayed webhook fails verification", { tag: "@attack" }, async () => {
   const run = await startRun(alice(), { code: `export default async function main() { return "signed"; }\n` });
   await ended(alice(), run.id);
-  const delivery = await eventually("run.completed is delivered", () =>
-    receiver.deliveries.find((d) => {
-      const event = JSON.parse(d.body);
-      return event.type === "run.completed" && event.data?.run?.id === run.id;
+  const delivery = await eventually("run.completed arrives", () =>
+    receiver.received.find((d) => {
+      const webhook = JSON.parse(d.body);
+      return webhook.type === "run.completed" && webhook.data?.run?.id === run.id;
     }),
   );
   expect(() => verifyWebhook(delivery.body, delivery.headers as never, secret)).not.toThrow();

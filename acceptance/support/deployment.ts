@@ -15,7 +15,7 @@ export interface Deployment {
   url: string;
   /** Every node's URL, in the order of `nodes`: each answers every route. */
   urls: string[];
-  /** The admin key, `--admin-key`, of the tenant `acme`. */
+  /** The admin key, `--admin-key`, of the organization `acme`. */
   adminKey: string;
   admin: Rewind;
   minio: Minio;

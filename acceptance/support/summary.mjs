@@ -10,13 +10,13 @@ import { join } from "node:path";
 
 const [results, ...selected] = process.argv.slice(2);
 const CRITERIA = {
-  1: "A harness drives runs through the SDK, with several nodes on one Postgres; one trace per run under the harness's span; runs searched by label and tool",
-  2: "Locally, run, signal, replay and trace across processes; a forgotten await, an unhandled rejection and a deadlock end as specified",
-  3: "A script calls a real MCP server, with types checked beforehand",
+  1: "A harness drives runs through the SDK, with several nodes on one Postgres and one bucket; one trace per run under the harness's span; runs searched by label and action",
+  2: "Locally, run, signal, replay and transcript across processes; a forgotten await, an unhandled rejection and a deadlock end as specified",
+  3: "A workflow calls a real MCP server, with types checked beforehand",
   4: "The evals report, per model and prompt rendering, first-try check pass rate, task success, iterations and tokens",
-  5: "rewind test replays a recorded real run as a scenario; rewind fork continues a failed run without repeating its calls",
+  5: "rewind test replays a recorded real run as a test; rewind fork continues a failed run with corrected code without repeating its calls",
   6: "Load tests and limit tests pass",
-  7: "An operator finds any run by label, tool or error in the dashboard, and sees its code next to its trace",
+  7: "An operator finds any run by label, action or error in the dashboard, and sees its code next to its history",
   8: "Someone signs in to the dashboard with a code by email, creates an organization, invites a member with a role, and creates an API key; each endpoint refuses a caller without its permission",
 };
 

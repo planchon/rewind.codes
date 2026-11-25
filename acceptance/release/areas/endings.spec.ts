@@ -1,44 +1,45 @@
 /**
- * Area "Endings and limits" of the release gate, on setup A (deployed): how a script ends
+ * Area "Endings and limits" of the release gate, on setup A (deployed): how a run ends
  * (`archi/03-execution.md`, "How a run ends", "Cancellation") and the resource limits that
- * bound a hostile or careless script ("Resource limits"): CPU per call into the script, heap,
+ * bound hostile or careless code ("Resource limits"): CPU per call into the code, heap,
  * array buffers, commands and bytes per activation, payload sizes. Every limit attack ends with a
- * canary run, so a script that ends a worker shows here.
+ * canary run, so code that takes a node down shows here.
  */
 import { type McpFixture, startMcpFixture } from "../support/fixtures.js";
-import { type Api, evidence, expect, expectHealthy, expectOk, newTenant, type Tenant, test, unique } from "../support/gate.js";
+import { type Api, evidence, expect, expectHealthy, expectOk, newOrg, type Org, test, unique } from "../support/gate.js";
 import { ended, events, expectFailed, expectLimit, started, waitingFor } from "../support/runs-helpers.js";
 
-let tenant: Tenant;
+let org: Org;
 let mcp: McpFixture;
 let actionSet: string;
 let api: Api;
 
 test.beforeAll(async () => {
-  tenant = await newTenant("endings");
+  org = await newOrg("endings");
   mcp = await startMcpFixture();
-  const created = await tenant.api.post("/v1/action-sets", { mcp: [{ name: "fx", url: mcp.url }] });
+  const created = await org.api.post("/v1/action-sets", { mcp: [{ name: "fx", url: mcp.url }] });
   expectOk(created);
   actionSet = created.json.id;
-  api = tenant.api.ns("endings");
+  api = org.api.ns("endings");
 });
 
 test.afterAll(async () => {
   await mcp?.close();
 });
 
-/** Starts a script (type-checked unless `check: false`) and waits for its end. */
-async function runToEnd(script: string, options: { check?: boolean; input?: unknown; timeoutMs?: number } = {}) {
-  const run = await started(api, { actionSet, code: script, input: options.input ?? {}, check: options.check });
+/** Starts a run of `code` (type-checked unless `check: false`) and waits for its end. */
+async function runToEnd(code: string, options: { check?: boolean; input?: unknown; timeoutMs?: number } = {}) {
+  const run = await started(api, { actionSet, code, input: options.input ?? {}, check: options.check });
   return ended(api, run.id, options.timeoutMs ?? 90_000);
 }
 
+/** The calls of the fixture's MCP tool `echo` with `text`. */
 const echoes = (text: string) => mcp.calls.filter((c) => c.tool === "echo" && c.args.text === text);
 
 // ---------------------------------------------------------------------------------------------
 // Success
 
-test("main's return value is the output, and a ActionError the script catches lets it go on", { tag: "@success" }, async () => {
+test("main's return value is the output, and an ActionError the code catches lets it go on", { tag: "@success" }, async () => {
   const run = await runToEnd(`import { fx } from "rewind:actions";
 import { ActionError } from "rewind";
 export default async function main() {
@@ -77,7 +78,7 @@ export default async function main() {
   expect(types.indexOf("complete_run")).toBeGreaterThan(types.lastIndexOf("call_completed"));
 });
 
-test("a script that catches its CancelledError cleans up within its grace and completes", { tag: "@success" }, async () => {
+test("a run whose code catches its CancelledError cleans up within its grace and completes", { tag: "@success" }, async () => {
   const run = await started(api, {
     code: `import { sleep, CancelledError } from "rewind";
 export default async function main() {
@@ -173,7 +174,7 @@ export default async function main() {
   expect(types.at(-1)).toBe("fail_run");
 });
 
-test("a script nothing can wake fails with DeadlockError", { tag: "@failure" }, async () => {
+test("code nothing can wake fails with DeadlockError", { tag: "@failure" }, async () => {
   const run = await runToEnd(`export default async function main() {
   await new Promise(() => {}); // nothing can ever resolve it
 }
@@ -182,7 +183,7 @@ test("a script nothing can wake fails with DeadlockError", { tag: "@failure" }, 
   expect(await events(api, run.id)).toEqual(["run_started", "fail_run"]);
 });
 
-test("a run whose script fails waits for the call in flight, and records its outcome", { tag: "@failure" }, async () => {
+test("a run whose code fails waits for the call in flight, and records its outcome", { tag: "@failure" }, async () => {
   const run = await runToEnd(
     `import { fx } from "rewind:actions";
 export default async function main() {
@@ -240,7 +241,7 @@ test("an output above 8 MiB aborts the run with limit_exceeded, and nothing abov
   expect(await events(api, run.id)).toEqual(["run_started", "run_aborted"]);
 });
 
-test("tool arguments above 8 MiB abort the run before the call is sent", { tag: "@failure" }, async () => {
+test("a call's arguments above 8 MiB abort the run before the call is sent", { tag: "@failure" }, async () => {
   const before = mcp.calls.length;
   const run = await runToEnd(`import { fx } from "rewind:actions";
 export default async function main() {
@@ -253,13 +254,13 @@ export default async function main() {
 });
 
 // ---------------------------------------------------------------------------------------------
-// Attacks: exhaustion. The run ends; both workers keep serving.
+// Attacks: exhaustion. The run ends; both nodes keep serving.
 
-test("an infinite loop in main is stopped after 5 s of CPU, and the workers keep serving", { tag: "@attack" }, async () => {
+test("an infinite loop in main is stopped after 5 s of CPU, and the nodes keep serving", { tag: "@attack" }, async () => {
   const run = await runToEnd(`export default async function main() { for (;;) {} }\n`);
   expectLimit(run, "more than 5000ms of CPU time reacting to one trigger");
   expect(await events(api, run.id)).toEqual(["run_started", "run_aborted"]);
-  await expectHealthy(tenant);
+  await expectHealthy(org);
   evidence(`aborted: ${run.abort.message}`);
 });
 
@@ -272,7 +273,7 @@ export default async function main() {
 `);
   expectLimit(run, "more than 5000ms of CPU time");
   expect(await events(api, run.id)).toEqual(["run_started", "start_timer", "timer_fired", "run_aborted"]);
-  await expectHealthy(tenant);
+  await expectHealthy(org);
 });
 
 test("catastrophic regex backtracking is stopped by the CPU limit", { tag: "@attack" }, async () => {
@@ -281,7 +282,7 @@ test("catastrophic regex backtracking is stopped by the CPU limit", { tag: "@att
 }
 `);
   expectLimit(run, "more than 5000ms of CPU time");
-  await expectHealthy(tenant);
+  await expectHealthy(org);
 });
 
 test("a heap bomb is stopped at 128 MiB of heap", { tag: "@attack" }, async () => {
@@ -292,7 +293,7 @@ test("a heap bomb is stopped at 128 MiB of heap", { tag: "@attack" }, async () =
 `);
   expectLimit(run, "more than 128 MiB of heap");
   expect(await events(api, run.id)).toEqual(["run_started", "run_aborted"]);
-  await expectHealthy(tenant);
+  await expectHealthy(org);
 });
 
 test("built-ins asked for more than the heap holds end at once: a huge fill, a huge string", { tag: "@attack" }, async () => {
@@ -308,7 +309,7 @@ test("built-ins asked for more than the heap holds end at once: a huge fill, a h
 }
 `);
   expectLimit(text, "more than 128 MiB of heap");
-  await expectHealthy(tenant);
+  await expectHealthy(org);
 });
 
 test("array buffers past their budget throw a catchable RangeError, resizable ones included", { tag: "@attack" }, async () => {
@@ -336,7 +337,7 @@ test("array buffers past their budget throw a catchable RangeError, resizable on
   expect(caught.output.value.kept).toBeLessThanOrEqual(8);
   const uncaught = await runToEnd(`export default async function main() { return new ArrayBuffer(2 ** 36).byteLength; }\n`);
   expectFailed(uncaught, "RangeError", "Array buffer allocation failed");
-  await expectHealthy(tenant);
+  await expectHealthy(org);
 });
 
 test("10,001 timers in one activation exceed the commands' bound, and none is started", { tag: "@attack" }, async () => {
@@ -348,10 +349,10 @@ export default async function main() {
   expectLimit(run, "more than 10000 commands in one activation");
   expect(await events(api, run.id)).toEqual(["run_started", "run_aborted"]);
   expect(run.waitingFor ?? []).toEqual([]);
-  await expectHealthy(tenant);
+  await expectHealthy(org);
 });
 
-test("infinite recursion throws a RangeError the script could catch, and nothing else breaks", { tag: "@attack" }, async () => {
+test("infinite recursion throws a RangeError the code could catch, and nothing else breaks", { tag: "@attack" }, async () => {
   const run = await runToEnd(`function deeper(n: number): number {
   return deeper(n + 1) + 1;
 }
@@ -360,7 +361,7 @@ export default async function main() {
 }
 `);
   expectFailed(run, "RangeError", "Maximum call stack size exceeded");
-  await expectHealthy(tenant);
+  await expectHealthy(org);
 });
 
 test("logs past 64 MiB in one activation abort the run, and none of them is recorded", { tag: "@attack" }, async () => {
@@ -372,5 +373,5 @@ test("logs past 64 MiB in one activation abort the run, and none of them is reco
   expectLimit(run, "emitted more than 64 MiB of commands and logs reacting to one trigger");
   expect(await events(api, run.id)).toEqual(["run_started", "run_aborted"]);
   expect(run.logs ?? []).toEqual([]);
-  await expectHealthy(tenant);
+  await expectHealthy(org);
 });

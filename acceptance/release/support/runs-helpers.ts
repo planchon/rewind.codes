@@ -56,7 +56,7 @@ export async function waitingFor(api: Api, id: string, kind: string, name?: stri
 }
 
 /** The run's export (`GET /v1/runs/{id}/export`). */
-export async function journal(api: Api, id: string): Promise<any> {
+export async function runExport(api: Api, id: string): Promise<any> {
   const reply = await api.get(`/v1/runs/${id}/export`);
   expectOk(reply, 200);
   return reply.json;
@@ -64,7 +64,7 @@ export async function journal(api: Api, id: string): Promise<any> {
 
 /** The `type` of each event of the run's history. */
 export async function events(api: Api, id: string): Promise<string[]> {
-  return (await journal(api, id)).events.map((event: any) => event.event.type);
+  return (await runExport(api, id)).events.map((event: any) => event.event.type);
 }
 
 /** Asserts a run was aborted for a limit, with `message` in its reason. */

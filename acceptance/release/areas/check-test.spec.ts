@@ -11,17 +11,17 @@ import {
   expectOk,
   expectProblem,
   expectRefused,
-  newTenant,
+  newOrg,
   stacks,
-  type Tenant,
+  type Org,
   test,
 } from "../support/gate.js";
 import { runIds, startRun } from "../support/runs-helpers.js";
 
-let tenant: Tenant;
+let org: Org;
 let api: Api;
 let actionSet: string;
-/** The tenant on setup B, for `/v1/test`. */
+/** The organization on setup B, for `/v1/test`. */
 let tested: Api;
 let testedActionSet: string;
 
@@ -40,7 +40,7 @@ const ACTION_SET = {
   ],
 };
 
-const SCENARIO_SCRIPT = `import { crm } from "rewind:actions";
+const SCENARIO_CODE = `import { crm } from "rewind:actions";
 import { signal, sleep } from "rewind";
 
 export default async function main(input: { email: string }) {
@@ -53,13 +53,13 @@ export default async function main(input: { email: string }) {
 `;
 
 test.beforeAll(async () => {
-  tenant = await newTenant("check-test");
-  api = tenant.api.ns("checks");
-  const created = await tenant.api.post("/v1/action-sets", ACTION_SET);
+  org = await newOrg("check-test");
+  api = org.api.ns("checks");
+  const created = await org.api.post("/v1/action-sets", ACTION_SET);
   expectOk(created);
   actionSet = created.json.id;
 
-  const onB = await newTenant("check-test", stacks().b);
+  const onB = await newOrg("check-test", stacks().b);
   tested = onB.api.ns("tests");
   const createdB = await onB.api.post("/v1/action-sets", ACTION_SET);
   expectOk(createdB);
@@ -67,12 +67,12 @@ test.beforeAll(async () => {
 });
 
 /** `POST /v1/check`. */
-const check = (as: Api, script: string, withActionSet = actionSet) => as.post("/v1/check", { code: script, actionSet: withActionSet });
+const check = (as: Api, code: string, withActionSet = actionSet) => as.post("/v1/check", { code, actionSet: withActionSet });
 
 // ---------------------------------------------------------------------------------------------
 // Success
 
-test("a correct script checks clean against its actionSet", { tag: "@success" }, async () => {
+test("correct code checks clean against its action set", { tag: "@success" }, async () => {
   const reply = await check(
     api,
     `import { crm } from "rewind:actions";
@@ -87,10 +87,10 @@ export default async function main(input: { email: string }) {
   expect(reply.json.diagnostics.filter((d: any) => d.severity === "error")).toEqual([]);
 });
 
-test("a test runs as a test run in virtual time: a 10-day sleep, a signal, a tool's answer", { tag: "@success" }, async () => {
+test("a test runs as a test run in virtual time: a 10-day sleep, a signal, an action's answer", { tag: "@success" }, async () => {
   const started = Date.now();
   const reply = await tested.post("/v1/test", {
-    code: SCENARIO_SCRIPT,
+    code: SCENARIO_CODE,
     actionSet: testedActionSet,
     tests: [
       {
@@ -119,7 +119,7 @@ test("a test runs as a test run in virtual time: a 10-day sleep, a signal, a too
 
 test("a test's TypeScript handlers answer the calls", { tag: "@success" }, async () => {
   const reply = await tested.post("/v1/test", {
-    code: SCENARIO_SCRIPT,
+    code: SCENARIO_CODE,
     actionSet: testedActionSet,
     tests: [
       {
@@ -199,7 +199,7 @@ export default async function main() {
   expect(await runIds(api)).toEqual(before);
 });
 
-test("the checks at start refuse what cannot run even unchecked: a syntax error, no default export, a tool not in the actionSet", { tag: "@failure" }, async () => {
+test("the checks at start refuse what cannot run even unchecked: a syntax error, no default export, an action not in the action set", { tag: "@failure" }, async () => {
   const before = await runIds(api);
   const cases: [string, string][] = [
     ["export default async function main( {\n  return 1;\n}\n", "SyntaxError"],
@@ -207,8 +207,8 @@ test("the checks at start refuse what cannot run even unchecked: a syntax error,
     [`import { billing } from "rewind:actions";\nexport default async function main() { return billing.refund({}); }\n`, "no export named \"billing\""],
     [`export default 42;\n`, "export default` its main function"],
   ];
-  for (const [script, words] of cases) {
-    const reply = await startRun(api, { actionSet, code: script, check: false });
+  for (const [code, words] of cases) {
+    const reply = await startRun(api, { actionSet, code, check: false });
     expectProblem(reply, 422, "invalid-code");
     expect(reply.json.detail, reply.text).toContain(words);
   }
@@ -217,7 +217,7 @@ test("the checks at start refuse what cannot run even unchecked: a syntax error,
 
 test("a test whose expectations do not hold says which, in sentences", { tag: "@failure" }, async () => {
   const reply = await tested.post("/v1/test", {
-    code: SCENARIO_SCRIPT,
+    code: SCENARIO_CODE,
     actionSet: testedActionSet,
     tests: [
       {
@@ -244,7 +244,7 @@ test("on setup A, every node runs the tests itself", { tag: "@success" }, async 
   expect(nodeUrls.length).toBeGreaterThan(1);
   for (const url of nodeUrls) {
     // Each node directly, not through the edge.
-    const reply = await new Api(url, tenant.ownerKey).ns("checks").post("/v1/test", {
+    const reply = await new Api(url, org.ownerKey).ns("checks").post("/v1/test", {
       code: "export default async function main(input: { n: number }) { return input.n + 1; }\n",
       tests: [{ name: "adds one", input: { n: 41 }, expect: { status: "completed", output: 42 } }],
     });
@@ -255,14 +255,14 @@ test("on setup A, every node runs the tests itself", { tag: "@success" }, async 
 });
 
 test("checking or testing without Rewind-Namespace is 400", { tag: "@failure" }, async () => {
-  expectProblem(await tenant.api.post("/v1/check", { code: "export default async function main() {}\n" }), 400, "invalid-request");
-  expectProblem(await tenant.api.post("/v1/test", { code: "export default async function main() {}\n" }), 400, "invalid-request");
+  expectProblem(await org.api.post("/v1/check", { code: "export default async function main() {}\n" }), 400, "invalid-request");
+  expectProblem(await org.api.post("/v1/test", { code: "export default async function main() {}\n" }), 400, "invalid-request");
 });
 
 test("a namespace's maxCodeLines refuses longer code in check, test and start alike", { tag: "@failure" }, async () => {
   const long = `export default async function main() {\n  const a = 1;\n  const b = 2;\n  return a + b;\n}\n`;
   for (const [as, owner] of [
-    [api, tenant.api],
+    [api, org.api],
     [tested, undefined],
   ] as const) {
     const ownerApi = owner ?? new (await import("../support/gate.js")).Api(stacks().b.url, (as as Api).bearer);
@@ -274,7 +274,7 @@ test("a namespace's maxCodeLines refuses longer code in check, test and start al
   expect(checked.json.detail).toMatch(/lines/);
   expectProblem(await startRun(short, { code: long }), 422, "invalid-code");
   expectProblem(await tested.ns("short").post("/v1/test", { code: long }), 422, "invalid-code");
-  // The same script in a namespace without the exception is fine.
+  // The same code in a namespace without the exception is fine.
   expect((await api.post("/v1/check", { code: long })).json.ok).toBe(true);
 });
 
@@ -294,20 +294,20 @@ test("every way to load code from outside is refused before any run exists", { t
     `export default async function main() { const fs = require("fs"); return typeof fs; }\n`,
     `import { readFile } from "rewind";\nexport default async function main() { return typeof readFile; }\n`,
   ];
-  for (const script of sources) {
+  for (const code of sources) {
     const reply = await expectRefused({
-      attempt: () => startRun(api, { code: script, check: false }),
+      attempt: () => startRun(api, { code, check: false }),
       status: 422,
       slug: "invalid-code",
       probe: () => runIds(api),
     });
-    evidence(`${script.split("\n")[0]!.slice(0, 70)} → 422: ${String(reply.json.detail).slice(0, 120)}`);
+    evidence(`${code.split("\n")[0]!.slice(0, 70)} → 422: ${String(reply.json.detail).slice(0, 120)}`);
   }
 });
 
 test("handlers run in a sandbox of their own: no imports, no process, no network", { tag: "@attack" }, async () => {
   const imported = await tested.post("/v1/test", {
-    code: SCENARIO_SCRIPT,
+    code: SCENARIO_CODE,
     actionSet: testedActionSet,
     tests: [
       {
@@ -321,7 +321,7 @@ test("handlers run in a sandbox of their own: no imports, no process, no network
   expect(imported.json.tests[0].failures.join("\n")).toContain("the handlers cannot load");
 
   const probing = await tested.post("/v1/test", {
-    code: SCENARIO_SCRIPT,
+    code: SCENARIO_CODE,
     actionSet: testedActionSet,
     tests: [
       {

@@ -13,14 +13,14 @@ import {
   expectOk,
   expectProblem,
   expectRefused,
-  newTenant,
-  type Tenant,
+  newOrg,
+  type Org,
   test,
   unique,
 } from "../support/gate.js";
-import { between, ended, events, follow, getRun, journal, parseSse, runIds, started, startRun, waitingFor } from "../support/runs-helpers.js";
+import { between, ended, events, follow, getRun, parseSse, runExport, runIds, started, startRun, waitingFor } from "../support/runs-helpers.js";
 
-let tenant: Tenant;
+let org: Org;
 let mcp: McpFixture;
 let actionSet: string;
 /** The owner's raw HTTP in the namespace `alice`. */
@@ -34,12 +34,12 @@ export default async function main() {
 `;
 
 test.beforeAll(async () => {
-  tenant = await newTenant("runs");
+  org = await newOrg("runs");
   mcp = await startMcpFixture();
-  const created = await tenant.api.post("/v1/action-sets", { mcp: [{ name: "fx", url: mcp.url }] });
+  const created = await org.api.post("/v1/action-sets", { mcp: [{ name: "fx", url: mcp.url }] });
   expectOk(created);
   actionSet = created.json.id;
-  alice = tenant.api.ns("alice");
+  alice = org.api.ns("alice");
 });
 
 test.afterAll(async () => {
@@ -68,9 +68,9 @@ test("a run started with wait completes and answers its output, input, labels an
   expect(Math.round(between(run.createdAt, run.expiresAt) / 3_600_000)).toBe(30 * 24);
 });
 
-test("wait answers once it elapses, with the run still active and what it waits for", { tag: "@success" }, async () => {
+test("wait answers once it elapses, with the run waiting and what it waits for", { tag: "@success" }, async () => {
   const run = await started(alice, { code: WAITS_FOR_GO, wait: "1s" });
-  expect(run.status).toBe("active");
+  expect(run.status).toBe("waiting");
   expect(run.waitingFor.map((w: any) => [w.kind, w.name])).toContainEqual(["signal", "go"]);
   await alice.post(`/v1/runs/${run.id}/cancel`, {});
 });
@@ -87,7 +87,7 @@ test("a TTL given at start sets the deadline, and the trace context makes the ru
   await alice.post(`/v1/runs/${run.id}/cancel`, {});
 });
 
-test("the same Idempotency-Key starts one run per namespace, and a retry runs nothing twice", { tag: "@success" }, async () => {
+test("the same Idempotency-Key starts one run per namespace, and a start sent again calls nothing twice", { tag: "@success" }, async () => {
   const key = unique("start-");
   const body = {
     actionSet,
@@ -100,12 +100,12 @@ test("the same Idempotency-Key starts one run per namespace, and a retry runs no
   expectOk(again, 200);
   expect(again.json.id).toBe(first.json.id);
   // The key is unique per namespace: Bob's request with it is another run.
-  const bob = await startRun(tenant.api.ns("bob"), body, { key });
+  const bob = await startRun(org.api.ns("bob"), body, { key });
   expectOk(bob, 201);
   expect(bob.json.id).not.toBe(first.json.id);
   await ended(alice, first.json.id);
-  await ended(tenant.api.ns("bob"), bob.json.id);
-  // Alice's retry called the tool once; Bob's run called it once.
+  await ended(org.api.ns("bob"), bob.json.id);
+  // Alice's two starts called echo once; Bob's run called it once.
   expect(mcp.calls.filter((c) => c.tool === "echo" && c.args.text === key)).toHaveLength(2);
 });
 
@@ -121,7 +121,7 @@ export default async function main() {
 }
 `,
   });
-  // Both arrive while the script sleeps: nothing is lost.
+  // Both arrive while the run sleeps: nothing is lost.
   for (const text of ["one", "two"]) {
     const sent = await alice.post(`/v1/runs/${run.id}/signals/note`, { text });
     expectOk(sent, 202);
@@ -196,7 +196,7 @@ test("a run past its TTL is cancelled through the normal path, reason ttl", { ta
 
 test("a fork reuses its source's recorded calls and seed, and stays in its namespace", { tag: "@success" }, async () => {
   const id = unique("cus-");
-  const parent = await started(alice, {
+  const source = await started(alice, {
     actionSet,
     input: { id },
     wait: "30s",
@@ -208,12 +208,12 @@ export default async function main(input: { id: string }) {
 }
 `,
   });
-  expect(parent.status, JSON.stringify(parent)).toBe("failed");
-  const draw = Number(/\(([0-9.e-]+)\)$/.exec(parent.error.message)?.[1]);
-  expect(Number.isFinite(draw), parent.error.message).toBe(true);
+  expect(source.status, JSON.stringify(source)).toBe("failed");
+  const draw = Number(/\(([0-9.e-]+)\)$/.exec(source.error.message)?.[1]);
+  expect(Number.isFinite(draw), source.error.message).toBe(true);
   expect(callsOf("lookup").filter((c) => c.args.id === id)).toHaveLength(1);
 
-  const forked = await alice.post(`/v1/runs/${parent.id}/fork`, {
+  const forked = await alice.post(`/v1/runs/${source.id}/fork`, {
     wait: "30s",
     code: `import { fx } from "rewind:actions";
 export default async function main(input: { id: string }) {
@@ -226,8 +226,8 @@ export default async function main(input: { id: string }) {
   expectOk(forked, 201);
   const fork = forked.json.status === "completed" ? forked.json : await ended(alice, forked.json.id);
   expect(fork.status, JSON.stringify(fork)).toBe("completed");
-  expect(fork.id).not.toBe(parent.id);
-  expect(fork.source).toMatchObject({ run: parent.id });
+  expect(fork.id).not.toBe(source.id);
+  expect(fork.source).toMatchObject({ run: source.id });
   expect(fork.namespace).toBe("alice");
   // The recorded call was copied, not made again; the seed is the source's.
   expect(fork.output.value).toEqual({ name: `Customer ${id}`, tier: "gold", draw });
@@ -236,27 +236,27 @@ export default async function main(input: { id: string }) {
 
 test("a fork forced live at an event, or given another input, calls again under its own key", { tag: "@success" }, async () => {
   const id = unique("cus-");
-  const script = `import { fx } from "rewind:actions";
+  const code = `import { fx } from "rewind:actions";
 export default async function main(input: { id: string }) {
   return await fx.lookup({ id: input.id });
 }
 `;
-  const parent = await started(alice, { actionSet, input: { id }, wait: "30s", code: script });
-  expect(parent.status).toBe("completed");
-  const history = (await journal(alice, parent.id)).events as { index: number; event: { type: string } }[];
+  const source = await started(alice, { actionSet, input: { id }, wait: "30s", code });
+  expect(source.status).toBe("completed");
+  const history = (await runExport(alice, source.id)).events as { index: number; event: { type: string } }[];
   const scheduled = history.find((e) => e.event.type === "schedule_call")!;
 
-  const atEntry = await alice.post(`/v1/runs/${parent.id}/fork`, { code: script, at: scheduled.index, wait: "30s" });
-  expectOk(atEntry, 201);
-  const live = atEntry.json.status === "completed" ? atEntry.json : await ended(alice, atEntry.json.id);
+  const atEvent = await alice.post(`/v1/runs/${source.id}/fork`, { code, at: scheduled.index, wait: "30s" });
+  expectOk(atEvent, 201);
+  const live = atEvent.json.status === "completed" ? atEvent.json : await ended(alice, atEvent.json.id);
   expect(live.status, JSON.stringify(live)).toBe("completed");
-  expect(live.source).toMatchObject({ run: parent.id, at: scheduled.index });
+  expect(live.source).toMatchObject({ run: source.id, at: scheduled.index });
   const again = callsOf("lookup").filter((c) => c.args.id === id);
   expect(again).toHaveLength(2);
   expect(String(again[1]!.meta?.["codes.rewind/idempotency-key"])).toMatch(new RegExp(`^${live.id}/`));
 
   const other = unique("cus-");
-  const withInput = await alice.post(`/v1/runs/${parent.id}/fork`, { code: script, input: { id: other }, wait: "30s" });
+  const withInput = await alice.post(`/v1/runs/${source.id}/fork`, { code, input: { id: other }, wait: "30s" });
   expectOk(withInput, 201);
   const forkedInput = withInput.json.status === "completed" ? withInput.json : await ended(alice, withInput.json.id);
   expect(forkedInput.output.value).toMatchObject({ id: other });
@@ -298,7 +298,7 @@ export default async function main(input: { id: string }) {
   const done = await ended(alice, run.id);
   expect(done.status).toBe("completed");
 
-  const document = await journal(alice, run.id);
+  const document = await runExport(alice, run.id);
   expect(document.run).toBe(run.id);
   expect(typeof document.code === "string" || typeof document.code === "object").toBe(true);
   expect(document.events.map((e: any) => e.index)).toEqual(document.events.map((_: unknown, n: number) => n));
@@ -320,14 +320,14 @@ export default async function main(input: { id: string }) {
 });
 
 test("the change stream announces each change of a run, as GET /v1/runs lists it", { tag: "@success" }, async () => {
-  const changes = await follow(tenant.api, "/v1/changes");
+  const changes = await follow(org.api, "/v1/changes");
   try {
     expect(changes.status).toBe(200);
     expect(changes.contentType).toContain("text/event-stream");
     const run = await started(alice, { code: WAITS_FOR_GO });
     const of = (status: string) => (e: { event: string; data: any }) =>
       e.event === "run" && e.data?.id === run.id && e.data?.status === status;
-    expect(await changes.until(of("active"), 15_000), "the stream announces the run active").toBeDefined();
+    expect(await changes.until(of("waiting"), 15_000), "the stream announces the run waiting").toBeDefined();
     await waitingFor(alice, run.id, "signal", "go");
     expectOk(await alice.post(`/v1/runs/${run.id}/signals/go`, "now"), 202);
     const done = await changes.until(of("completed"), 15_000);
@@ -336,7 +336,7 @@ test("the change stream announces each change of a run, as GET /v1/runs lists it
     expectOk(listed, 200);
     expect(done!.data).toEqual((listed.json.runs as { id: string }[]).find((r) => r.id === run.id));
     const announced = changes.events.filter((e) => e.event === "run" && e.data?.id === run.id).length;
-    evidence(`${announced} run events for ${run.id}, active then completed; the last equals its item of GET /v1/runs`);
+    evidence(`${announced} run changes for ${run.id}, waiting then completed; the last equals its item of GET /v1/runs`);
   } finally {
     changes.close();
   }
@@ -414,7 +414,7 @@ test("releasing or giving up a run that is not quarantined is 409 not-quarantine
   await waitingFor(alice, run.id, "signal", "go");
   expectProblem(await alice.post(`/v1/runs/${run.id}/release`), 409, "not-quarantined");
   expectProblem(await alice.post(`/v1/runs/${run.id}/give-up`), 409, "not-quarantined");
-  expect((await getRun(alice, run.id)).status).toBe("active");
+  expect((await getRun(alice, run.id)).status).toBe("waiting");
   await alice.post(`/v1/runs/${run.id}/cancel`, {});
 });
 
@@ -427,7 +427,7 @@ test("a TTL above the deployment's maximum is 400 invalid-request naming the TTL
 });
 
 test("starting a run without Rewind-Namespace is 400 invalid-request: there is no default namespace", { tag: "@failure" }, async () => {
-  const reply = await startRun(tenant.api, { code: WAITS_FOR_GO });
+  const reply = await startRun(org.api, { code: WAITS_FOR_GO });
   expectProblem(reply, 400, "invalid-request");
   expect(reply.json.detail).toMatch(/namespace/i);
 });
@@ -473,7 +473,7 @@ test("an input or a signal payload above 8 MiB is 413 payload-too-large, before 
 // ---------------------------------------------------------------------------------------------
 // Attacks
 
-test("a start replayed with its Idempotency-Key never runs the script's effects twice", { tag: "@attack" }, async () => {
+test("a start replayed with its Idempotency-Key never makes its calls twice", { tag: "@attack" }, async () => {
   const key = unique("replay-");
   const body = {
     actionSet,

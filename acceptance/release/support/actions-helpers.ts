@@ -1,5 +1,5 @@
 /**
- * Helpers of the specs of tools, egress and observability (`release/areas/harness-actions.spec.ts`,
+ * Helpers of the specs of actions, egress and observability (`release/areas/harness-actions.spec.ts`,
  * `mcp-egress.spec.ts`, `observability.spec.ts`): starting runs and waiting on their states
  * through the raw API, call streams opened by hand, and a broken MCP server.
  */
@@ -47,12 +47,12 @@ export async function runUntil(api: Api, id: string, what: string, check: (run: 
   );
 }
 
-/** The run's wait on a call, once the call's task reaches `state`. */
+/** The run's wait on a call, once the call reaches `state`. */
 export async function waitingCall(api: Api, id: string, state: string, timeoutMs = 60_000): Promise<RunState> {
   const run = await runUntil(
     api,
     id,
-    `a tool call waits in state ${state}`,
+    `a call waits in state ${state}`,
     (r) => (r.waitingFor ?? []).some((w: RunState) => w.kind === "call" && w.state === state),
     timeoutMs,
   );
@@ -60,32 +60,32 @@ export async function waitingCall(api: Api, id: string, state: string, timeoutMs
 }
 
 /** What a call stream asks for (`GET /v1/calls/stream`). */
-export interface TaskStreamQuery {
+export interface CallStreamQuery {
   actionSet?: string;
   actions?: string[];
   namespace?: string;
-  /** The tasks in flight on the stream at most: the server's 1 by default. */
+  /** The calls in flight on the stream at most: the server's 1 by default. */
   slots?: number;
   /** The worker's id, sent again by `reopen`; one is drawn when absent. */
   worker?: string;
 }
 
-/** Every stream `TaskStream.open` opened and nobody closed: `closeTaskStreams` closes them. */
-const streams = new Set<TaskStream>();
+/** Every stream `CallStream.open` opened and nobody closed: `closeCallStreams` closes them. */
+const streams = new Set<CallStream>();
 
 /**
  * A call stream opened by hand, as a harness's worker holds one (`archi/04-tools.md`, "Call
- * lifecycle"): the tasks handed on it and the tokens it says are gone, kept as they come. The open
- * stream is the liveness of the tasks handed on it; `close` drops it, as a worker that dies does,
+ * lifecycle"): the calls handed on it and the tokens it says are gone, kept as they come. The open
+ * stream is the liveness of the calls handed on it; `close` drops it, as a worker that dies does,
  * and `reopen` opens it again with the same worker id.
  */
-export class TaskStream {
-  /** Every task handed on the stream, in order: `HandedTask`s. */
+export class CallStream {
+  /** Every call handed on the stream, in order: `HandedCall`s. */
   readonly handed: RunState[] = [];
-  /** The tokens of the tasks the stream said are gone. */
+  /** The tokens of the calls the stream said are gone. */
   readonly gone: string[] = [];
-  /** Called with each task as it is handed, once set; the tasks handed before are in `handed`. */
-  onTask: ((task: RunState) => void) | undefined;
+  /** Called with each call as it is handed, once set; the calls handed before are in `handed`. */
+  onCall: ((call: RunState) => void) | undefined;
   /** Settles once the stream has ended: closed here, or dropped by the server. */
   readonly done: Promise<void>;
   private closed = false;
@@ -94,7 +94,7 @@ export class TaskStream {
 
   private constructor(
     readonly api: Api,
-    readonly query: TaskStreamQuery & { worker: string },
+    readonly query: CallStreamQuery & { worker: string },
     private readonly abort: AbortController,
     body: ReadableStream<Uint8Array>,
   ) {
@@ -103,7 +103,7 @@ export class TaskStream {
   }
 
   /** Opens a stream: the stream once the server answered with one, or the server's refusal. */
-  static async attempt(api: Api, query: TaskStreamQuery = {}): Promise<TaskStream | Reply> {
+  static async tryOpen(api: Api, query: CallStreamQuery = {}): Promise<CallStream | Reply> {
     const full = { ...query, worker: query.worker ?? `gate-${randomUUID()}` };
     const params = new URLSearchParams();
     if (full.actionSet !== undefined) params.append("actionSet", full.actionSet);
@@ -118,7 +118,7 @@ export class TaskStream {
     const response = await recordingFetch(`${api.url}/v1/calls/stream?${params}`, { headers, signal: abort.signal });
     const type = response.headers.get("content-type") ?? "";
     if (response.status === 200 && type.includes("text/event-stream") && response.body !== null) {
-      return new TaskStream(api, full, abort, response.body);
+      return new CallStream(api, full, abort, response.body);
     }
     const text = await response.text();
     let json: any;
@@ -132,30 +132,30 @@ export class TaskStream {
   }
 
   /** Opens a stream, which the server must answer with one. */
-  static async open(api: Api, query: TaskStreamQuery = {}): Promise<TaskStream> {
-    const opened = await TaskStream.attempt(api, query);
-    if (opened instanceof TaskStream) return opened;
+  static async open(api: Api, query: CallStreamQuery = {}): Promise<CallStream> {
+    const opened = await CallStream.tryOpen(api, query);
+    if (opened instanceof CallStream) return opened;
     throw new Error(`GET /v1/calls/stream → ${opened.status} ${opened.text.slice(0, 600)}`);
   }
 
   /** The same stream opened again, with the same worker id. */
-  reopen(): Promise<TaskStream> {
-    return TaskStream.open(this.api, this.query);
+  reopen(): Promise<CallStream> {
+    return CallStream.open(this.api, this.query);
   }
 
-  /** The first task handed on the stream that `check` accepts, within `timeoutMs`. */
-  task(what: string, check: (task: RunState) => boolean = () => true, timeoutMs = 30_000): Promise<RunState> {
+  /** The first call handed on the stream that `check` accepts, within `timeoutMs`. */
+  call(what: string, check: (call: RunState) => boolean = () => true, timeoutMs = 30_000): Promise<RunState> {
     return eventually(`${what} is handed on the stream`, () => this.handed.find(check), timeoutMs, 25);
   }
 
-  /** The task of `tool` (of `runId`, when given) handed on the stream, within `timeoutMs`. */
-  taskOf(tool: string, runId?: string, timeoutMs = 30_000): Promise<RunState> {
-    return this.task(`a task of ${tool}${runId ? ` of run ${runId}` : ""}`, (t) => t.action === tool && (runId === undefined || t.runId === runId), timeoutMs);
+  /** The call of `action` (of `runId`, when given) handed on the stream, within `timeoutMs`. */
+  callOf(action: string, runId?: string, timeoutMs = 30_000): Promise<RunState> {
+    return this.call(`a call of ${action}${runId ? ` of run ${runId}` : ""}`, (c) => c.action === action && (runId === undefined || c.runId === runId), timeoutMs);
   }
 
-  /** Resolves once the stream said the task of `token` is gone, within `timeoutMs`. */
+  /** Resolves once the stream said the call of `token` is gone, within `timeoutMs`. */
   async goneOf(token: string, timeoutMs = 30_000): Promise<void> {
-    await eventually(`the task ${token.slice(0, 16)}… is gone on the stream`, () => (this.gone.includes(token) ? true : undefined), timeoutMs, 25);
+    await eventually(`the call ${token.slice(0, 16)}… is gone on the stream`, () => (this.gone.includes(token) ? true : undefined), timeoutMs, 25);
   }
 
   /** Drops the stream, as a worker that dies does. */
@@ -198,7 +198,7 @@ export class TaskStream {
           const parsed = JSON.parse(data.join("\n"));
           if (event === "call") {
             this.handed.push(parsed);
-            this.onTask?.(parsed);
+            this.onCall?.(parsed);
           } else if (event === "gone") {
             this.gone.push(String(parsed.token));
           }
@@ -212,22 +212,22 @@ export class TaskStream {
 }
 
 /** Closes every stream still open: a spec's `afterEach`. */
-export async function closeTaskStreams(): Promise<void> {
+export async function closeCallStreams(): Promise<void> {
   await Promise.all([...streams].map((stream) => stream.close()));
 }
 
 /**
- * Opens a stream for `tool` of `actionSet` and waits for the task of `runId` (any, without it): the
- * task and the stream it was handed on, which stays open until it is closed.
+ * Opens a stream for `action` of `actionSet` and waits for the call of `runId` (any, without it): the
+ * call and the stream it was handed on, which stays open until it is closed.
  */
-export async function handOne(api: Api, actionSet: string, tool: string, runId?: string, timeoutMs = 30_000): Promise<{ task: RunState; stream: TaskStream }> {
-  const stream = await TaskStream.open(api, { actionSet, actions: [tool] });
-  return { task: await stream.taskOf(tool, runId, timeoutMs), stream };
+export async function handOne(api: Api, actionSet: string, action: string, runId?: string, timeoutMs = 30_000): Promise<{ call: RunState; stream: CallStream }> {
+  const stream = await CallStream.open(api, { actionSet, actions: [action] });
+  return { call: await stream.callOf(action, runId, timeoutMs), stream };
 }
 
-/** The tasks handed within `ms` on a stream opened for it, then closed. */
-export async function handedWithin(api: Api, query: TaskStreamQuery, ms = 1_000): Promise<RunState[]> {
-  const stream = await TaskStream.open(api, query);
+/** The calls handed within `ms` on a stream opened for it, then closed. */
+export async function handedWithin(api: Api, query: CallStreamQuery, ms = 1_000): Promise<RunState[]> {
+  const stream = await CallStream.open(api, query);
   await new Promise((resolve) => setTimeout(resolve, ms));
   await stream.close();
   return stream.handed;
@@ -246,10 +246,10 @@ export function detail(reply: Reply): string {
 }
 
 /** A harness action's declaration. */
-export function hostTool(name: string, policy: Record<string, unknown> = {}, inputSchema?: Record<string, unknown>) {
+export function harnessAction(name: string, policy: Record<string, unknown> = {}, inputSchema?: Record<string, unknown>) {
   return {
     name,
-    description: `The gate's host tool ${name}.`,
+    description: `The gate's harness action ${name}.`,
     inputSchema: inputSchema ?? { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
     ...(Object.keys(policy).length > 0 ? { policy } : {}),
   };
@@ -257,7 +257,7 @@ export function hostTool(name: string, policy: Record<string, unknown> = {}, inp
 
 /**
  * A server on 127.0.0.1 that answers every request with `status` and `body`: an MCP server
- * that is broken, whose answer an internal host must never quote to the tenant.
+ * that is broken, whose answer an internal server must never quote to the organization.
  */
 export async function startBroken(status: number, body: string): Promise<{ url: string; hits: number; close(): Promise<void> }> {
   const state = { hits: 0 };

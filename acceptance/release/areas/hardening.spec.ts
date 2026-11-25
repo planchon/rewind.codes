@@ -14,7 +14,7 @@
  */
 import { randomBytes } from "node:crypto";
 import { eventually } from "../../support/processes.js";
-import { evidence, expect, expectHealthy, expectOk, expectProblem, expectRefused, newTenant, type Reply, stacks, type Tenant, test, unique } from "../support/gate.js";
+import { evidence, expect, expectHealthy, expectOk, expectProblem, expectRefused, newOrg, type Reply, stacks, type Org, test, unique } from "../support/gate.js";
 import { expectNo5xx, namespaceState, rawRequest, runState, short, start, untilWaiting, waiting } from "../support/namespaces-helpers.js";
 import type { StackInfo } from "../support/stack.js";
 
@@ -23,7 +23,7 @@ const SETUPS: { name: string; stack: () => StackInfo }[] = [
   { name: "B, strict", stack: () => stacks().b },
 ];
 
-/** A script that hands out a signal URL in its logs, then waits for one signal through it. */
+/** Code that hands out a signal URL in its logs, then waits for one signal through it. */
 const HOOKED = (marker: string) => `// ${marker}
 import { signal, signalUrl } from "rewind";
 
@@ -36,9 +36,9 @@ export default async function main() {
 `;
 
 /** The signal URL a run of `HOOKED` logged. */
-async function hookOf(tenant: Tenant, id: string): Promise<string> {
+async function hookOf(org: Org, id: string): Promise<string> {
   return eventually(`run ${id} logs its signal URL`, async () => {
-    const reply = await tenant.api.get(`/v1/runs/${id}`);
+    const reply = await org.api.get(`/v1/runs/${id}`);
     const line = (reply.json?.logs ?? []).map((l: any) => String(l.message)).find((m: string) => m.startsWith("hook: "));
     return line ? line.slice("hook: ".length).trim() : undefined;
   });
@@ -46,12 +46,12 @@ async function hookOf(tenant: Tenant, id: string): Promise<string> {
 
 for (const setup of SETUPS) {
   test.describe(`setup ${setup.name}`, () => {
-    let tenant: Tenant;
+    let org: Org;
     let stack: StackInfo;
 
     test.beforeAll(async () => {
       stack = setup.stack();
-      tenant = await newTenant(`hardening-${setup.name[0]}`, stack);
+      org = await newOrg(`hardening-${setup.name[0]}`, stack);
     });
 
     // -----------------------------------------------------------------------------------------
@@ -60,7 +60,7 @@ for (const setup of SETUPS) {
     test("a body above the server's limit is refused with 413", { tag: "@attack" }, async () => {
       const body = JSON.stringify({ code: short("big"), input: "a".repeat(17 * 1024 * 1024) });
       const namespace = unique("big-");
-      const before = await namespaceState(tenant.api, namespace);
+      const before = await namespaceState(org.api, namespace);
       // Sent with Expect: 100-continue: the server refuses from Content-Length, without reading
       // a body it would drop (a plain upload races its early answer into a reset connection).
       const reply = await rawRequest(
@@ -68,7 +68,7 @@ for (const setup of SETUPS) {
         "POST",
         "/v1/runs",
         [
-          ["authorization", `Bearer ${tenant.ownerKey}`],
+          ["authorization", `Bearer ${org.ownerKey}`],
           ["rewind-namespace", namespace],
           ["content-type", "application/json"],
         ],
@@ -78,25 +78,25 @@ for (const setup of SETUPS) {
       expect(reply.status, reply.text).toBe(413);
       expect(String(reply.headers["content-type"])).toContain("application/problem+json");
       expect(reply.json?.type).toBe("urn:rewind:problem:payload-too-large");
-      expect(await namespaceState(tenant.api, namespace)).toEqual(before);
+      expect(await namespaceState(org.api, namespace)).toEqual(before);
       evidence("a 17 MiB body → 413 payload-too-large from its Content-Length; no run");
     });
 
     test("an input above the payload limit is refused with 413, and so is a signal's payload", { tag: "@attack" }, async () => {
       const namespace = unique("input-");
       await expectRefused({
-        attempt: () => tenant.api.ns(namespace).post("/v1/runs", { code: short("input"), input: "a".repeat(9 * 1024 * 1024) }),
+        attempt: () => org.api.ns(namespace).post("/v1/runs", { code: short("input"), input: "a".repeat(9 * 1024 * 1024) }),
         status: 413,
         slug: "payload-too-large",
-        probe: () => namespaceState(tenant.api, namespace),
+        probe: () => namespaceState(org.api, namespace),
       });
-      const run = await start(tenant.api.ns("alice"), { code: waiting(unique("payload")) });
-      await untilWaiting(tenant.api, run.id);
+      const run = await start(org.api.ns("alice"), { code: waiting(unique("payload")) });
+      await untilWaiting(org.api, run.id);
       await expectRefused({
-        attempt: () => tenant.api.post(`/v1/runs/${run.id}/signals/approval`, { ok: true, blob: "a".repeat(9 * 1024 * 1024) }),
+        attempt: () => org.api.post(`/v1/runs/${run.id}/signals/approval`, { ok: true, blob: "a".repeat(9 * 1024 * 1024) }),
         status: 413,
         slug: "payload-too-large",
-        probe: () => runState(tenant.api, run.id),
+        probe: () => runState(org.api, run.id),
       });
       evidence("a 9 MiB input or signal payload → 413 payload-too-large, above the 8 MiB limit");
     });
@@ -109,7 +109,7 @@ for (const setup of SETUPS) {
           ["POST", "/v1/action-sets"],
           ["PUT", "/v1/namespaces/alice"],
         ] as const) {
-          const reply = await tenant.api.ns("alice").request(method, path, { body: json, contentType });
+          const reply = await org.api.ns("alice").request(method, path, { body: json, contentType });
           expectProblem(reply, 415, "unsupported-media-type");
         }
       }
@@ -130,7 +130,7 @@ for (const setup of SETUPS) {
         '\u0000\u0001\u0002',
       ];
       for (const body of bodies) {
-        const reply = await tenant.api.ns("alice").request("POST", "/v1/runs", { body, contentType: "application/json" });
+        const reply = await org.api.ns("alice").request("POST", "/v1/runs", { body, contentType: "application/json" });
         expectNo5xx(reply, body);
         expect([400, 422], `${body} → ${reply.status} ${reply.text.slice(0, 200)}`).toContain(reply.status);
         expect(reply.slug, body).toMatch(/^(invalid-request|invalid-code)$/);
@@ -140,18 +140,18 @@ for (const setup of SETUPS) {
     test("deeply nested JSON is refused, and the server keeps serving", { tag: "@attack" }, async () => {
       const depth = 200_000;
       const nested = `${"[".repeat(depth)}${"]".repeat(depth)}`;
-      const run = await start(tenant.api.ns("alice"), { code: waiting(unique("nested")) });
-      await untilWaiting(tenant.api, run.id);
+      const run = await start(org.api.ns("alice"), { code: waiting(unique("nested")) });
+      await untilWaiting(org.api, run.id);
       for (const [path, body] of [
         ["/v1/runs", `{"code": "export default async () => 1;", "input": ${nested}}`],
         [`/v1/runs/${run.id}/signals/approval`, nested],
         ["/v1/action-sets", `{"harness": [{"name": "deep", "description": "d", "inputSchema": ${nested}}]}`],
       ] as const) {
-        const reply = await tenant.api.ns("alice").request("POST", path, { body, contentType: "application/json" });
+        const reply = await org.api.ns("alice").request("POST", path, { body, contentType: "application/json" });
         expectProblem(reply, 400, "invalid-request");
       }
-      expect(await runState(tenant.api, run.id)).toMatchObject({ status: "active" });
-      await expectHealthy(tenant);
+      expect(await runState(org.api, run.id)).toMatchObject({ status: "waiting" });
+      await expectHealthy(org);
       evidence(`JSON nested ${depth} deep → 400 invalid-request (recursion limit); a canary run then completes`);
     });
 
@@ -183,11 +183,11 @@ for (const setup of SETUPS) {
         (id: string) => ["POST", `/v1/calls/${id}/complete`],
         (id: string) => ["DELETE", `/v1/tokens/${id}`],
       ];
-      const keys = await tenant.api.get("/v1/api-keys");
+      const keys = await org.api.get("/v1/api-keys");
       for (const id of ids) {
         for (const template of templates) {
           const [method, path] = template(id);
-          const reply = await tenant.api.request(method!, path!, method === "POST" ? { json: { ok: true } } : {});
+          const reply = await org.api.request(method!, path!, method === "POST" ? { json: { ok: true } } : {});
           expectNo5xx(reply, `${method} ${path!.slice(0, 80)}`);
           expect([400, 404, 410], `${method} ${path!.slice(0, 80)} → ${reply.status} ${reply.text.slice(0, 200)}`).toContain(reply.status);
           expect(reply.headers.get("content-type") ?? "").toContain("problem+json");
@@ -195,28 +195,28 @@ for (const setup of SETUPS) {
       }
       // Dot segments sent as they are reach no other route.
       for (const path of ["/v1/runs/../api-keys", "/v1/runs/x/../../api-keys", "/v1/runs/%2e%2e/%2e%2e/api-keys"]) {
-        const reply = await rawRequest(stack.url, "GET", path, [["authorization", `Bearer ${tenant.ownerKey}`]]);
+        const reply = await rawRequest(stack.url, "GET", path, [["authorization", `Bearer ${org.ownerKey}`]]);
         expect(reply.status, `${path} → ${reply.status} ${reply.text.slice(0, 200)}`).toBe(404);
       }
-      expect((await tenant.api.get("/v1/api-keys")).json).toEqual(keys.json);
+      expect((await org.api.get("/v1/api-keys")).json).toEqual(keys.json);
       evidence(`${ids.length} hostile ids × ${templates.length} endpoints → 400/404/410 problems; dot segments → 404`);
     });
 
     test("namespace names outside their alphabet are refused with 400", { tag: "@failure" }, async () => {
-      const before = (await tenant.api.get("/v1/namespaces")).json.total;
+      const before = (await org.api.get("/v1/namespaces")).json.total;
       for (const name of ["a b", "*", "n".repeat(129), "../etc", "a/b", "al,ice", "", "tab\tname", "a;b"]) {
-        const reply = await tenant.api.request("POST", "/v1/runs", { json: { code: short("ns") }, headers: { "rewind-namespace": name } });
+        const reply = await org.api.request("POST", "/v1/runs", { json: { code: short("ns") }, headers: { "rewind-namespace": name } });
         expectProblem(reply, 400, "invalid-request");
       }
       for (const name of ["%00", "a%00b", "%E5%90%8D%E5%89%8D", "*", "n".repeat(129), "..%2Fetc", "a%20b", "%2A"]) {
-        expectProblem(await tenant.api.put(`/v1/namespaces/${name}`, {}), 400, "invalid-request");
-        expectProblem(await tenant.api.post(`/v1/namespaces/${name}/tokens`, {}), 400, "invalid-request");
+        expectProblem(await org.api.put(`/v1/namespaces/${name}`, {}), 400, "invalid-request");
+        expectProblem(await org.api.post(`/v1/namespaces/${name}/tokens`, {}), 400, "invalid-request");
       }
-      expect((await tenant.api.get("/v1/namespaces")).json.total).toBe(before);
+      expect((await org.api.get("/v1/namespaces")).json.total).toBe(before);
       // The longest name and every character of the alphabet are accepted.
       const longest = "n".repeat(128);
       for (const name of [longest, "user@example.net", "team:a.b_c-D9"]) {
-        const run = await start(tenant.api.ns(name), { code: short(unique("ok")), wait: "20s" });
+        const run = await start(org.api.ns(name), { code: short(unique("ok")), wait: "20s" });
         expect(run.namespace).toBe(name);
       }
     });
@@ -225,7 +225,7 @@ for (const setup of SETUPS) {
     // Queries
 
     test("label filters and queries with SQL and wildcards match only what they say", { tag: "@attack" }, async () => {
-      const own = await newTenant(`hardening-query-${setup.name[0]}`, stack);
+      const own = await newOrg(`hardening-query-${setup.name[0]}`, stack);
       const suite = unique("q");
       const values = ["a_c", "abc", "a%c", "a'c", "a\\c"];
       const ids: Record<string, string> = {};
@@ -252,7 +252,7 @@ for (const setup of SETUPS) {
         expectOk(reply, 200);
         expect(reply.json.runs, `label team:${pattern} matches nothing`).toEqual([]);
       }
-      for (const q of [`@team:"a' OR '1'='1"`, `@team:"%"`, `@team:"_"`, `@team:"a_c" OR 1=1`, `@team:"x'); DROP TABLE runs; --"`, `tool:"%"`]) {
+      for (const q of [`@team:"a' OR '1'='1"`, `@team:"%"`, `@team:"_"`, `@team:"a_c" OR 1=1`, `@team:"x'); DROP TABLE runs; --"`, `action:"%"`]) {
         const reply = await listed({ q: `@suite:${suite} ${q}` });
         expect([200, 400], `${q} → ${reply.status} ${reply.text.slice(0, 200)}`).toContain(reply.status);
         if (reply.status === 200) {
@@ -268,7 +268,7 @@ for (const setup of SETUPS) {
 
     test("an unreadable query is refused with the position of the term at fault", { tag: "@failure" }, async () => {
       for (const q of ["status:", "@:", "status:sideways", "@team", "\"unclosed", "startedAfter:yesterday-ish"]) {
-        const reply = await tenant.api.get("/v1/runs", { query: { q } });
+        const reply = await org.api.get("/v1/runs", { query: { q } });
         expectProblem(reply, 400, "invalid-query");
         expect(reply.json.query, q).toMatchObject({ start: expect.any(Number), end: expect.any(Number) });
       }
@@ -282,19 +282,19 @@ for (const setup of SETUPS) {
       // different body. Checked: no second run, and the first run's code and input stand.
       const namespace = unique("idem-");
       const key = unique("key-");
-      const first = await tenant.api.ns(namespace).post("/v1/runs", { code: short("first"), input: { n: 1 }, wait: "20s" }, { headers: { "idempotency-key": key } });
+      const first = await org.api.ns(namespace).post("/v1/runs", { code: short("first"), input: { n: 1 }, wait: "20s" }, { headers: { "idempotency-key": key } });
       expectOk(first, 201);
-      const second = await tenant.api
+      const second = await org.api
         .ns(namespace)
         .post("/v1/runs", { code: `export default async function main() { return "other"; }\n`, input: { n: 2 }, wait: "20s" }, { headers: { "idempotency-key": key } });
       expectOk(second);
       expect(second.json.id).toBe(first.json.id);
       expect(second.json.codeDigest).toBe(first.json.codeDigest);
-      expect(await namespaceState(tenant.api, namespace)).toMatchObject({ runsStarted: 1 });
-      const run = await tenant.api.get(`/v1/runs/${first.json.id}`);
+      expect(await namespaceState(org.api, namespace)).toMatchObject({ runsStarted: 1 });
+      const run = await org.api.get(`/v1/runs/${first.json.id}`);
       expect(run.json.input.value).toEqual({ n: 1 });
       // The key is per namespace: another namespace starts its own run.
-      const elsewhere = await tenant.api.ns(`${namespace}-b`).post("/v1/runs", { code: short("first") }, { headers: { "idempotency-key": key } });
+      const elsewhere = await org.api.ns(`${namespace}-b`).post("/v1/runs", { code: short("first") }, { headers: { "idempotency-key": key } });
       expectOk(elsewhere, 201);
       expect(elsewhere.json.id).not.toBe(first.json.id);
       evidence(`the key reused with another code and input → ${second.status} with the first run; one run started (spec silent on a different body)`);
@@ -302,12 +302,12 @@ for (const setup of SETUPS) {
 
     test("repeated singleton headers never act across namespaces or principals", { tag: "@attack" }, async () => {
       // The spec is silent on repeated headers; the property checked is that a request never
-      // acts in a namespace or tenant other than one it was entitled to.
-      const minted = await tenant.api.post("/v1/namespaces/alice/tokens", {});
+      // acts in a namespace or organization other than one it was entitled to.
+      const minted = await org.api.post("/v1/namespaces/alice/tokens", {});
       expectOk(minted, 201);
       const aliceToken = minted.json.token as string;
       const body = JSON.stringify({ code: short(unique("dup")) });
-      const bobBefore = await namespaceState(tenant.api, "bob");
+      const bobBefore = await namespaceState(org.api, "bob");
       const ownFirst = await rawRequest(stack.url, "POST", "/v1/runs", [
         ["authorization", `Bearer ${aliceToken}`],
         ["content-type", "application/json"],
@@ -323,23 +323,23 @@ for (const setup of SETUPS) {
         ["rewind-namespace", "alice"],
       ], body);
       expect([400, 403], otherFirst.text).toContain(otherFirst.status);
-      expect(await namespaceState(tenant.api, "bob")).toEqual(bobBefore);
-      // Two keys of two tenants: the request acts as one of them, never as a mix.
-      const other = await newTenant(`hardening-dup-${setup.name[0]}`, stack);
+      expect(await namespaceState(org.api, "bob")).toEqual(bobBefore);
+      // Two keys of two organizations: the request acts as one of them, never as a mix.
+      const other = await newOrg(`hardening-dup-${setup.name[0]}`, stack);
       const who = await rawRequest(stack.url, "GET", "/v1/whoami", [
-        ["authorization", `Bearer ${tenant.ownerKey}`],
+        ["authorization", `Bearer ${org.ownerKey}`],
         ["authorization", `Bearer ${other.ownerKey}`],
       ]);
       expect(who.status, who.text).toBeLessThan(500);
-      if (who.status === 200) expect([tenant.id, other.id]).toContain(who.json.organizationId);
+      if (who.status === 200) expect([org.id, other.id]).toContain(who.json.organizationId);
       evidence(
-        `Rewind-Namespace twice with Alice's token: alice first → ${ownFirst.status}, bob first → ${otherFirst.status}; Authorization twice → ${who.status}${who.json?.organizationId ? ` as ${who.json.organizationId === tenant.id ? "the first" : "the second"}` : ""} (spec silent)`,
+        `Rewind-Namespace twice with Alice's token: alice first → ${ownFirst.status}, bob first → ${otherFirst.status}; Authorization twice → ${who.status}${who.json?.organizationId ? ` as ${who.json.organizationId === org.id ? "the first" : "the second"}` : ""} (spec silent)`,
       );
     });
 
     test("a cookie is not a credential on /v1", { tag: "@attack" }, async () => {
       const session = `rewind_session=${randomBytes(48).toString("base64url")}`;
-      const bare = tenant.api.as(undefined).with({ cookie: session });
+      const bare = org.api.as(undefined).with({ cookie: session });
       await expectRefused({ attempt: () => bare.get("/v1/runs"), status: 401, slug: "unauthorized" });
       await expectRefused({ attempt: () => bare.get("/v1/whoami"), status: 401, slug: "unauthorized" });
       const namespace = unique("cookie-");
@@ -347,13 +347,13 @@ for (const setup of SETUPS) {
         attempt: () => bare.ns(namespace).post("/v1/runs", { code: short(unique("cookie")) }),
         status: 401,
         slug: "unauthorized",
-        probe: () => namespaceState(tenant.api, namespace),
+        probe: () => namespaceState(org.api, namespace),
       });
       evidence("a rewind_session cookie without a Bearer → 401 on /v1");
     });
 
     test("malformed and oversized credentials are refused, never a 5xx", { tag: "@attack" }, async () => {
-      const key = tenant.ownerKey;
+      const key = org.ownerKey;
       const shapes: [string, Record<string, string>][] = [
         ["Basic with the key", { authorization: `Basic ${Buffer.from(`x:${key}`).toString("base64")}` }],
         ["the key without a scheme", { authorization: key }],
@@ -365,31 +365,31 @@ for (const setup of SETUPS) {
         ["a JWT of nonsense", { authorization: "Bearer aaa.bbb.ccc" }],
       ];
       for (const [name, headers] of shapes) {
-        const reply = await tenant.api.as(undefined).get("/v1/whoami", { headers });
+        const reply = await org.api.as(undefined).get("/v1/whoami", { headers });
         expectNo5xx(reply, name);
         expect([400, 401, 431], `${name} → ${reply.status}`).toContain(reply.status);
       }
-      const huge = await tenant.api.get("/v1/runs", { headers: { "x-padding": "a".repeat(128 * 1024) } });
+      const huge = await org.api.get("/v1/runs", { headers: { "x-padding": "a".repeat(128 * 1024) } });
       expectNo5xx(huge, "a 128 kB header");
-      const longQuery = await tenant.api.get("/v1/runs", { query: { q: "a".repeat(100_000) } });
+      const longQuery = await org.api.get("/v1/runs", { query: { q: "a".repeat(100_000) } });
       expectNo5xx(longQuery, "a 100 kB query");
       expect(longQuery.status).toBeGreaterThanOrEqual(400);
       evidence("Basic, no scheme, truncated, suffixed, empty, 64 kB keys → 401; 128 kB header, 100 kB query → 4xx");
     });
 
     test("malformed and oversized secrets are refused, never a 5xx", { tag: "@attack" }, async () => {
-      const list = async () => (await tenant.api.get("/v1/secrets")).json?.secrets?.length ?? -1;
+      const list = async () => (await org.api.get("/v1/secrets")).json?.secrets?.length ?? -1;
       const cases: [string, () => Promise<Reply>, number, string][] = [
-        ["an uppercase name", () => tenant.api.put("/v1/secrets/GitHub", { value: "x" }), 400, "invalid-request"],
-        ["a name of 65 characters", () => tenant.api.put(`/v1/secrets/${"a".repeat(65)}`, { value: "x" }), 400, "invalid-request"],
-        ["a name starting with a digit", () => tenant.api.put("/v1/secrets/1github", { value: "x" }), 400, "invalid-request"],
-        ["a NUL in the name", () => tenant.api.put("/v1/secrets/git%00hub", { value: "x" }), 400, "invalid-request"],
-        ["a value above 16 KiB", () => tenant.api.put("/v1/secrets/big", { value: "x".repeat(16 * 1024 + 1) }), 413, "payload-too-large"],
-        ["a value that is not a string", () => tenant.api.put("/v1/secrets/typed", { value: 42 }), 400, "invalid-request"],
-        ["an unknown field", () => tenant.api.put("/v1/secrets/extra", { value: "x", plaintext: true }), 400, "invalid-request"],
-        ["a label on a namespace's secret", () => tenant.api.put("/v1/namespaces/alice/secrets/github", { value: "x", labels: { env: "prod" } }), 400, "invalid-request"],
-        ["an attachment that names no scope", () => tenant.api.ns("alice").post("/v1/runs", { code: short(unique("attach")), secrets: { github: "github" } }), 400, "invalid-request"],
-        ["an attachment of another scope", () => tenant.api.ns("alice").post("/v1/runs", { code: short(unique("attach")), secrets: { github: "tenant/github" } }), 400, "invalid-request"],
+        ["an uppercase name", () => org.api.put("/v1/secrets/GitHub", { value: "x" }), 400, "invalid-request"],
+        ["a name of 65 characters", () => org.api.put(`/v1/secrets/${"a".repeat(65)}`, { value: "x" }), 400, "invalid-request"],
+        ["a name starting with a digit", () => org.api.put("/v1/secrets/1github", { value: "x" }), 400, "invalid-request"],
+        ["a NUL in the name", () => org.api.put("/v1/secrets/git%00hub", { value: "x" }), 400, "invalid-request"],
+        ["a value above 16 KiB", () => org.api.put("/v1/secrets/big", { value: "x".repeat(16 * 1024 + 1) }), 413, "payload-too-large"],
+        ["a value that is not a string", () => org.api.put("/v1/secrets/typed", { value: 42 }), 400, "invalid-request"],
+        ["an unknown field", () => org.api.put("/v1/secrets/extra", { value: "x", plaintext: true }), 400, "invalid-request"],
+        ["a label on a namespace's secret", () => org.api.put("/v1/namespaces/alice/secrets/github", { value: "x", labels: { env: "prod" } }), 400, "invalid-request"],
+        ["a secret used without its scope", () => org.api.ns("alice").post("/v1/runs", { code: short(unique("secret")), secrets: { github: "github" } }), 400, "invalid-request"],
+        ["a secret of a scope that does not exist", () => org.api.ns("alice").post("/v1/runs", { code: short(unique("secret")), secrets: { github: "organization/github" } }), 400, "invalid-request"],
       ];
       const seen: string[] = [];
       for (const [what, attempt, status, slug] of cases) {
@@ -404,36 +404,36 @@ for (const setup of SETUPS) {
     // Routes
 
     test("a guessed /hooks token is 404 and signals nothing", { tag: "@attack" }, async () => {
-      const run = await start(tenant.api.ns("alice"), { code: HOOKED(unique("guess")) });
-      await untilWaiting(tenant.api, run.id);
-      const real = await hookOf(tenant, run.id);
+      const run = await start(org.api.ns("alice"), { code: HOOKED(unique("guess")) });
+      await untilWaiting(org.api, run.id);
+      const real = await hookOf(org, run.id);
       const token = real.split("/hooks/")[1]!;
       for (const guess of [randomBytes(24).toString("base64url"), `${token.slice(0, -1)}${token.endsWith("A") ? "B" : "A"}`, "%00", "a".repeat(4096), "..%2F..%2Fv1%2Fruns"]) {
         await expectRefused({
-          attempt: () => tenant.api.as(undefined).post(`/hooks/${guess}`, { n: 666 }),
+          attempt: () => org.api.as(undefined).post(`/hooks/${guess}`, { n: 666 }),
           status: 404,
           slug: "not-found",
-          probe: () => runState(tenant.api, run.id),
+          probe: () => runState(org.api, run.id),
         });
       }
       evidence("random, off-by-one, NUL, 4 kB and dot-segment /hooks tokens → 404; the run's history unchanged");
     });
 
     test("a /hooks URL delivers one signal per delivery id", { tag: "@success" }, async () => {
-      const run = await start(tenant.api.ns("alice"), { code: HOOKED(unique("hook")) });
-      await untilWaiting(tenant.api, run.id);
-      const url = await hookOf(tenant, run.id);
+      const run = await start(org.api.ns("alice"), { code: HOOKED(unique("hook")) });
+      await untilWaiting(org.api, run.id);
+      const url = await hookOf(org, run.id);
       expect(url.startsWith(`${stack.url}/hooks/`), url).toBe(true);
       const path = url.slice(stack.url.length);
       for (let n = 0; n < 2; n++) {
-        const reply = await tenant.api.as(undefined).post(path, { n: 7 }, { headers: { "webhook-id": "delivery-1" } });
+        const reply = await org.api.as(undefined).post(path, { n: 7 }, { headers: { "webhook-id": "delivery-1" } });
         expectOk(reply, 202);
       }
       const ended = await eventually(
         "the run completes with the delivery",
         async () => {
-          const reply = await tenant.api.get(`/v1/runs/${run.id}`, { query: { wait: "10s" } });
-          return reply.json?.status === "active" ? undefined : reply;
+          const reply = await org.api.get(`/v1/runs/${run.id}`, { query: { wait: "10s" } });
+          return ["queued", "running", "waiting"].includes(reply.json?.status) ? undefined : reply;
         },
         90_000,
       );
@@ -442,24 +442,24 @@ for (const setup of SETUPS) {
     });
 
     test("an old /hooks token signals nothing once its run has ended", { tag: "@attack" }, async () => {
-      const run = await start(tenant.api.ns("alice"), { code: HOOKED(unique("old")) });
-      await untilWaiting(tenant.api, run.id);
-      const path = (await hookOf(tenant, run.id)).slice(stack.url.length);
-      expectOk(await tenant.api.as(undefined).post(path, { n: 1 }), 202);
+      const run = await start(org.api.ns("alice"), { code: HOOKED(unique("old")) });
+      await untilWaiting(org.api, run.id);
+      const path = (await hookOf(org, run.id)).slice(stack.url.length);
+      expectOk(await org.api.as(undefined).post(path, { n: 1 }), 202);
       const ended = await eventually(
         "the run completes",
         async () => {
-          const reply = await tenant.api.get(`/v1/runs/${run.id}`, { query: { wait: "10s" } });
-          return reply.json?.status === "active" ? undefined : reply;
+          const reply = await org.api.get(`/v1/runs/${run.id}`, { query: { wait: "10s" } });
+          return ["queued", "running", "waiting"].includes(reply.json?.status) ? undefined : reply;
         },
         90_000,
       );
       expect(ended.json.status, ended.text).toBe("completed");
-      const before = await runState(tenant.api, run.id);
-      const replay = await tenant.api.as(undefined).post(path, { n: 2 });
+      const before = await runState(org.api, run.id);
+      const replay = await org.api.as(undefined).post(path, { n: 2 });
       expect([404, 409], replay.text).toContain(replay.status);
       expect(replay.slug).toMatch(/^(not-found|run-ended)$/);
-      expect(await runState(tenant.api, run.id)).toEqual(before);
+      expect(await runState(org.api, run.id)).toEqual(before);
       evidence(`POST to the signal URL of an ended run → ${replay.status} ${replay.slug}; nothing recorded`);
     });
 
@@ -478,7 +478,7 @@ for (const setup of SETUPS) {
     ];
 
     test("/auth is absent on a server without WorkOS", { tag: "@failure" }, async () => {
-      const anonymous = tenant.api.as(undefined).with({ cookie: "rewind_session=forged" });
+      const anonymous = org.api.as(undefined).with({ cookie: "rewind_session=forged" });
       for (const [method, path, body] of AUTH) {
         const reply = await anonymous.request(method, path, body === undefined ? {} : { json: body });
         expectProblem(reply, 404, "not-found");
@@ -488,7 +488,7 @@ for (const setup of SETUPS) {
 
     test("/auth is absent on a server without WorkOS, whatever the body", { tag: "@failure" }, async () => {
       // archi/07, "Sign-in": without the four WORKOS_* the server has no /auth.
-      const anonymous = tenant.api.as(undefined);
+      const anonymous = org.api.as(undefined);
       const answers: string[] = [];
       for (const [method, path] of AUTH.filter(([method]) => method === "POST")) {
         const reply = await anonymous.request(method, path, { body: '{"unexpected": true, "email": 42}', contentType: "application/json" });
@@ -500,42 +500,42 @@ for (const setup of SETUPS) {
     });
 
     test("the operator's endpoints refuse an owner", { tag: "@attack" }, async () => {
-      const keys = async () => (await tenant.api.get("/v1/api-keys")).json;
+      const keys = async () => (await org.api.get("/v1/api-keys")).json;
       await expectRefused({
-        attempt: () => tenant.api.put(`/v1/organizations/${tenant.id}/quotas`, { ceiling: { activeRuns: 1_000_000 } }),
+        attempt: () => org.api.put(`/v1/organizations/${org.id}/quotas`, { ceiling: { activeRuns: 1_000_000 } }),
         status: 403,
         slug: "forbidden",
-        probe: async () => (await tenant.api.get("/v1/organization/namespace-defaults")).json.ceiling,
+        probe: async () => (await org.api.get("/v1/organization/namespace-defaults")).json.ceiling,
       });
       await expectRefused({
-        attempt: () => tenant.api.put(`/v1/organizations/gate-operator/quotas`, { ceiling: { activeRuns: 0 } }),
+        attempt: () => org.api.put(`/v1/organizations/gate-operator/quotas`, { ceiling: { activeRuns: 0 } }),
         status: 403,
         slug: "forbidden",
       });
-      await expectRefused({ attempt: () => tenant.api.post("/v1/server/stop"), status: 403, slug: "forbidden" });
-      expectOk(await tenant.api.get("/v1/server"), 200);
+      await expectRefused({ attempt: () => org.api.post("/v1/server/stop"), status: 403, slug: "forbidden" });
+      expectOk(await org.api.get("/v1/server"), 200);
       await expectRefused({
-        attempt: () => tenant.api.post("/v1/api-keys", { organizationId: unique("victim-"), role: "owner", name: "foothold" }),
+        attempt: () => org.api.post("/v1/api-keys", { organizationId: unique("victim-"), role: "owner", name: "foothold" }),
         status: 403,
         slug: "forbidden",
         probe: keys,
       });
-      await expectRefused({ attempt: () => tenant.api.post("/v1/api-keys", { role: "operator", name: "operator" }), status: 403, slug: "forbidden", probe: keys });
-      const role = await tenant.api.put("/v1/roles/operator", { description: "mine", permissions: ["runs:read"] });
+      await expectRefused({ attempt: () => org.api.post("/v1/api-keys", { role: "operator", name: "operator" }), status: 403, slug: "forbidden", probe: keys });
+      const role = await org.api.put("/v1/roles/operator", { description: "mine", permissions: ["runs:read"] });
       expect([400, 403], role.text).toContain(role.status);
-      evidence("an owner setting a ceiling, stopping the server, minting in another tenant or an operator key → 403 forbidden");
+      evidence("an owner setting a ceiling, stopping the server, minting in another organization or an operator key → 403 forbidden");
     });
 
     test("unknown routes and methods are refused with a problem, never a 5xx", { tag: "@failure" }, async () => {
-      expectProblem(await tenant.api.get("/v1/nothing-here"), 404, "not-found");
-      const anonymous = await tenant.api.as(undefined).get("/v1/nothing-here");
+      expectProblem(await org.api.get("/v1/nothing-here"), 404, "not-found");
+      const anonymous = await org.api.as(undefined).get("/v1/nothing-here");
       expect([401, 404], anonymous.text).toContain(anonymous.status);
       for (const [method, path] of [
         ["DELETE", "/v1/server"],
         ["PATCH", "/v1/runs"],
         ["PUT", "/v1/whoami"],
       ] as const) {
-        const reply = await tenant.api.request(method, path);
+        const reply = await org.api.request(method, path);
         expectNo5xx(reply, `${method} ${path}`);
         expect([401, 404, 405], `${method} ${path} → ${reply.status}`).toContain(reply.status);
       }

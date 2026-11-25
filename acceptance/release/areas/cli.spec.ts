@@ -13,8 +13,8 @@
  *   the idle stop, `kill -9` and a resume in the next process.
  * - `rewind replay` of a run export, and of tampered ones.
  * - An API read from its OpenAPI document and called over http, as only the embedded server does
- *   (`archi/04-tools.md`, "API tools"), with the secret `rewind secrets put` wrote and
- *   `--secret` attaches; a signed call where no public URL publishes the keys is not sent.
+ *   (`archi/04-tools.md`, "API actions"), with the secret `rewind secrets put` wrote and
+ *   `--secret` names; a signed call where no public URL publishes the keys is not sent.
  */
 import { type ChildProcess, spawn } from "node:child_process";
 import { readFileSync, statSync, writeFileSync } from "node:fs";
@@ -26,7 +26,7 @@ import { startApiFixture } from "../support/fixtures.js";
 import { canary, evidence, expect, test } from "../support/gate.js";
 
 const OK = "export default async function main(input: { n?: number }) { return (input.n ?? 20) + 1; }\n";
-const FAILS = 'export default async function main() { throw new Error("the script gave up"); }\n';
+const FAILS = 'export default async function main() { throw new Error("the code gave up"); }\n';
 const WAITS = 'import { signal } from "rewind";\nexport default async function main() { return await signal<string>("go"); }\n';
 const ABORTS = "export default async function main() { const h: number[][] = []; for (;;) h.push(new Array(100_000).fill(1)); }\n";
 const IMPORTS_FS = 'import fs from "node:fs";\nexport default async function main() { return typeof fs; }\n';
@@ -90,7 +90,7 @@ test("rewind run, status, transcript and export work through the embedded server
 test("a failed run exits 1 and an aborted one 3", { tag: "@failure" }, async () => {
   const failed = await project.json(["run", "fails.ts", "--wait", "30s"]);
   expect(failed.code, said(failed.ran)).toBe(1);
-  expect(failed.value).toMatchObject({ status: "failed", error: { name: "Error", message: "the script gave up" } });
+  expect(failed.value).toMatchObject({ status: "failed", error: { name: "Error", message: "the code gave up" } });
 
   const aborted = await project.json(["run", "aborts.ts", "--wait", "60s"]);
   expect(aborted.code, said(aborted.ran)).toBe(3);
@@ -126,7 +126,7 @@ test("a signal from another process completes a waiting run", { tag: "@success" 
   expect(done.value.output.value).toBe("from another process");
 });
 
-test("unknown runs, usage errors and refused scripts have their exit codes; --json errors are problem+json", { tag: "@failure" }, async () => {
+test("unknown runs, usage errors and refused code have their exit codes; --json errors are problem+json", { tag: "@failure" }, async () => {
   const unknown = await project.rewind(["--json", "status", "01a1e14c-d0b5-719d-a04a-62088d5117a6"]);
   expect(unknown.code, said(unknown)).toBe(6);
   const problem = JSON.parse(unknown.stderr.trim());
@@ -143,7 +143,7 @@ test("unknown runs, usage errors and refused scripts have their exit codes; --js
   const checked = await project.rewind(["check", "imports_fs.ts"]);
   expect(checked.code, said(checked)).toBe(65);
   expect(checked.stdout + checked.stderr).toContain("rewind/invalid-code");
-  evidence("unknown run → 6 with problem+json on stderr; usage → 64; refused script → 65 (run and check)");
+  evidence("unknown run → 6 with problem+json on stderr; usage → 64; refused code → 65 (run and check)");
 });
 
 test("a first Ctrl-C finishes the call in flight and leaves the run waiting", { tag: "@failure" }, async () => {
@@ -157,7 +157,7 @@ test("a first Ctrl-C finishes the call in flight and leaves the run waiting", { 
   expect(ended.code, said({ ...ended, stderr })).toBe(4);
   expect(stderr).toContain("finishing the call in flight");
   const status = await project.json(["status", id]);
-  expect(status.value.status, "Ctrl-C leaves the run alone").toBe("active");
+  expect(status.value.status, "Ctrl-C leaves the run alone").toBe("waiting");
   await project.rewind(["cancel", id]);
 });
 
@@ -314,7 +314,7 @@ export default async function main() {
 }
 `;
 
-test("an API is read from its OpenAPI document and called with the secret the run attaches", { tag: "@success" }, async () => {
+test("an API is read from its OpenAPI document and called with the secret the run uses", { tag: "@success" }, async () => {
   const api = await startApiFixture();
   try {
     project.write("measures.ts", MEASURES);
@@ -363,7 +363,7 @@ test("an API is read from its OpenAPI document and called with the secret the ru
     expect(signed.code, said(signed.ran)).toBe(1);
     expect(signed.value.error.failedCall).toMatchObject({ action: "dax.getMeasure", error: { kind: "unavailable" } });
     expect(api.requests.length, "the signed call was not sent").toBe(before);
-    evidence(`the document read from ${api.documentUrl}; without --secret → 65; with dax=org/dax-key both calls carried X-Api-Key, the POST its Idempotency-Key ${key}; export, list and usage print no value; a signed call without a public URL → unavailable, not sent`);
+    evidence(`the document read from ${api.documentUrl}; without --secret → 64; with dax=org/dax-key both calls carried X-Api-Key, the POST its Idempotency-Key ${key}; export, list and usage print no value; a signed call without a public URL → unavailable, not sent`);
   } finally {
     await api.close();
   }

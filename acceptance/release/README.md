@@ -12,8 +12,8 @@ acceptance/release.sh --skip-build      # the binary already built (REWIND_BIN, 
 ```
 
 It needs Rust, Node 22.12 or later with pnpm 10, and Docker. WorkOS is never used: the operator's
-key makes the tenants, and organizations, members and invitations stay with criterion 8 of
-`acceptance/run.sh`, against WorkOS Staging. It removes its containers and stops its servers at the
+key makes the gate's organizations, and the sign-in, members and invitations stay with criterion 8
+of `acceptance/run.sh`, against WorkOS Staging. It removes its containers and stops its servers at the
 end, even after Ctrl-C.
 
 ## Verdict
@@ -30,7 +30,7 @@ end, even after Ctrl-C.
 | --- | --- | --- |
 | build | `cargo build --release -p rewind`, the SDK, the suite, Chromium | |
 | criteria | Criteria 1, 2, 3, 5 and 7 of 0.1 (`tests/`), unchanged | Their own servers |
-| areas | One spec per area (`areas/`), three files at once, a tenant each | Setups A and B, C for the CLI |
+| areas | One spec per area (`areas/`), three files at once, an organization each | Setups A and B, C for the CLI |
 | lifecycle | Nodes killed, stopped and joining, restarts, a Postgres outage, the archive, retention and erasure (`lifecycle/`) | Setup D |
 | sweeps | What the stages left: no unexpected 5xx, no panic, no leaked canary, every problem type provoked (`sweeps/`) | The results directory |
 | load | Criterion 6: `deploy/acceptance.sh`, the reference deployment under load, and the limits | Its own Compose project |
@@ -56,19 +56,19 @@ Specs import `test`, `expect` and the helpers from `support/gate.ts`.
 
 - **One kind per check.** Each test carries exactly one tag: `@success` (a feature works end to
   end), `@failure` (a legitimate caller's mistake ends exactly as specified) or `@attack` (a hostile
-  caller or script is refused, and nothing happens). The report counts them by area and kind.
+  caller or code is refused, and nothing happens). The report counts them by area and kind.
 - **Attacks prove the absence of an effect.** `expectRefused({ attempt, status, slug, probe })`
   probes the state before and after the attempt and asserts both the exact refusal and that nothing
-  moved; a limit attack ends with `expectHealthy(tenant)`, a run that must still complete.
+  moved; a limit attack ends with `expectHealthy(org)`, a run that must still complete.
   `evidence("…")` says which defense was observed: the report lists every attack with it.
-- **Everything is recorded.** `Api` (raw HTTP) and the SDK clients of `newTenant` record every
+- **Everything is recorded.** `Api` (raw HTTP) and the SDK clients of `newOrg` record every
   exchange: the test's evidence, and `results/release/exchanges/` for the sweeps. A 5xx the check
   expects is declared first with `allow5xx(slug)`; any other fails the gate.
 - **The canary.** `canary()` is a value only this run knows. Put it as a secret, of the
-  organization or of a namespace, that runs attach (`secrets: { fx: "ns/fx" }`): the MCP server or
+  organization or of a namespace, that runs use (`secrets: { fx: "ns/fx" }`): the MCP server or
   the API receives it, and it must never come back in an answer (a run, a run export, a cassette, an
   event, a problem), a trace, a log, the database in clear, or the dashboard.
-- **A tenant per file**, made by the operator with `newTenant(prefix, stack)`; tests are
+- **An organization per file**, made by the operator with `newOrg(prefix, stack)`; tests are
   independent given their file's `beforeAll`.
 - **The spec decides.** Expected behavior comes from `archi/` and `api/README.md`, including the
   decisions of `archi/08-decisions.md`. When Rewind deviates, the check keeps asserting the spec.
@@ -88,19 +88,19 @@ later runs reuse.
 
 | Area | File | Covers |
 | --- | --- | --- |
-| Runs | `areas/runs.spec.ts` | Starts, idempotency, signals, sleeps, cancel, TTL, forks, erasure, exports, the event stream, the change stream, traces |
-| Endings and limits | `areas/endings.spec.ts` | How a script ends; CPU, heap, array buffers, commands, payload sizes |
-| Harness actions and tasks | `areas/harness-actions.spec.ts` | Task streams: the open stream as the liveness of its tasks, slots, a worker back within the grace, a stream that does not come back, `gone`; deferrals, failures, retries, timeouts, approvals, task tokens |
-| MCP, APIs, http tool, egress | `areas/mcp-egress.spec.ts` | MCP over HTTP and stdio; secrets attached per run (`org/`, `ns/`, never another's), deleted mid-run (`secret_missing`) or refused (401), put again with the same key; signed calls checked by `verifyRewindCall`, a replaced key, labels refused then approved; an API read from its OpenAPI document; schema changes, `fetch`, every refused address; no value in clear in the database |
-| Workflows | `areas/workflows.spec.ts` | Versions, a version refused by its own tests or by its suite, starts by name, from scripts, schemas, label scope |
+| Runs | `areas/runs.spec.ts` | Starts, idempotency, signals, sleeps, cancel, TTL, forks, erasure, exports, the event stream, the change stream, the transcript |
+| Endings and limits | `areas/endings.spec.ts` | How a run ends; CPU, heap, array buffers, commands, payload sizes |
+| Harness actions and their calls | `areas/harness-actions.spec.ts` | Call streams: the open stream as the liveness of its calls, slots, a worker back within the grace, a stream that does not come back, `gone`; deferrals, failures, redeliveries, timeouts, approvals, call tokens |
+| MCP, APIs, the http action, egress | `areas/mcp-egress.spec.ts` | MCP over HTTP and stdio; the secrets each run uses (`org/`, `ns/`, never another's), deleted mid-run (`secret_missing`) or refused (401), put again with the same key; signed calls checked by `verifyRewindCall`, a replaced key, labels refused then approved; an API read from its OpenAPI document; schema changes, `fetch`, every refused address; no value in clear in the database |
+| Workflows | `areas/workflows.spec.ts` | Workflows and their versions, a version refused by its own tests or by its suite, starts by name, from code, child runs, schemas, label scope, a namespace's fork pulled and promoted |
 | Check and test | `areas/check-test.spec.ts` | `/v1/check`, `/v1/test`, refusals at start |
-| Observability | `areas/observability.spec.ts` | Queries, statistics, failure groups, OTLP traces, signed webhooks, quota alerts |
+| Observability | `areas/observability.spec.ts` | Queries, statistics, fingerprints, OTLP traces, signed webhooks, quota alerts |
 | Access | `areas/access.spec.ts` | The permission matrix over every operation of `api/openapi.json` (the 25 permissions of `GET /v1/permissions`, `secrets:*` included), roles, grants, revocation, labels on secrets, `secrets:use` |
 | Namespaces and tokens | `areas/namespaces.spec.ts` | The header, opaque and signed tokens, Alice and Bob, quotas, each end user's secrets (no fallback, a token's `secrets:use`), the dashboard's Secrets, erasure |
-| Tenant isolation | `areas/tenancy.spec.ts` | Everything of one tenant probed from another, its change stream among them |
+| Organization isolation | `areas/tenancy.spec.ts` | Everything of one organization probed from another, its change stream among them |
 | Sandbox | `areas/sandbox.spec.ts` | Determinism, removed globals, imports, state across runs, exhaustion |
 | API hardening | `areas/hardening.spec.ts` | Malformed and oversized input and secrets, paths, injections, idempotency keys, `/hooks`, cookies, `/auth` |
-| CLI and local | `areas/cli.spec.ts` | Exit codes, `--json`, the embedded server, virtual time, replay, an API called over http with the secret `rewind secrets put` wrote and `--secret` attaches |
+| CLI and local | `areas/cli.spec.ts` | Exit codes, `--json`, the embedded server, virtual time, replay, an API called over http with the secret `rewind secrets put` wrote and `--secret` names |
 | Lifecycle | `lifecycle/lifecycle.spec.ts` | The owner of a partition killed, a node stopping and joining, full restart, Postgres paused, the archive, retention, erasure |
 | Sweeps | `sweeps/sweeps.spec.ts` | 5xx, panics, the canary (answers, problems, logs, the Collector's spans), problem types |
 

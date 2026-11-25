@@ -1,5 +1,5 @@
 /**
- * Helpers of the areas "Namespaces and tokens" and "API hardening": scripts, probes of a
+ * Helpers of the areas "Namespaces and tokens" and "API hardening": workflow code, probes of a
  * namespace and of a run, and raw requests with repeated headers (which `fetch` merges).
  */
 import { request as httpRequest } from "node:http";
@@ -24,12 +24,12 @@ export const TOKEN_ALL = [
 /** What a token holds without `permissions`. */
 export const TOKEN_DEFAULT = ["runs:read", "runs:start", "runs:control", "actions:read"];
 
-/** A two-line script that returns at once; the marker makes it a script of its own. */
+/** Two lines of code that return at once; the marker makes them a workflow of their own. */
 export function short(marker: string): string {
   return `// ${marker}\nexport default async function main() { return 1; }\n`;
 }
 
-/** A script that waits for the signal `approval` and returns its payload. */
+/** Code that waits for the signal `approval` and returns its payload. */
 export function waiting(marker: string): string {
   return `// ${marker}
 import { signal } from "rewind";
@@ -48,13 +48,13 @@ export async function start(api: Api, body: Record<string, unknown>, headers: Re
   return reply.json;
 }
 
-/** Waits until a run has committed its first activation and waits for something. */
+/** Waits until a run has committed its first step and waits for something. */
 export async function untilWaiting(api: Api, id: string): Promise<any> {
   return eventually(
     `run ${id} waits`,
     async () => {
       const reply = await api.get(`/v1/runs/${id}`);
-      return reply.json?.status === "active" && (reply.json.waitingFor?.length ?? 0) > 0 ? reply.json : undefined;
+      return reply.json?.status === "waiting" && (reply.json.waitingFor?.length ?? 0) > 0 ? reply.json : undefined;
     },
     60_000,
     200,
@@ -75,7 +75,7 @@ export async function namespaceState(owner: Api, name: string): Promise<unknown>
   };
 }
 
-/** What a request could have changed in a run: its status, its journal's length, its waits. */
+/** What a request could have changed in a run: its status, its history's length, its waits. */
 export async function runState(owner: Api, id: string): Promise<unknown> {
   const reply = await owner.get(`/v1/runs/${id}`);
   expectOk(reply, 200);

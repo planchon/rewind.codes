@@ -1,15 +1,15 @@
 /**
  * Criterion 7 (`archi/09-roadmap.md`, "0.1 is done when"): an operator finds any run by label,
- * tool or error in the dashboard, and sees its code next to its trace.
+ * action or error in the dashboard, and sees its code next to its history.
  *
  * The dashboard is the one `rewind-server` embeds and serves. Runs are made through the SDK, with
  * its worker answering the harness actions; the operator signs in with a `reader` key, searches with
  * the query bar, steps through a run with the time cursor, and sees a run waiting for a signal
- * and the failures grouped by signature.
+ * and the failures grouped by fingerprint.
  */
 import { mkdtempSync } from "node:fs";
 import { join } from "node:path";
-import { HostToolError, Rewind, type Run } from "@rewind.codes/sdk";
+import { HarnessActionError, Rewind, type Run } from "@rewind.codes/sdk";
 import { expect, type Page, test } from "@playwright/test";
 import { startServer } from "../support/deployment.js";
 import { resultDir } from "../support/paths.js";
@@ -63,7 +63,7 @@ test.describe("criterion 7: the dashboard", () => {
       apiKey: (await admin.apiKeys.create({ organizationId: "acme", role: "harness", name: "harness" })).key!,
     }).namespace("alice");
     const actionSet = await harness.actionSets.create({
-      host: [
+      harness: [
         {
           name: "crm.lookup",
           description: "Find a customer by email.",
@@ -84,18 +84,18 @@ test.describe("criterion 7: the dashboard", () => {
     });
     const worker = harness.worker({
       actionSet: actionSet.id,
-      tools: {
+      actions: {
         "crm.lookup": ({ email }: { email: string }) => ({ id: `cus_${email.split("@")[0]}` }),
         "audit.record": () => ({ ok: true }),
         "payments.charge": () => {
-          throw new HostToolError("card declined", { data: { code: "card_declined" } });
+          throw new HarnessActionError("card declined", { data: { code: "card_declined" } });
         },
       },
       onError: () => undefined,
     });
     try {
-      const start = (script: string, labels: Record<string, string>, input: unknown = {}) =>
-        harness.runs.start({ actionSet: actionSet.id, script, labels, input });
+      const start = (code: string, labels: Record<string, string>, input: unknown = {}) =>
+        harness.runs.start({ actionSet: actionSet.id, code, labels, input });
       runs.triage = await start(TRIAGE, { team: "billing", conversation: "conv-7" }, { email: "ada@example.com" });
       runs.triageOther = await start(TRIAGE, { team: "support", conversation: "conv-10" }, { email: "bob@example.com" });
       runs.charge = await start(CHARGE, { team: "billing", conversation: "conv-8" });
@@ -112,7 +112,7 @@ test.describe("criterion 7: the dashboard", () => {
       await expect
         .poll(async () => (await harness.runs.list({ labels: { conversation: "conv-9" }, error: "DeadlockError" })).runs.length)
         .toBe(1);
-      await expect.poll(async () => (await harness.runs.list({ tool: "payments.charge" })).runs.length).toBe(1);
+      await expect.poll(async () => (await harness.runs.list({ action: "payments.charge" })).runs.length).toBe(1);
       // The read model knows what the waiter waits for.
       await expect
         .poll(async () => {
@@ -146,14 +146,14 @@ test.describe("criterion 7: the dashboard", () => {
     await bar.press("Enter");
   }
 
-  test("an operator finds runs by label, tool and error, and sees a run's code next to its trace", async ({ page }) => {
+  test("an operator finds runs by label, action and error, and sees a run's code next to its history", async ({ page }) => {
     await page.goto(`${server.url}/`);
     await page.getByPlaceholder("rewind_sk_…").fill(readerKey);
     await page.getByRole("button", { name: "Continue" }).click();
     await expect(page).toHaveURL(/^[^#]*\/overview$/);
     await expect(page.getByRole("link", { name: /Waiting now\s*1/ })).toBeVisible();
-    await page.getByRole("navigation", { name: "Views" }).getByRole("link", { name: "Observability" }).click();
-    await expect(page).toHaveURL(/^[^#]*\/observability/);
+    await page.getByRole("navigation", { name: "Views" }).getByRole("link", { name: "Runs" }).click();
+    await expect(page).toHaveURL(/^[^#]*\/runs/);
     await expect.poll(shown(page)).toEqual([...Object.values(runs), waiter].map((r) => r.id).sort());
 
     // By label.
@@ -162,10 +162,10 @@ test.describe("criterion 7: the dashboard", () => {
     await search(page, "@team:support");
     await expect.poll(shown(page)).toEqual([runs.triageOther.id, runs.stuck.id].sort());
 
-    // By tool.
-    await search(page, "tool:payments.charge");
+    // By action.
+    await search(page, "action:payments.charge");
     await expect.poll(shown(page)).toEqual([runs.charge.id]);
-    await search(page, "tool:crm.lookup");
+    await search(page, "action:crm.lookup");
     await expect.poll(shown(page)).toEqual([runs.triage.id, runs.triageOther.id].sort());
 
     // By error: the kind of a failed call, or the name of the error a run failed with.
@@ -176,7 +176,7 @@ test.describe("criterion 7: the dashboard", () => {
     // The query lives in the URL.
     expect(page.url()).toContain("DeadlockError");
 
-    // A filter's value, in Observability's sidebar: a click asks for it.
+    // A filter's value, in the sidebar of Runs: a click asks for it.
     await search(page, "");
     const status = page.getByRole("region", { name: "Filters" }).getByRole("group", { name: "Status" });
     await status.getByRole("button", { name: /^Status failed, 2 runs$/ }).click();
@@ -187,18 +187,18 @@ test.describe("criterion 7: the dashboard", () => {
     await expect(page.getByText("The query cannot be read:")).toBeVisible();
     await expect(page.locator(".qbar-mirror .q-bad")).toHaveText("stauts:failed");
 
-    // A label and a tool together, then the run opened from the table.
-    await search(page, "@team:billing tool:crm.lookup");
+    // A label and an action together, then the run opened from the table.
+    await search(page, "@team:billing action:crm.lookup");
     await expect.poll(shown(page)).toEqual([runs.triage.id]);
     await page.locator("table.grid tbody tr a.row-link").first().click();
     // A run's page is at its handle.
     await expect(page).toHaveURL(new RegExp(`^[^#]*/runs/${runs.triage.handle}`));
 
-    // Its source, each line with what it caused.
-    const source = page.getByRole("region", { name: "Source" });
-    await expect(source).toContainText("const customer = await crm.lookup({ email: input.email });");
-    const line = (n: number) => source.locator(".code-text .code-row").nth(n - 1);
-    const notes = (n: number) => source.locator(".code-notes .code-row").nth(n - 1);
+    // Its code, each line with what it caused.
+    const code = page.getByRole("region", { name: "Code" });
+    await expect(code).toContainText("const customer = await crm.lookup({ email: input.email });");
+    const line = (n: number) => code.locator(".code-text .code-row").nth(n - 1);
+    const notes = (n: number) => code.locator(".code-notes .code-row").nth(n - 1);
     await expect(line(5)).toContainText("crm.lookup");
     await expect(notes(5)).toContainText("crm.lookup");
     await expect(line(6)).toContainText("sleep");
@@ -222,7 +222,7 @@ test.describe("criterion 7: the dashboard", () => {
     await page.keyboard.press("Home");
     await expect(page).toHaveURL(/[?&]step=0(&|$)/);
     await expect(cursor).toContainText("Step 1 of 4");
-    const mark = (n: number) => source.locator(".code-gutter .code-row").nth(n - 1).locator(".mk");
+    const mark = (n: number) => code.locator(".code-gutter .code-row").nth(n - 1).locator(".mk");
     await expect(mark(4)).toHaveText("▸");
     await expect(mark(5)).toHaveText("①");
     await expect(notes(7)).toBeEmpty();
@@ -246,26 +246,26 @@ test.describe("criterion 7: the dashboard", () => {
     await expect(watches).toContainText("not assigned yet");
 
     // Waiting: the run waiting for the signal, on its line.
-    await page.goto(`${server.url}/observability/waiting`);
+    await page.goto(`${server.url}/runs/waiting`);
     const waiting = page.locator("table.grid tbody tr", { has: page.locator(`.run-handle[title$="id ${waiter.id}"]`) });
     await expect(waiting).toContainText('signal "go-ahead"');
     await expect(waiting).toContainText('const go = await signal<{ go: boolean }>("go-ahead");');
     await expect(page.getByRole("tab", { name: /Signals/ })).toContainText("1");
 
-    // Failures: the deadlock is a group, which opens its runs.
-    await page.goto(`${server.url}/observability/failures`);
-    const group = page.locator("table.grid tbody tr", { hasText: "DeadlockError" }).first();
-    await expect(group).toBeVisible();
-    await expect(group).toContainText(runs.stuck.handle.split("/").pop()!);
-    await group.locator("td").first().getByRole("link").click();
-    await expect(page).toHaveURL(/^[^#]*\/observability\?q=fingerprint/);
+    // Failures: the deadlock is a fingerprint, which opens its runs.
+    await page.goto(`${server.url}/runs/failures`);
+    const fingerprint = page.locator("table.grid tbody tr", { hasText: "DeadlockError" }).first();
+    await expect(fingerprint).toBeVisible();
+    await expect(fingerprint).toContainText(runs.stuck.handle.split("/").pop()!);
+    await fingerprint.locator("td").first().getByRole("link").click();
+    await expect(page).toHaveURL(/^[^#]*\/runs\?q=fingerprint/);
     await expect.poll(shown(page)).toEqual([runs.stuck.id]);
 
     // A failed run: the call that failed, on its line, and the error. Opened from a link of an
     // earlier version, its route in the fragment: the app reads it as the path it meant.
     await page.goto(`${server.url}/#/runs/${runs.charge.id}`);
     await expect(page).toHaveURL(new RegExp(`^[^#]*/runs/${runs.charge.id}$`));
-    const failed = page.getByRole("region", { name: "Source" });
+    const failed = page.getByRole("region", { name: "Code" });
     await expect(failed.locator(".code-text .code-row").nth(3)).toContainText("payments.charge({ amount: 100 })");
     await expect(failed.locator(".code-notes .code-row").nth(3)).toContainText("payments.charge");
     await expect(page.getByText("payments.charge failed: card declined").first()).toBeVisible();

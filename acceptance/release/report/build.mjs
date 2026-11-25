@@ -42,7 +42,7 @@ const AREAS = {
   observability: "Observability",
   access: "Access",
   namespaces: "Namespaces and tokens",
-  tenancy: "Tenant isolation",
+  tenancy: "Organization isolation",
   sandbox: "Sandbox",
   hardening: "API hardening",
   cli: "CLI and local",

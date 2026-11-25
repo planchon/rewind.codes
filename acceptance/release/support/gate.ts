@@ -1,6 +1,6 @@
 /**
  * What every spec of the release gate imports: `test` and `expect`, the setups' addresses, an
- * HTTP client that records every exchange, tenants made with the operator key, and the helpers
+ * HTTP client that records every exchange, organizations made with the operator key, and the helpers
  * of the three kinds of check (`acceptance/release/README.md`).
  *
  * - Each test carries exactly one tag: `@success`, `@failure` or `@attack`.
@@ -30,7 +30,7 @@ export interface GateStacks {
   b: StackInfo;
   /**
    * A value only this run of the gate knows. Specs put it as secrets (`PUT /v1/secrets/{name}`,
-   * `PUT /v1/namespaces/{name}/secrets/{secret}`) that their runs attach, and an MCP server or an
+   * `PUT /v1/namespaces/{name}/secrets/{secret}`) that their runs use, and an MCP server or an
    * API receives it; it must never come back in an answer of Rewind (a run, a run export, a problem),
    * a trace, a log, the database in clear, or the dashboard.
    */
@@ -353,10 +353,10 @@ export async function expectRefused<T>(options: {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Tenants
+// Organizations
 
-/** A tenant made for a spec with the operator key: its owner key and clients. */
-export interface Tenant {
+/** An organization made for a spec with the operator key: its owner key and clients. */
+export interface Org {
   id: string;
   /** The `owner` key's secret. */
   ownerKey: string;
@@ -364,7 +364,7 @@ export interface Tenant {
   api: Api;
   /** The SDK as the owner, recorded. */
   rewind: Rewind;
-  /** Another key of the tenant: its secret and id. */
+  /** Another key of the organization: its secret and id. */
   key(role: string, options?: { name?: string; labels?: Record<string, string> }): Promise<{ key: string; id: string }>;
   /** An SDK client with this bearer (a key or a token), recorded. */
   client(bearer: { apiKey?: string; token?: string }): Rewind;
@@ -376,10 +376,10 @@ export function operator(stack: StackInfo = stacks().a): Api {
 }
 
 /**
- * A new tenant on a setup (A by default), named after the spec, with an `owner` key made by the
+ * A new organization on a setup (A by default), named after the spec, with an `owner` key made by the
  * operator: organizations are not created through WorkOS in the gate.
  */
-export async function newTenant(prefix: string, stack: StackInfo = stacks().a): Promise<Tenant> {
+export async function newOrg(prefix: string, stack: StackInfo = stacks().a): Promise<Org> {
   const id = `${prefix.replace(/[^A-Za-z0-9_-]/g, "-").slice(0, 40)}-${randomBytes(4).toString("hex")}`;
   const created = await operator(stack).post("/v1/api-keys", { organizationId: id, role: "owner", name: `${prefix} owner` });
   expectOk(created, 201);
@@ -402,11 +402,11 @@ export async function newTenant(prefix: string, stack: StackInfo = stacks().a): 
 }
 
 /**
- * The canary run: a trivial script that must complete on the setup, after an attack meant to
- * take a node down. Uses the tenant's owner key and a namespace of its own.
+ * The canary run: trivial code that must complete on the setup, after an attack meant to
+ * take a node down. Uses the organization's owner key and a namespace of its own.
  */
-export async function expectHealthy(tenant: Tenant, namespace = "canary"): Promise<void> {
-  const started = await tenant.api.ns(namespace).post("/v1/runs", {
+export async function expectHealthy(org: Org, namespace = "canary"): Promise<void> {
+  const started = await org.api.ns(namespace).post("/v1/runs", {
     code: `export default async function main(input: { n: number }) { return input.n * 2; }\n`,
     input: { n: 21 },
     wait: "30s",
@@ -417,7 +417,7 @@ export async function expectHealthy(tenant: Tenant, namespace = "canary"): Promi
     run = await eventually(
       "the canary run completes",
       async () => {
-        const reply = await tenant.api.get(`/v1/runs/${run.id}`, { query: { wait: "10s" } });
+        const reply = await org.api.get(`/v1/runs/${run.id}`, { query: { wait: "10s" } });
         return reply.json?.status === "completed" ? reply.json : undefined;
       },
       60_000,
@@ -469,7 +469,7 @@ export function evidence(text: string): void {
   base.info().annotations.push({ type: "evidence", description: text });
 }
 
-/** A short unique suffix, for names within a tenant. */
+/** A short unique suffix, for names within an organization. */
 export function unique(prefix = ""): string {
   return `${prefix}${randomBytes(4).toString("hex")}`;
 }

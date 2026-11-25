@@ -7,7 +7,7 @@ import { defineConfig, devices } from "@playwright/test";
  *
  * - `criteria`: the 0.1 criteria that run without WorkOS and without cargo (`tests/`).
  * - `areas`: one spec per area, files in parallel, on setups A and B (started by the global
- *   setup), a tenant per file.
+ *   setup), an organization per file.
  * - `lifecycle`: setup D, alone: kills, restarts, an outage, retention.
  * - `sweeps`: what every earlier stage left: no unexpected 5xx, no panic, no leaked canary.
  */

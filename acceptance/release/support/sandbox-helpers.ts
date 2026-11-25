@@ -17,16 +17,16 @@ export type RunJson = Record<string, any> & { id: string; status: string };
 const ENDED = new Set(["completed", "failed", "cancelled", "aborted"]);
 
 /**
- * Starts a run of `script` in `namespace`, without the type-check by default (these specs test
+ * Starts a run of `code` in `namespace`, without the type-check by default (these specs test
  * the runtime, not tsgo), and waits until it ends or waits for the outside world.
  */
-export async function runScript(
+export async function runCode(
   api: Api,
-  script: string,
+  code: string,
   options: { namespace?: string; input?: unknown; actionSet?: string; check?: boolean; timeoutMs?: number; extra?: Record<string, unknown> } = {},
 ): Promise<RunJson> {
   const started = await api.ns(options.namespace ?? "sandbox").post("/v1/runs", {
-    code: script,
+    code,
     input: options.input,
     actionSet: options.actionSet,
     check: options.check ?? false,
@@ -37,7 +37,7 @@ export async function runScript(
   return settled(api, started.json, options.timeoutMs);
 }
 
-/** Waits until the run ends, or waits for a signal, a tool or a timer. */
+/** Waits until the run ends, or waits for a signal, an action or a timer. */
 export async function settled(api: Api, run: RunJson, timeoutMs = 120_000): Promise<RunJson> {
   if (ENDED.has(run.status) || (run.waitingFor?.length ?? 0) > 0) return run;
   return eventually(
@@ -76,7 +76,7 @@ export function expectLimit(run: RunJson, message: string): void {
 }
 
 /** The run's export (`GET /v1/runs/{id}/export`). */
-export async function journal(api: Api, id: string): Promise<{ text: string; doc: any }> {
+export async function runExport(api: Api, id: string): Promise<{ text: string; doc: any }> {
   const reply = await api.get(`/v1/runs/${id}/export`);
   expectOk(reply);
   return { text: reply.text, doc: reply.json };
@@ -90,7 +90,7 @@ export function eventTypes(doc: any): string[] {
 /** `rewind [--json] replay <file>` of a run export, in a directory without a server. */
 export function replayDocument(document: string, args: string[] = []): { code: number; stdout: string; stderr: string } {
   const dir = shortTempDir("rewind-gate-replay");
-  const file = join(dir, "journal.json");
+  const file = join(dir, "run.json");
   writeFileSync(file, document);
   const env = { ...process.env };
   delete env.REWIND_URL;

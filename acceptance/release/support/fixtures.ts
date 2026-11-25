@@ -1,7 +1,7 @@
 /**
  * The outside world of the release gate, run in the spec's process on 127.0.0.1: an MCP server
  * (which may check each request, as a server of signed calls does), an API with its OpenAPI
- * document, a receiver of lifecycle webhooks, a sink that counts whatever reaches it, a
+ * document, a receiver of webhooks, a sink that counts whatever reaches it, a
  * redirector, and the keys that sign (or forge) end users' tokens. Each records what it received,
  * so a check can prove that an attack had no effect.
  */
@@ -315,7 +315,8 @@ export async function startApiFixture(options: { server?: string } = {}): Promis
 // ---------------------------------------------------------------------------------------------
 // Webhooks
 
-export interface Delivery {
+/** A webhook as it was received: its request, untouched. */
+export interface ReceivedWebhook {
   path: string;
   headers: Record<string, string>;
   body: string;
@@ -325,18 +326,19 @@ export interface Delivery {
 export interface WebhookReceiver {
   /** `http://127.0.0.1:<port>/hooks`. */
   url: string;
-  deliveries: Delivery[];
+  /** Every webhook received, in order. */
+  received: ReceivedWebhook[];
   close(): Promise<void>;
 }
 
-/** Receives lifecycle webhooks and answers 204. */
+/** Receives the webhooks Rewind posts to a subscription and answers 204. */
 export async function startWebhookReceiver(): Promise<WebhookReceiver> {
-  const deliveries: Delivery[] = [];
+  const received: ReceivedWebhook[] = [];
   const { server, port } = await listen(async (req, res) => {
-    deliveries.push({ path: req.url ?? "", headers: headersOf(req), body: await readBody(req), at: Date.now() });
+    received.push({ path: req.url ?? "", headers: headersOf(req), body: await readBody(req), at: Date.now() });
     res.writeHead(204).end();
   });
-  return { url: `http://127.0.0.1:${port}/hooks`, deliveries, close: () => close(server) };
+  return { url: `http://127.0.0.1:${port}/hooks`, received, close: () => close(server) };
 }
 
 // ---------------------------------------------------------------------------------------------

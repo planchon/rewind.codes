@@ -1,16 +1,16 @@
 /**
  * Criterion 1 (`archi/09-roadmap.md`, "0.1 is done when"): a harness drives runs through the SDK,
  * with several nodes on one Postgres. Each run appears as one trace under the harness's span,
- * and runs can be searched by label and tool.
+ * and runs can be searched by label and action.
  *
  * The deployment: Postgres for the control plane, a bucket on MinIO for the partitions, the
  * archive and the blobs, an OpenTelemetry Collector writing to a file, and two nodes
  * (`rewind server`, each an HTTP edge and a node). The harness is the TypeScript SDK: its
- * harness's worker holds a call stream open on one node and serves the harness's tools; it sends
+ * harness's worker holds a call stream open on one node and serves the harness's actions; it sends
  * a signal and approves a call through the other.
  */
 import { randomBytes } from "node:crypto";
-import { type HostToolContext, Rewind, type Run } from "@rewind.codes/sdk";
+import { type HarnessActionContext, Rewind, type Run } from "@rewind.codes/sdk";
 import { expect, test } from "@playwright/test";
 import { type Deployment, startDeployment } from "../support/deployment.js";
 import { dockerAvailable } from "../support/docker.js";
@@ -18,7 +18,7 @@ import { flattenSpans, HarnessSpan, parseTraceparent, type SpanRecord } from "..
 import { resultDir } from "../support/paths.js";
 import { eventually } from "../support/processes.js";
 
-const SCRIPT = `import { signal, sleep } from "rewind";
+const CODE = `import { signal, sleep } from "rewind";
 import { crm, payments } from "rewind:actions";
 
 export default async function main(input: { email: string }) {
@@ -69,7 +69,7 @@ test.describe("criterion 1: SDK, two nodes, one Postgres", () => {
     const suite = `acceptance-${randomBytes(4).toString("hex")}`;
 
     const actionSet = await edges[0]!.actionSets.create({
-      host: [
+      harness: [
         {
           name: "crm.lookup",
           description: "Find a customer by email.",
@@ -105,14 +105,14 @@ test.describe("criterion 1: SDK, two nodes, one Postgres", () => {
 
     // The harness's harness actions, served by the SDK's worker on the second node's call stream,
     // whichever node owns the run. Each call is logged with its context.
-    const calls: { tool: string; runId: string; seq: number; traceparent: string | undefined; key: string }[] = [];
+    const calls: { action: string; runId: string; seq: number; traceparent: string | undefined; key: string }[] = [];
     /** What the worker reported, for a stop that does not come. */
     const reported: string[] = [];
-    const log = (tool: string, ctx: HostToolContext) =>
-      calls.push({ tool, runId: ctx.runId, seq: ctx.seq, traceparent: ctx.traceparent, key: ctx.idempotencyKey });
+    const log = (action: string, ctx: HarnessActionContext) =>
+      calls.push({ action, runId: ctx.runId, seq: ctx.seq, traceparent: ctx.traceparent, key: ctx.idempotencyKey });
     const worker = edges[1 % edges.length]!.worker({
       actionSet: actionSet.id,
-      tools: {
+      actions: {
         "crm.lookup": async ({ email }: { email: string }, ctx) => {
           log("crm.lookup", ctx);
           return { id: `cus_${email.split("@")[0]}`, notes: NOTES };
@@ -123,7 +123,7 @@ test.describe("criterion 1: SDK, two nodes, one Postgres", () => {
         },
       },
       onError: (error, info) => {
-        reported.push(`${new Date().toISOString()} ${info.phase} ${info.task?.tool ?? ""}: ${String(error)}`);
+        reported.push(`${new Date().toISOString()} ${info.phase} ${info.call?.action ?? ""}: ${String(error)}`);
         console.error("worker", info.phase, error);
       },
     });
@@ -135,7 +135,7 @@ test.describe("criterion 1: SDK, two nodes, one Postgres", () => {
       for (let n = 0; n < RUNS; n++) {
         const request = {
           actionSet: actionSet.id,
-          script: SCRIPT,
+          code: CODE,
           input: { email: `user${n}@example.com` },
           idempotencyKey: `${suite}-tool-call-${n}`,
           labels: { suite, conversation: `c${n}` },
@@ -163,14 +163,14 @@ test.describe("criterion 1: SDK, two nodes, one Postgres", () => {
       // A person approves each refund, after reading its arguments.
       for (const [n, run] of runs.entries()) {
         if (n === NO_REFUND) continue;
-        const pending = await eventually(`run ${n}'s refund waits for approval`, async () => {
+        const asked = await eventually(`run ${n}'s refund waits for approval`, async () => {
           const found = user(n, 0).approvals.pending(await user(n, 0).runs.get(run.id));
           return found.length > 0 ? found : undefined;
         });
-        expect(pending).toHaveLength(1);
-        expect(pending[0]!.tool).toBe("payments.refund");
-        expect(await user(n, 0).approvals.args(pending[0]!)).toEqual({ customer: `cus_user${n}`, amount: 10 * (n + 1) });
-        await user(n, 0).approvals.approve(pending[0]!);
+        expect(asked).toHaveLength(1);
+        expect(asked[0]!.action).toBe("payments.refund");
+        expect(await user(n, 0).approvals.args(asked[0]!)).toEqual({ customer: `cus_user${n}`, amount: 10 * (n + 1) });
+        await user(n, 0).approvals.approve(asked[0]!);
       }
 
       const ended = await Promise.all(runs.map((run, n) => user(n, 1).runs.get(run.id, { wait: "120s" })));
@@ -184,19 +184,19 @@ test.describe("criterion 1: SDK, two nodes, one Postgres", () => {
         expect(run.labels).toEqual({ suite, conversation: `c${n}` });
       }
       // Every call was made once.
-      expect(calls.filter((c) => c.tool === "crm.lookup")).toHaveLength(RUNS);
-      expect(calls.filter((c) => c.tool === "payments.refund")).toHaveLength(RUNS - 1);
+      expect(calls.filter((c) => c.action === "crm.lookup")).toHaveLength(RUNS);
+      expect(calls.filter((c) => c.action === "payments.refund")).toHaveLength(RUNS - 1);
 
-      // Found through the API by label and by tool, across the namespaces and so the partitions
+      // Found through the API by label and by action, across the namespaces and so the partitions
       // (each run's summary in its partition's index).
       const all = runs.map((r) => r.id).sort();
       for (const edge of edges) {
         const ids = (page: { runs: { id: string }[] }) => page.runs.map((r) => r.id).sort();
         await expect.poll(async () => ids(await edge.runs.list({ labels: { suite } }))).toEqual(all);
         await expect
-          .poll(async () => ids(await edge.runs.list({ labels: { suite }, tool: "payments.refund" })))
+          .poll(async () => ids(await edge.runs.list({ labels: { suite }, action: "payments.refund" })))
           .toEqual(all.filter((id) => id !== runs[NO_REFUND]!.id));
-        await expect.poll(async () => ids(await edge.runs.list({ labels: { suite }, tool: "crm.lookup" }))).toEqual(all);
+        await expect.poll(async () => ids(await edge.runs.list({ labels: { suite }, action: "crm.lookup" }))).toEqual(all);
         expect(ids(await edge.runs.list({ labels: { suite, conversation: "c2" } }))).toEqual([runs[2]!.id]);
         expect(ids(await edge.runs.list({ labels: { suite }, status: "failed" }))).toEqual([]);
       }
@@ -247,7 +247,7 @@ test.describe("criterion 1: SDK, two nodes, one Postgres", () => {
           activatedBy.add(activation.resource["service.instance.id"]);
         }
         // The harness action got the trace context, with the call span as parent.
-        const call = calls.find((c) => c.runId === run.id && c.tool === "crm.lookup");
+        const call = calls.find((c) => c.runId === run.id && c.action === "crm.lookup");
         expect(call?.traceparent).toBeDefined();
         expect(parseTraceparent(call!.traceparent!)).toEqual({ traceId: span.traceId, parentId: lookup.spanId });
       }

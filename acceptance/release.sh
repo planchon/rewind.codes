@@ -12,7 +12,7 @@
 #
 # Exit code: 0 when every check that ran passed (GO, or PARTIAL without a failure), 1 otherwise.
 # Needs Rust, Node 22.12 or later with pnpm 10, and Docker. It removes its containers and stops its
-# servers at the end, even after Ctrl-C. WorkOS is never used: tenants are made with the
+# servers at the end, even after Ctrl-C. WorkOS is never used: organizations are made with the
 # operator's key.
 set -euo pipefail
 
