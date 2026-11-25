@@ -2,7 +2,7 @@
 
 Every version of `@rewind.codes/sdk`. The package follows [Semantic Versioning](https://semver.org).
 
-## 0.6.0 (unreleased)
+## 0.6.0 (2026-11-25)
 
 The release that renames Rewind in the words of its glossary, and makes a workflow one entity. Everything Rewind runs
 is a workflow, and its TypeScript text is its code; what a workflow calls is an action, in an action set; a call of a
