@@ -211,7 +211,17 @@ It rewrites the partitions and the archive in the bucket, the control plane, the
 the webhook subscriptions, recomputes the digest of each pinned action set and workflow version and rewrites every
 reference to it, and gives every workflow its id and its scope. Workflow names and version numbers (`triage`,
 `triage@v12`) keep naming what they named; an old digest no longer resolves. Then start the new build. Rehearse it
-first on a copy of your Postgres database and bucket.
+first on a copy of your Postgres database and bucket. An embedded server's `.rewind/` is rewritten by
+`rewind server rename-data --embedded`, in the project, while no `rewind` command serves it.
+
+<Warning>
+  Runs not yet [moved into partitions](#move-runs-into-partitions) come first. If your Postgres still holds runs in its
+  schema `legacy` (a deployment that skipped the deploy that moved runs to partitions, or whose `migrate-runs` did not
+  finish), run `rewind server migrate-runs` **of the build before this release**, nodes stopped, then
+  `rewind server rename-data` of the new one: `rename-data` refuses to start while such runs wait. An embedded server
+  whose `.rewind/` still holds `journal.db` does the same: `rewind server migrate-runs --embedded` with the previous
+  `rewind`, then `rewind server rename-data --embedded` with the new one.
+</Warning>
 
 Code already written keeps running and replaying, and so do the runs waiting on it; signal URLs, call tokens and run
 handles already handed out keep working.

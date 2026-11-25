@@ -9,6 +9,11 @@ is a workflow, and its TypeScript text is its code; what a workflow calls is an 
 harness action is a call; a run's record is its history, made of events. Every renamed method, type, option and value
 breaks: the API keeps no old path, so 0.6.0 speaks only to a server of the same release.
 
+A self-hosted server of this release rewrites its stored data once, nodes stopped, with `rewind server rename-data`
+([Self-hosting](https://docs.rewind.codes/self-hosting#rewrite-the-stored-names)). A store that still holds runs from
+before the move to partitions on S3 (Postgres's schema `legacy`, or an embedded `.rewind/journal.db`) first runs
+`rewind server migrate-runs` of the previous build: `rename-data` refuses to start until they are moved.
+
 ### The workflow model
 
 A workflow has an id (`wf_…`), a name unique in its scope if it has one, a description, versions numbered from 1 (each

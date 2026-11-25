@@ -3,16 +3,17 @@
 # Rewind
 
 A deterministic, durable TypeScript runtime for programmatic tool calling, for agent
-harness developers. The model writes a script that calls MCP and harness tools; Rewind
-runs it in a V8 sandbox where every interaction with the outside world is journaled.
-The journal gives durable execution (`await sleep("10d")`, signals), replay, testing
-against recorded runs, and observability.
+harness developers. The model writes a workflow whose code calls actions (the tools of MCP
+servers, APIs, and the harness's own actions); Rewind runs it in a V8 sandbox where every
+interaction with the outside world is recorded in the run's history. The history gives durable
+execution (`await sleep("10d")`, signals), replay, testing against recorded runs, and
+observability.
 
 - Site: [rewind.codes](https://rewind.codes); the hosted dashboard is [app.rewind.codes](https://app.rewind.codes).
 - Documentation: [docs.rewind.codes](https://docs.rewind.codes), from [docs/](docs/README.md) (Mintlify); runnable
   [examples/](examples/README.md) of the SDK.
 - Architecture: [archi/](archi/README.md), the specification the code follows.
-- TypeScript SDK: [sdk/typescript/](sdk/typescript/README.md), the client, the host-tool worker and the agent tools.
+- TypeScript SDK: [sdk/typescript/](sdk/typescript/README.md), the client, the worker of harness actions and the agent tools.
 - Dashboard: [dashboard/](dashboard/README.md), the operator's view of every run, served by `rewind-server`.
 - Self-hosting: [deploy/](deploy/README.md), a deployment of nodes on Postgres (the control plane) and a bucket on R2
   or S3 (the runs).
@@ -21,10 +22,10 @@ against recorded runs, and observability.
 
 | Crate | Layer | Role |
 | --- | --- | --- |
-| [`rewind-core`](crates/rewind-core) | domain | The journal, payload identity (RFC 8785), run state, the determinism check. Pure: no I/O, no serde. |
+| [`rewind-core`](crates/rewind-core) | domain | The history and its events, payload identity (RFC 8785), run state, the determinism check. Pure: no I/O, no serde. |
 | [`rewind-engine`](crates/rewind-engine) | application | Use cases, ports, the actors of a node (partition owners, executors, organizations, router, edge), replay, the deterministic driver, in-memory adapters, conformance suites. |
-| [`rewind-format`](crates/rewind-format) | adapter support | The stored formats, v1: journals, partition records, cassettes, pinned toolsets. |
-| [`rewind-runtime`](crates/rewind-runtime) | adapter | The V8 sandbox behind the `ScriptExecutor` port. |
+| [`rewind-format`](crates/rewind-format) | adapter support | The stored formats, v1: histories, partition records, cassettes, pinned action sets, and the rewrite of the stored names. |
+| [`rewind-runtime`](crates/rewind-runtime) | adapter | The V8 sandbox behind the `CodeExecutor` port. |
 | [`rewind-store-slatedb`](crates/rewind-store-slatedb) | adapter | The partitions on SlateDB, in a bucket or a directory. |
 | [`rewind-store-postgres`](crates/rewind-store-postgres), [`rewind-store-turso`](crates/rewind-store-turso) | adapter | The control plane: the catalog, access, secrets, and the cluster's members. |
 | [`rewind-blob`](crates/rewind-blob) | adapter | The `BlobStore` and the run archive on local files and on S3, and their cache. |
@@ -44,25 +45,28 @@ cargo nextest run --workspace                                # every test (cargo
 cargo test -p rewind-e2e                                     # the end-to-end corpus
 cargo test -p rewind-e2e red::deadlock                       # one case
 REWIND_E2E_RECORD=1 cargo test -p rewind-e2e --test integration corpus::   # record the histories again, then review the diff
-cargo run -p rewind-e2e -- replay epoch-1/blue/triage_workflow [--script other.ts]
+cargo run -p rewind-e2e -- replay epoch-2/blue/fan_out [--code other.ts]
 cargo run -p evals -- list                                   # the eval tasks
 cargo run -p evals -- run --model claude-opus-5-5            # run models on them (costs tokens)
 ```
 
 ## End-to-end corpus
 
-`crates/rewind-e2e/corpus/epoch-1/{blue,red}/<case>/` holds a `script.ts`, a `scenario.json`
-(input, tools, steps such as signals, cancellations and time moving forward, and
-expectations) and the `journal.v1.json` recorded from it.
+`crates/rewind-e2e/corpus/epoch-2/{blue,red}/<case>/` holds a `workflow.ts`, a `scenario.json`
+(input, actions, steps such as signals, cancellations and time moving forward, and
+expectations) and the `history.v1.json` recorded from it. `corpus/epoch-1/` keeps the histories
+the build before the rename release recorded, byte for byte, in its names (`script.ts`,
+`journal.v1.json`): they are read through the rewrite of the stored names and replayed under
+epoch 1.
 
 - **Blue** cases must succeed: the run completes, or waits for the outside world.
 - **Red** cases must fail exactly as specified: a refused start; a failed, cancelled or
   aborted run (deadlock, unhandled rejection, limits, forbidden imports, cancellation grace,
-  deadline); a replay that diverges from the journal; a tampered journal.
+  deadline); a replay that diverges from the history; a tampered history.
 
-Each case runs live and must meet its expectations, must record the committed journal byte
-for byte, and the committed journal must replay with the script on a fresh executor. A build
-that stops replaying a journal of a determinism epoch it supports fails.
+Each case runs live and must meet its expectations, must record the committed history byte
+for byte, and the committed history must replay with its code on a fresh executor. A build
+that stops replaying a history of a determinism epoch it supports fails.
 
 ## License
 

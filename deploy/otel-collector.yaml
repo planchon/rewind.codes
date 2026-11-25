@@ -1,5 +1,5 @@
 # The OpenTelemetry Collector of the reference deployment: OTLP in, over gRPC and HTTP, from
-# the nodes (service telemetry, and run telemetry projected from the journal).
+# the nodes (service telemetry, and run telemetry projected from each run's history).
 # Replace the `debug` exporter by your backend's (otlp, otlphttp…).
 receivers:
   otlp:

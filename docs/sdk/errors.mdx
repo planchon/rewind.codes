@@ -69,11 +69,12 @@ All of them extend `RewindError`.
 ## Retrying requests
 
 A request that is safe to repeat is sent again after a network error or a 503, twice by default (`maxRetries`):
-reads, `PUT`, `DELETE`, action set registration and workflow creation (both find what they already made), checks and
-tests, and every request that carries an idempotency key.
+reads, `PUT`, `DELETE`, action set registration, and of a workflow `workflows.create`, `update`, `createVersion`,
+`promote` and `pull` (they find what they already made, or apply a merge patch again), checks and tests, and every
+request that carries an idempotency key.
 
 Starting a run, forking it or sending a signal **without** an idempotency key is never sent again, nor is minting a
-token. Give them a key, and they become safe to send again:
+token, adding tests to a suite (`addTests`, whose tests would run again), forking a workflow or recording tests. Give them a key, and they become safe to send again:
 
 ```ts
 await rewind.runs.start({ actionSet: actionSet.id, code, idempotencyKey: toolCall.id });

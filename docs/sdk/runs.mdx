@@ -75,7 +75,7 @@ const run = await rewind.runs.get(id, { wait: "10s" }); // wait for it to end, u
 
 run.status; // "queued" | "running" | "waiting" | "completed" | "failed" | "cancelled" | "aborted"
 run.handle; // "user_ada/triage/06bqx3k9f2mt": its namespace, its workflow's name or short id, a suffix
-run.workflow; // its workflow's id and name; run.version, the version's number
+run.workflow; // its workflow's id and name; run.workflow.version, the version's number
 run.output?.value; // with completed: what main returned
 run.error; // with failed or cancelled: name, message, location, code frame, the call that failed
 run.waitingFor; // with waiting: the signals, timers, calls and quarantine it waits for
@@ -147,9 +147,10 @@ const failures = await rewind.runs.failures({ since }); // failed runs by finger
 
 `sort` orders them: `started` (the default, the most recently started first), `oldest`, `activity` (the most recent
 activity first), `wakes` (the soonest to wake by itself first), `duration` (the longest first, the runs that have not
-ended last) or `calls` (the most calls first). Filters also exist as parameters: `status`, `waiting`, `labels`,
-`action`, `error`, `workflow`, `startedBy`, `source`. A query that cannot be read is refused with `invalid-query`, and
-the error says where the term at fault is.
+ended last) or `calls` (the most calls first). Filters also exist as parameters: `status`, `quarantined`, `labels`,
+`action`, `error`, `workflow`, `startedBy`, `source`, `startedAfter`, `startedBefore`. The runs that have not ended and
+what a waiting run waits for are terms of `q` only: `status:active`, `waiting:approval`. A query that cannot be read is
+refused with `invalid-query`, and the error says where the term at fault is.
 
 The statistics (`runs.stats`, `runs.failures`, the counts of `workflows.list`, `actions.stats`) come from hourly
 counters: their scope is one end user (a single `namespace:` term in `q`) or the whole organization, over a window of

@@ -2,7 +2,7 @@
 
 Harness code that uses [`@rewind.codes/sdk`](../sdk/typescript/README.md), one directory per
 subject. Each `index.ts` is a program you run; each `workflows/*.ts` is code a model would write,
-and runs in Rewind's sandbox. The documentation at [docs.rewind.codes](https://docs.rewind.codes)
+and runs in Rewind's sandbox (the workflows example's is in [`workflows/workflows/`](workflows/workflows)). The documentation at [docs.rewind.codes](https://docs.rewind.codes)
 walks through them.
 
 | Example | Shows |

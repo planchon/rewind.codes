@@ -67,8 +67,8 @@ x-node-env: &node-env
   # `loadgen` is the load generator's fake MCP server (profile load).
   REWIND_ALLOW_INTERNAL_ADDRESSES: ${REWIND_ALLOW_INTERNAL_ADDRESSES:-loadgen}
 
-# What the nodes that serve the HTTP API are given besides: the first key, and what the tenants
-# they create get.
+# What the nodes that serve the HTTP API are given besides: the first key, and what the
+# organizations they create get.
 x-edge-env: &edge-env
   <<: *node-env
   REWIND_ADMIN_KEY: ${REWIND_ADMIN_KEY:?run ./init.sh first}
@@ -192,7 +192,7 @@ services:
       net.ipv4.ip_forward: "1"
     environment:
       REWIND_EGRESS_ADDRESS: ${REWIND_EGRESS_ADDRESS:-172.29.213.2}
-      # MCP servers, APIs and their OpenAPI documents, hosts of `http` tools, receivers of
+      # MCP servers, APIs and their OpenAPI documents, hosts of the `http` action, receivers of
       # webhook subscriptions. `loadgen` is the fake MCP server of the load generator (profile
       # load).
       REWIND_EGRESS_ALLOW: ${REWIND_EGRESS_ALLOW:-loadgen}

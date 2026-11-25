@@ -223,7 +223,7 @@ with those it replaces, plus its new `tests`, must all pass, or nothing is store
 gets the failing tests as `test_workflow` shows them, and either fixes the code or changes the suite on purpose:
 
 - `retire: [{ names, reason }]` drops tests of the suite that are deprecated;
-- `replace: [{ name, reason, test?, expect? }]` replaces a test of the suite whose state or result is out of date, by a
+- `replace: [{ name, reason, new?, expect? }]` replaces a test of the suite whose state or result is out of date, by a
   whole new test or by a new `expect`.
 
 The reasons stay in the workflow's lineage. `get_workflow` reads it back: the latest version's code and schemas, each

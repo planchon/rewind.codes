@@ -11,8 +11,8 @@ WorkOS's waitlist: they sign in to the dashboard ([sign-in](#sign-in)).
 | `rewind.codes` | Vercel, project `rewind-landing` ([`landing/`](../../landing)) | The landing, static. `www.rewind.codes` redirects to it. `/auth/waitlist` is rewritten to `api.rewind.codes`, for its waitlist form |
 | `app.rewind.codes` | Vercel, project `rewind-dashboard` ([`dashboard/`](../../dashboard)) | The dashboard. `/v1/*` and `/auth/*` are rewritten to `api.rewind.codes`, so the app calls the API and signs in on its own origin: the sign-in's cookies are the app's |
 | `api.rewind.codes` | Railway, service `edge` | Caddy ([`edge/Caddyfile`](edge/Caddyfile)): every request to the node |
-| (private) | Railway, service `node` | `rewind server`: the HTTP API, keys and the dashboard's sign-in, and the node of the run plane (the owners of the partitions, the organization actors, the executors with V8, tool calls, timers, retention) |
-| (private) | Railway, `Postgres` | The control plane: tenants, namespaces, keys, grants, scripts, toolsets, workflows, secrets, subscriptions, the nodes and the partition map; the nodes' liveness locks in its database `postgres`. Railway's Postgres template, with a 5 GB volume |
+| (private) | Railway, service `node` | `rewind server`: the HTTP API, keys and the dashboard's sign-in, and the node of the run plane (the owners of the partitions, the organization actors, the executors with V8, the calls of actions, timers, retention) |
+| (private) | Railway, `Postgres` | The control plane: organizations, namespaces, keys, grants, code, action sets, workflows, secrets, subscriptions, the nodes and the partition map; the nodes' liveness locks in its database `postgres`. Railway's Postgres template, with a 5 GB volume |
 | (private) | AWS S3, bucket `rewind.codes-paris-prod-23112026-13b80` | The bucket: the partitions, the archive of ended runs, the payloads above 64 KiB and the test documents |
 
 The Railway project is `rewind`, environment `production`, region `europe-west4` (Amsterdam);
@@ -72,7 +72,7 @@ command takes a new deploy (`railway up`).
 | `REWIND_CLUSTER_SECRET` | node | 32 random bytes in hexadecimal (`openssl rand -hex 32`): it authenticates the node link, and every node of the deployment shares it |
 | `REWIND_NODE_ID` | node | `node`: the node's id, and the `service.instance.id` of its telemetry |
 | `REWIND_LINK_ADDRESS` | node | `${{RAILWAY_PRIVATE_DOMAIN}}:7070`: where the other nodes reach its link |
-| `REWIND_ADMIN_KEY`, `REWIND_ADMIN_ORGANIZATION` | node | The operator's key (`rewind_sk_…`), tenant `default` |
+| `REWIND_ADMIN_KEY`, `REWIND_ADMIN_ORGANIZATION` | node | The operator's key (`rewind_sk_…`), organization `default` |
 | `WORKOS_CLIENT_ID`, `WORKOS_API_KEY` | node | The WorkOS environment's client (`client_…`) and secret key (`sk_…`) |
 | `WORKOS_COOKIE_PASSWORD` | node | 32 random bytes in hexadecimal (`openssl rand -hex 32`): the key of the sign-in's sealed cookies. Changing it signs everyone out |
 | `WORKOS_REDIRECT_URI` | node | `https://app.rewind.codes/auth/callback`, registered in WorkOS |
@@ -82,8 +82,8 @@ command takes a new deploy (`railway up`).
 | `REWIND_LOG` | node | `info` |
 
 Read the admin key with `railway variable list --service node --kv | grep REWIND_ADMIN_KEY`. It
-creates the keys of any tenant as in
-[`deploy/README.md`](../README.md#tenants-keys-and-roles), against `https://api.rewind.codes`.
+creates the keys of any organization as in
+[`deploy/README.md`](../README.md#organizations-keys-and-roles), against `https://api.rewind.codes`.
 
 ## Sign-in
 
@@ -108,9 +108,9 @@ neither gVisor nor the egress gateway (13 November 2026); the people the operato
 code behind the walls that hold
 ([08](../../archi/08-decisions.md#taken-for-accounts-organizations-and-access-november-2026)). Of the walls of
 [`archi/06-storage-and-scale.md`](../../archi/06-storage-and-scale.md) ("Sandboxed nodes"),
-V8 and the egress checks of the `http` tool and of MCP servers hold: private, unique-local
-(Railway's `fd…` addresses), carrier-grade NAT and metadata addresses are refused, so a script
-cannot reach `postgres.railway.internal`. The node that runs the scripts also holds the admin key
+V8 and the egress checks of the `http` action and of MCP servers hold: private, unique-local
+(Railway's `fd…` addresses), carrier-grade NAT and metadata addresses are refused, so a workflow
+cannot reach `postgres.railway.internal`. The node that runs the workflows also holds the admin key
 and WorkOS's key, as every node that serves the API does.
 
 ## Vercel

@@ -11,12 +11,12 @@ Vercel.
 | Service | Image | Networks | Role |
 | --- | --- | --- | --- |
 | `edge` | `caddy:2-alpine` | public, core | The only published port. Sends each request to the next node |
-| `node-1`, `node-2` | `rewind` | a holder's namespace | `rewind server`: each an HTTP edge (the API, keys, the dashboard) and a node of the run plane (the owners of its partitions, the organization actors homed there, executors with V8, tool calls, timers, retention), linked to the other by the node link |
+| `node-1`, `node-2` | `rewind` | a holder's namespace | `rewind server`: each an HTTP edge (the API, keys, the dashboard) and a node of the run plane (the owners of its partitions, the organization actors homed there, executors with V8, the calls of actions, timers, retention), linked to the other by the node link |
 | `node-N-net` | `rewind-egress` | core | Holds a node's network namespace, with its default route through `egress`; healthy once the route is set |
 | `egress` | `rewind-egress` | core, public | The nodes' only way out: forwards to the addresses of allowed names only |
 | `node-dns` | `rewind-egress` | core | Profile `gvisor`: the DNS server of the nodes under gVisor, a relay to Docker's ([gVisor](#nodes-the-walls)) |
 | `walls`, `walls-net` | `rewind-egress` | a holder's namespace | Profile `walls`: the gVisor sandbox `check-walls.sh` checks the gVisor nodes' walls from, and its holder; started for the check only |
-| `postgres` | `postgres:17` | core | The control plane (`rewind-store-postgres`): tenants, namespaces, keys, grants, scripts, toolsets, workflows, secrets, subscriptions, the nodes and the partition map. The nodes' liveness locks, in its database `postgres`. It never holds a run |
+| `postgres` | `postgres:17` | core | The control plane (`rewind-store-postgres`): organizations (its `tenants`), namespaces, keys, grants, code, action sets, workflows, secrets, subscriptions, the nodes and the partition map. The nodes' liveness locks, in its database `postgres`. It never holds a run |
 | `minio`, `minio-init` | Chainguard's MinIO | core | The bucket (S3): the partitions (SlateDB, `partitions/`), the archive of ended runs (`runs/`), the payloads above 64 KiB and the test documents (`blobs/`, `tests/`); and the bucket's creation |
 | `otel-collector` | `otel/opentelemetry-collector` | core | Traces, metrics and logs of the nodes, over OTLP |
 | `node-previous` | `rewind`, a previous build | a holder's namespace | Profile `previous-epoch` (`previous-epoch-gvisor` under gVisor): `rewind server --executors-only`, the executors of a previous determinism epoch ([upgrades](#upgrades)) |
@@ -45,7 +45,7 @@ and tsgo embedded, on a distroless base (glibc, CA certificates, no shell), and 
 `nonroot` (65532). It sets `TZ=UTC`, which the sandbox requires, and `REWIND_LISTEN=0.0.0.0:8080`.
 
 Every service of the image runs with a read-only root file system, no capability and
-`no-new-privileges`. A node type-checks scripts with tsgo, which it extracts at its first check
+`no-new-privileges`. A node type-checks code with tsgo, which it extracts at its first check
 into `/var/cache/rewind` (`REWIND_TSGO_CACHE`): give it a writable directory that allows execution,
 as the tmpfs of `compose.yaml` does.
 
@@ -72,12 +72,12 @@ gives each node what it needs:
 | `REWIND_IMAGE` | `rewind:local` | The image of the nodes |
 | `REWIND_BIND`, `REWIND_PORT` | `127.0.0.1`, `8080` | Where the edge listens on the host |
 | `REWIND_PUBLIC_URL` | `http://localhost:8080` | The URL clients reach the edge at: `webhook()` URLs start with it |
-| `REWIND_EGRESS_ALLOW` | `loadgen` | The names the nodes may reach: MCP servers, APIs and their OpenAPI documents, hosts of `http` tools, webhook receivers (spaces or commas). A name allows its subdomains |
+| `REWIND_EGRESS_ALLOW` | `loadgen` | The names the nodes may reach: MCP servers, APIs and their OpenAPI documents, hosts of the `http` action, webhook receivers (spaces or commas). A name allows its subdomains |
 | `REWIND_ALLOW_INTERNAL_ADDRESSES` | `loadgen` | MCP servers and APIs at private addresses the nodes may use (names, `*.domain`, addresses, CIDR networks; commas). Without it a deployed server reaches MCP servers, APIs and OpenAPI documents at public addresses only |
-| `REWIND_QUOTA_ACTIVE_RUNS` | `10000` | The ceiling of the tenants this deployment creates: their active runs across their namespaces; one more is refused with 429. `REWIND_QUOTA_RUNS_PER_MONTH`, `REWIND_QUOTA_CPU_PER_MONTH`, `REWIND_QUOTA_WORKFLOWS`, `REWIND_QUOTA_MAX_TTL` and `REWIND_QUOTA_MAX_CODE_LINES` set the others, none by default |
+| `REWIND_QUOTA_ACTIVE_RUNS` | `10000` | The ceiling of the organizations this deployment creates: their active runs across their namespaces; one more is refused with 429. `REWIND_QUOTA_RUNS_PER_MONTH`, `REWIND_QUOTA_CPU_PER_MONTH`, `REWIND_QUOTA_WORKFLOWS`, `REWIND_QUOTA_MAX_TTL` and `REWIND_QUOTA_MAX_CODE_LINES` set the others, none by default |
 | `REWIND_DEFAULT_TTL`, `REWIND_MAX_TTL` | `30d`, `365d` | A run's TTL when the harness gives none, and the most it may ask for |
-| `REWIND_RETENTION` | `365d` | How long an ended run is kept, for the tenants this deployment creates ([retention](#retention)) |
-| `REWIND_EXECUTORS`, `REWIND_CALLS` | `4`, `256` | Activations run at once (executor threads), and tool calls sent at once, per node |
+| `REWIND_RETENTION` | `365d` | How long an ended run is kept, for the organizations this deployment creates ([retention](#retention)) |
+| `REWIND_EXECUTORS`, `REWIND_CALLS` | `4`, `256` | Activations run at once (executor threads), and calls of actions sent at once, per node |
 | `REWIND_NODE_MEMORY`, `REWIND_NODE_CPUS` | `1g`, `2` | A node container's limits |
 | `REWIND_CACHE_INSTANCES`, `REWIND_CACHE_MEMORY` | `500`, `384MiB` | The sticky instance cache of a node: keep its memory well below the container's limit, under each isolate's 128 MiB heap limit |
 | `REWIND_LOG` | `info` | What the nodes log on standard error, as `RUST_LOG` writes it |
@@ -98,9 +98,9 @@ it exits.
 
 | Secret | What it protects | If lost |
 | --- | --- | --- |
-| `REWIND_MASTER_KEY` | 32 random bytes in base64. It encrypts each tenant's data key, which encrypts the credentials of toolsets and runs | Every stored credential is unreadable: back it up with the database. The nodes refuse to start without it |
+| `REWIND_MASTER_KEY` | 32 random bytes in base64. It encrypts each organization's data key, which encrypts its secrets | Every stored credential is unreadable: back it up with the database. The nodes refuse to start without it |
 | `REWIND_CLUSTER_SECRET` | The node link between the nodes, on the private network | A new one, given to every node at once, is enough: nothing is stored under it |
-| `REWIND_ADMIN_KEY` | The first API key: role `operator` in the tenant `REWIND_ADMIN_ORGANIZATION`, registered when a node starts. It creates the other keys | Revoke it (`DELETE /v1/api-keys/{id}`, its id is `GET /v1/whoami`'s `principal.id`) and set a new one: a revoked key is never registered again |
+| `REWIND_ADMIN_KEY` | The first API key: role `operator` in the organization `REWIND_ADMIN_ORGANIZATION`, registered when a node starts. It creates the other keys | Revoke it (`DELETE /v1/api-keys/{id}`, its id is `GET /v1/whoami`'s `principal.id`) and set a new one: a revoked key is never registered again |
 | `WORKOS_API_KEY`, `WORKOS_COOKIE_PASSWORD` | WorkOS's secret key, and the key of the sign-in's sealed cookies ([sign-in](#sign-in)) | A new cookie password signs everyone out; a new WorkOS key is set in WorkOS first |
 | `POSTGRES_PASSWORD`, `MINIO_ROOT_*` | The stores | Change them in the store first, then in `.env` |
 
@@ -108,10 +108,10 @@ The nodes read them from the environment. On a platform with a secret manager, i
 environment variables of the containers instead of a file. Never give `REWIND_ADMIN_KEY` nor
 `WORKOS_*` to a node started with `--executors-only`: it serves no HTTP route.
 
-## Tenants, keys and roles
+## Organizations, keys and roles
 
-A tenant is created with its first key, or with its organization when people sign in
-([sign-in](#sign-in)), with the deployment's quota and retention. Every key is `rewind_sk_…`,
+An organization (a tenant, as the engine and the store call it) is created with its first key, or
+when people sign in ([sign-in](#sign-in)), with the deployment's quota and retention. Every key is `rewind_sk_…`,
 shown once, stored hashed.
 
 ```sh
@@ -122,19 +122,19 @@ curl -s http://localhost:8080/v1/api-keys -H "Authorization: Bearer $REWIND_ADMI
 ```
 
 A key gets what it may do from its grant, given with it: a role, and optionally allowed labels.
-Whoever creates a key holds every permission of its role. Four roles are built in; a tenant
+Whoever creates a key holds every permission of its role. Four roles are built in; an organization
 composes its own from the catalog of permissions (`GET /v1/permissions`, `PUT /v1/roles/{name}`).
 
 | Role | May |
 | --- | --- |
-| `owner` | Every permission of its tenant: its runs, and its members, roles, keys and organization |
-| `harness` | Runs, toolsets, credentials, tasks and subscriptions, and reading the members and roles. The harness and its agent tools |
-| `worker` | The host-tool task endpoints: the harness's SDK worker, which holds a task stream open |
-| `reader` | Reading runs, toolsets, subscriptions, members and roles: a dashboard |
+| `owner` | Every permission of its organization: its runs, and its members, roles, keys and settings |
+| `harness` | Runs, action sets, workflows, secrets, calls, subscriptions, namespaces and tokens, and reading the members and roles. The harness and its agent tools |
+| `worker` | The calls of harness actions (`calls:work`): the harness's SDK worker, which holds the call stream open |
+| `reader` | Reading runs, workflows, action sets, the secrets' metadata, subscriptions, members and roles: a dashboard |
 
 **The operator.** The key of `REWIND_ADMIN_KEY` has the role `operator`: every permission in its
-tenant, and the keys of every tenant (`POST /v1/api-keys` with a `tenant`, as above, and their
-revocation). `operator` is the deployment's role, never an organization's; only the operator
+organization, and the keys of every organization (`POST /v1/api-keys` with an `organizationId`, as above, and
+their revocation). `operator` is the deployment's role, never an organization's; only the operator
 creates an operator key.
 
 A key may carry `allowedLabels` (`{"conversation": "c-42"}`): it then sees and creates only the
@@ -145,7 +145,7 @@ Revoke a key with `DELETE /v1/api-keys/{id}`: its grant goes with it.
 ## Sign-in
 
 With WorkOS, people sign in to the dashboard (GitHub, or a code by email), each in their
-organizations: a WorkOS organization is a tenant, with the same id. WorkOS says who someone is;
+organizations: a WorkOS organization is a Rewind organization, with the same id. WorkOS says who someone is;
 what they may do is their grant in Rewind, as for a key. Sign-ups go through WorkOS's waitlist:
 the operator approves people there, which invites them.
 
@@ -179,9 +179,9 @@ The sign-in's cookies are `Secure`: browsers keep them on `https://` origins and
 `X-Forwarded-For`, which the edge writes with the address that reached it (Caddy ignores the one
 a client sends; the edge is the only published port), when it is a public address.
 
-A tenant's ceiling is the operator's offer: the admin key changes it with `PUT
+An organization's ceiling is the operator's offer: the admin key changes it with `PUT
 /v1/organizations/{organization}/quotas`. Its retention is kept in its `tenants` row of the control
-plane: change an existing tenant there.
+plane: change an existing organization there.
 
 ```sh
 curl -X PUT "$REWIND_PUBLIC_URL/v1/organizations/acme/quotas" \
@@ -189,13 +189,14 @@ curl -X PUT "$REWIND_PUBLIC_URL/v1/organizations/acme/quotas" \
   -d '{"ceiling": {"activeRuns": 50000, "runsPerMonth": 2000000}}'
 ```
 
-**A pool per tenant.** `rewind server --pool <name>` starts a node of a tenant's own pool of
-executors: the owners send that tenant's activations there. Give an untrusted tenant its own
-pool, on its own hosts.
+**A pool per organization.** `rewind server --pool <name>` starts a node of a pool of executors,
+and `--organization-pool <organization>=<pool>` (`REWIND_ORGANIZATION_POOLS`, the same list on every
+node) sends that organization's activations there. Give an untrusted organization its own pool, on
+its own hosts.
 
 ## Nodes: the walls
 
-Every node runs code written by a model. Three walls stand between two tenants: V8, gVisor, and
+Every node runs code written by a model. Three walls stand between two organizations: V8, gVisor, and
 separate pools (`archi/06-storage-and-scale.md`, "Sandboxed nodes").
 
 - **Network.** A node joins the network namespace of its holder (`node-N-net`), whose only
@@ -204,7 +205,7 @@ separate pools (`archi/06-storage-and-scale.md`, "Sandboxed nodes").
   the names of `REWIND_EGRESS_ALLOW`, adds each address it answers to the set of allowed
   addresses, and forwards new TCP connections from the core network to that set only, never to
   `169.254.0.0/16` (the cloud metadata endpoint). The nodes need no proxy setting: the
-  gateway is a rule of their network. The `http` tool still checks its own allow-list and
+  gateway is a rule of their network. The `http` action still checks its own allow-list and
   refuses private addresses (`archi/04-tools.md`). `./check-walls.sh` checks it all from inside
   a node's namespace (under gVisor, from a sandbox like the nodes'). The gateway needs a
   host that does not pass bridged traffic through iptables: with `br_netfilter` and
@@ -232,13 +233,13 @@ separate pools (`archi/06-storage-and-scale.md`, "Sandboxed nodes").
   Linux host (`COMPOSE_PROFILES=gvisor`, `./check-walls.sh`, then the loads of
   [Load and limit tests](#load-and-limit-tests)).
 
-**The nodes' allow-list.** Add your MCP servers, the APIs and OpenAPI documents your toolsets
-name, the hosts your toolsets' `http` tools allow, and the receivers of your webhook
+**The nodes' allow-list.** Add your MCP servers, the APIs and OpenAPI documents your action sets
+name, the hosts your action sets' `http` action allows, and the receivers of your webhook
 subscriptions to `REWIND_EGRESS_ALLOW`, then `docker compose up -d egress`: a node lists an MCP
-server's tools and reads an OpenAPI document when a toolset is registered, and calls them for
+server's tools and reads an OpenAPI document when an action set is registered, and calls them for
 runs, through the gateway. An MCP server or an API at a private address must also be in
-`REWIND_ALLOW_INTERNAL_ADDRESSES`: the nodes check where MCP servers and APIs are, as the `http` action
-does. S3, Postgres, the collector and the other nodes are on the core network here; a managed S3
+`REWIND_ALLOW_INTERNAL_ADDRESSES`: the nodes check where MCP servers and APIs are, as the `http`
+action does. S3, Postgres, the collector and the other nodes are on the core network here; a managed S3
 or collector outside it must be allowed too.
 
 ## Upgrades
@@ -294,7 +295,8 @@ old nodes stopping and the new ones starting (`archi/06-storage-and-scale.md`, "
 stored names"):
 
 - opening the control plane migrates its schema (Postgres 17, Turso 15): the tables `code` and
-  `action_sets` (were `scripts` and `toolsets`), a partition's `generation`, a subscription's
+  `action_sets` (were `scripts` and `toolsets`), a partition's `generation`, the quotas
+  `workflows` and `max_code_lines` (were `scripts` and `max_script_lines`), a subscription's
   `types` with the webhook types `run.waiting`, `secret.expired` and `action.schema_changed`,
   the principals `member:` (were `user:`), the permissions `actions:*` and `calls:*`;
 - the command refuses to start while a node serves the deployment, or while runs wait in the
@@ -306,6 +308,21 @@ stored names"):
   what it changed, and the titles it could not turn into names;
 - run again, it finds everything in the new names and says `nothing to rename`; with
   `--dry-run` it counts what it would change, by kind, and writes nothing.
+
+**Runs not yet moved to partitions come first.** A deployment whose Postgres still holds runs
+in its schema `legacy` (one that skipped the deploy that moves runs to partitions, or whose
+`migrate-runs` did not finish) moves them with `rewind server migrate-runs` **of the build
+before the rename release**, nodes stopped, before it runs `rename-data`: `rename-data` refuses
+while such runs wait, and says so. The same goes for an embedded server whose `.rewind/` still
+holds `journal.db`: `rewind server migrate-runs --embedded` with the previous `rewind`, then
+`rewind server rename-data --embedded` with the new one. A deployment that already moved its
+runs has nothing to do.
+
+```sh
+docker compose down
+REWIND_IMAGE=rewind:previous docker compose run --rm node-1 server migrate-runs   # the build before the release
+REWIND_IMAGE=rewind:new docker compose run --rm node-1 server rename-data
+```
 
 Code is never rewritten: the runs started before the release replay under the determinism epoch
 1, whose glue still names `ToolError`, `WorkflowError` and `webhook`; new runs start under
@@ -350,23 +367,23 @@ variables, then deploy the node on the new image. An embedded server's `.rewind/
 
 ## Retention
 
-Active runs are never touched. Each tenant's retention applies to its ended runs
+Active runs are never touched. Each organization's retention applies to its ended runs
 (`archi/06-storage-and-scale.md`, "Retention and deletion"):
 
 | Data | Kept | Setting |
 | --- | --- | --- |
-| An ended run: its summary in its partition's index, the journal of each attempt sealed in the bucket (`runs/`), its payloads (`blobs/`) | 1 year after it ended, then the run is erased by its owner, at a timer written when it was sealed | `REWIND_RETENTION` |
+| An ended run: its summary in its partition's index, the history of each attempt sealed in the bucket (`runs/`), its payloads (`blobs/`) | 1 year after it ended, then the run is erased by its owner, at a timer written when it was sealed | `REWIND_RETENTION` |
 | An end user's opaque token | 24 hours after it expired or was revoked | |
 | A test no workflow version references | 24 hours after it was stored | |
 
-The setting applies to the tenants created after it changes; update the `tenants` row of an
+The setting applies to the organizations created after it changes; update the `tenants` row of an
 existing one ([above](#sign-in)). `DELETE /v1/runs/{id}` erases one run at any time, its sealed
-journals and payloads included. Back up Postgres and the bucket together, with the master key.
+histories and payloads included. Back up Postgres and the bucket together, with the master key.
 
 ## Observability
 
-The nodes export service telemetry (activation, replay, tool attempt spans and their metrics) and
-run telemetry (one trace per run, projected from the journal) over OTLP to `otel-collector`, whose
+The nodes export service telemetry (activation, replay, call delivery spans and their metrics) and
+run telemetry (one trace per run, projected from its history) over OTLP to `otel-collector`, whose
 `debug` exporter prints them: replace it in `otel-collector.yaml` by your backend's. A run's
 trace joins the harness's when the harness passes `traceparent`.
 
@@ -383,11 +400,11 @@ loads with the thresholds recorded in `archi/09-roadmap.md` ("Load tests"), and 
 bound against it. It removes its containers, volumes and images at the end
 (`REWIND_ACCEPTANCE_KEEP=1` keeps them), and exits with 0 only when every step passed.
 
-`rewind-load` drives a deployment through its API: it registers a toolset with its own fake MCP
-server (`fake.echo`, and `fake.flaky`, which fails transiently once per call) and a host tool it
-answers itself on task streams (`host.square`), starts many runs that each call the three tools,
+`rewind-load` drives a deployment through its API: it registers an action set with its own fake MCP
+server (`fake.echo`, and `fake.flaky`, which fails transiently once per call) and a harness action it
+answers itself on the call stream (`host.square`), starts many runs that each call the three actions,
 sleep, and read a signal sent twice with one idempotency key, waits for every run, then checks
-that each ended as expected and that no tool call reached its tool more times than its failures
+that each ended as expected and that no call reached its action more times than its failures
 call for (`flaky` twice, the others once). It reports throughput, latencies (start, first
 activation, activation, end to end) and errors, and exits with 1 when an invariant broke or a
 threshold given (`--min-runs-per-s`, `--max-p99-end-to-end`, `--max-p99-activation`) was missed. `--payload-bytes` pads each run's payloads: above 1 KiB they

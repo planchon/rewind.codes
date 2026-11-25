@@ -6,8 +6,10 @@ description: "What the model writes and how to prompt for it; then naming, versi
 A workflow is what the model writes and Rewind runs: its code is one TypeScript module whose default export is the
 entry point, and running it gives a run. The first half of this page is for you, to prompt the model well and to read
 its code; the agent tools already describe the format to the model. The second half manages workflows from your
-harness. See [Workflows](/concepts/workflows) for the model behind them; the complete program of the second half is in
-[`examples/workflows`](https://github.com/planchon/rewind.codes/tree/main/examples/workflows).
+harness. See [Workflows](/concepts/workflows) for the model behind them;
+[`examples/workflows`](https://github.com/planchon/rewind.codes/tree/main/examples/workflows) runs a part of the
+second half: it creates a workflow with an interface, derives an action set whose code may start it, fans out over its
+runs, and starts it by name.
 
 ## What the model writes
 
@@ -175,7 +177,7 @@ const repoCheck = await rewind.workflows.create({
 });
 
 repoCheck.id; // "wf_3n7d0q5x2k8c"
-repoCheck.version; // 1: its number; repoCheck.digest, the hash of the version's document
+repoCheck.version.version; // 1: its number; repoCheck.version.digest, the hash of the version's document
 ```
 
 Without a namespace, the workflow is your organization's: generic, and every namespace's runs may execute it. Created
@@ -209,7 +211,7 @@ creates workflows that carry its labels: the same code sent under other labels i
 ```ts
 const workflow = await rewind.workflows.get("repo_check"); // by id or name; "repo_check@v2" for one version
 workflow.versions; // newest first, each with its version, digest, interface, action set and suite
-for await (const w of rewind.workflows.listAll()) console.log(w.id, w.name, w.version); // the latest version of each
+for await (const w of rewind.workflows.listAll()) console.log(w.id, w.name, w.latest.version); // the latest version of each
 const sharing = await rewind.workflows.list({ code: run.codeDigest }); // the workflows one of whose versions has this code
 
 await rewind.workflows.update(workflow.id, { name: "repo_stats", description: "…" }); // same id, no new version
@@ -288,7 +290,7 @@ const v1 = await rewind.workflows.create({
   tests: [closesOnceApproved, closesNothingWithoutApproval],
 });
 
-v1.tests; // [{ name: "closes nothing without approval", digest: "…" }, { name: "closes the stale issues once approved", … }]
+v1.version.tests; // [{ name: "closes nothing without approval", digest: "…" }, { name: "closes the stale issues once approved", … }]
 ```
 
 New code, a new interface, another action set or other secrets make the workflow's next version, through the gate:
@@ -328,7 +330,7 @@ await rewind.workflows.createVersion("triage", {
 });
 ```
 
-A replacement gives a whole new test (`test`), or only a new `expect` for the one in the suite. `retire` and `replace` name
+A replacement gives a whole new test (`new`), or only a new `expect` for the one in the suite. `retire` and `replace` name
 tests of the suite, each with a reason; names are unique in a suite. A refused suite (a test that is not valid, a
 retired or replaced test that is not in the suite or has no reason, two tests of the same name) is `invalid-test`.
 
