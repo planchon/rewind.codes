@@ -3,14 +3,17 @@
 The documentation of Rewind, for harness developers, served at
 [docs.rewind.codes](https://docs.rewind.codes). It is a [Mintlify](https://mintlify.com) site:
 MDX pages and `docs.json`. The specification stays in [`archi/`](../archi/README.md); these pages
-describe what a user does, and never link to it.
+describe what a user does, and never link to it. The Engineering tab explains how Rewind works
+inside, in diagrams: it summarizes `archi/` as the code builds it, without its details, and
+changes with it.
 
 | Path | Holds |
 | --- | --- |
-| `docs.json` | The site: name, colors, logo, navigation (three tabs: Introduction, SDK, Dashboard) |
+| `docs.json` | The site: name, colors, logo, navigation (four tabs: Introduction, SDK, Dashboard, Engineering) |
 | `index.mdx`, `why-rewind.mdx`, `quickstart.mdx`, `concepts/`, `self-hosting.mdx` | What Rewind is, why, and how it works |
 | `sdk/` | The TypeScript SDK, what the model writes, the CLI |
 | `dashboard/` | The dashboard, view by view |
+| `engineering/` | How Rewind works inside: the pieces, how they connect, then each subsystem (nodes, the cluster, storage, runs, the TypeScript runtime, actions and calls, fan-out and streams, access, the clients, the crates) |
 | `images/dashboard/` | Screenshots of the dashboard, light and dark, made by `scripts/screenshots.ts` |
 | `logo/`, `favicon.svg` | The rewind mark, as on the landing |
 

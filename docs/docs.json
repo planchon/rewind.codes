@@ -99,6 +99,32 @@
             "pages": ["dashboard/organization"]
           }
         ]
+      },
+      {
+        "tab": "Engineering",
+        "icon": "cpu",
+        "groups": [
+          {
+            "group": "The big picture",
+            "pages": ["engineering/overview", "engineering/connections"]
+          },
+          {
+            "group": "The run plane",
+            "pages": [
+              "engineering/node",
+              "engineering/cluster",
+              "engineering/storage",
+              "engineering/runs",
+              "engineering/runtime",
+              "engineering/actions",
+              "engineering/fan-out"
+            ]
+          },
+          {
+            "group": "Around the engine",
+            "pages": ["engineering/access", "engineering/clients", "engineering/code"]
+          }
+        ]
       }
     ],
     "global": {
