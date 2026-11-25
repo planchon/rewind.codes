@@ -57,10 +57,10 @@ test.describe("criterion 7: the dashboard", () => {
   test.beforeAll(async () => {
     server = await startServer(mkdtempSync(join(resultDir("c7-dashboard"), "server-")));
     const { admin } = server;
-    readerKey = (await admin.apiKeys.create({ tenant: "acme", role: "reader", name: "operator" })).key!;
+    readerKey = (await admin.apiKeys.create({ organizationId: "acme", role: "reader", name: "operator" })).key!;
     const harness = new Rewind({
       url: server.url,
-      apiKey: (await admin.apiKeys.create({ tenant: "acme", role: "harness", name: "harness" })).key!,
+      apiKey: (await admin.apiKeys.create({ organizationId: "acme", role: "harness", name: "harness" })).key!,
     }).namespace("alice");
     const actionSet = await harness.actionSets.create({
       host: [

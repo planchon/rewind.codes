@@ -118,7 +118,7 @@ shown once, stored hashed.
 . ./.env
 curl -s http://localhost:8080/v1/api-keys -H "Authorization: Bearer $REWIND_ADMIN_KEY" \
   -H 'content-type: application/json' \
-  -d '{"tenant": "acme", "role": "harness", "name": "acme harness"}'
+  -d '{"organizationId": "acme", "role": "harness", "name": "acme harness"}'
 ```
 
 A key gets what it may do from its grant, given with it: a role, and optionally allowed labels.
@@ -407,12 +407,12 @@ and recreate a holder whose image was rebuilt under its node. The numbers measur
 The limits of `archi/03-execution.md` are tested through the API by
 `cargo test -p rewind-server --test integration limits::` (CPU per call, heap, commands per
 activation, history cap, payload sizes, TTL), the quota's 429 by `api::`, and the 256 KiB bound of
-the agent tools' `run_script` against a live deployment by the SDK:
+the agent tools' `run_workflow` against a live deployment by the SDK:
 
 ```sh
 . ./.env
 KEY=$(curl -s http://localhost:8080/v1/api-keys -H "Authorization: Bearer $REWIND_ADMIN_KEY" \
-  -H 'content-type: application/json' -d '{"tenant": "sdk", "role": "harness", "name": "sdk live test"}' | jq -r .key)
+  -H 'content-type: application/json' -d '{"organizationId": "sdk", "role": "harness", "name": "sdk live test"}' | jq -r .key)
 (cd ../sdk/typescript && REWIND_LIVE_URL=http://localhost:8080 REWIND_LIVE_KEY=$KEY pnpm vitest run test/live.test.ts)
 ```
 

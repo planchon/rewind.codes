@@ -55,7 +55,7 @@ test.describe("criterion 1: SDK, two nodes, one Postgres", () => {
 
   test("runs driven by the SDK on two nodes, traced under the harness", async () => {
     const { admin } = deployment;
-    const harnessKey = await admin.apiKeys.create({ tenant: "acme", role: "harness", name: "acceptance harness" });
+    const harnessKey = await admin.apiKeys.create({ organizationId: "acme", role: "harness", name: "acceptance harness" });
     // One client per node: each request reaches the owner of the run's partition, through the
     // node link when another node owns it.
     const edges = deployment.urls.map((url) => new Rewind({ url, apiKey: harnessKey.key ?? undefined }));

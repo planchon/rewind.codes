@@ -116,19 +116,19 @@ else
   step "load: 200 runs with 100 KiB payloads" load --runs 200 --concurrency 50 \
     --payload-bytes 102400 --min-runs-per-s 4 --max-p99-end-to-end 20s --max-p99-activation 3s
 
-  # 4. The 256 KiB bound of the agent tools' run_script, against the deployment.
+  # 4. The 256 KiB bound of the agent tools' run_workflow, against the deployment.
   sdk() {
     local admin key
     admin="$(sed -n 's/^REWIND_ADMIN_KEY=//p' "$WORK/env")"
     key="$(curl -fsS "$URL/v1/api-keys" -H "Authorization: Bearer $admin" \
-      -H 'content-type: application/json' -d '{"tenant": "sdk", "role": "harness", "name": "sdk live test"}' |
+      -H 'content-type: application/json' -d '{"organizationId": "sdk", "role": "harness", "name": "sdk live test"}' |
       sed -n 's/.*"key":"\(rewind_sk_[A-Za-z0-9]*\)".*/\1/p')"
     [ -n "$key" ] || return 1
     pnpm --dir "$ROOT/sdk/typescript" install --frozen-lockfile >/dev/null &&
       REWIND_LIVE_URL="$URL" REWIND_LIVE_KEY="$key" \
         pnpm --dir "$ROOT/sdk/typescript" exec vitest run test/live.test.ts
   }
-  step "run_script's bound against the deployment" sdk
+  step "run_workflow's bound against the deployment" sdk
 
   if [ ${#failed[@]} -gt 0 ]; then
     note "logs of the deployment"
